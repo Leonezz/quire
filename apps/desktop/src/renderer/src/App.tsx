@@ -1,7 +1,10 @@
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { BookOpen, Highlighter, Inbox as InboxIcon, List, ListOrdered, Plus, Radio, Search as SearchIcon, Sparkles, Text } from "lucide-react";
 import { AskButton, Button, Inspector, InspectorPanel, InspectorSection, InspectorTab, InspectorTabs, ItemGroup, ItemList, ItemRow, Kbd, Segment, Segmented, Sidebar, SidebarItem, SidebarSection, Toolbar, ToolbarButton, ToolbarGroup, ToolbarTitle, type Key, type Selection } from "@read/ui";
 import { items, signalsOf, timeOf } from "./fixtures";
+import { ReaderView } from "./ReaderView";
+import { AddSheet } from "./AddSheet";
+import type { MaterialRecord, MaterialSummary } from "../../shared/contracts";
 
 type View = "inbox" | "queue" | "library" | "sources";
 const titles: Record<View, string> = { inbox: "Inbox", queue: "Queue", library: "Library", sources: "Sources" };
@@ -13,6 +16,38 @@ export function App() {
   const [inspectorTab, setInspectorTab] = useState<Key>("contents");
   const current = items.find((item) => selected !== "all" && selected.has(item.id));
   const unread = items.filter((item) => item.readState === "unread").length;
+  const [library, setLibrary] = useState<MaterialSummary[]>([]);
+  const [librarySelected, setLibrarySelected] = useState<Selection>(new Set());
+  const [reading, setReading] = useState<MaterialRecord | undefined>();
+  const [addOpen, setAddOpen] = useState(false);
+  const [addBusy, setAddBusy] = useState(false);
+  const [addError, setAddError] = useState<string | undefined>();
+
+  const refreshLibrary = useCallback(async () => setLibrary(await window.read.listMaterials()), []);
+  useEffect(() => { void refreshLibrary(); }, [refreshLibrary]);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => { if ((event.metaKey || event.ctrlKey) && event.key === "n") { event.preventDefault(); setAddOpen(true); } };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  const submitUrl = async (url: string) => {
+    setAddBusy(true); setAddError(undefined);
+    const result = await window.read.openUrl(url);
+    setAddBusy(false);
+    if (!result.ok) { setAddError(result.message); return; }
+    setAddOpen(false);
+    await refreshLibrary();
+    setView("library");
+    setReading(result.material);
+  };
+  const openMaterial = async (id: string) => {
+    const material = await window.read.getMaterial(id);
+    if (material) setReading(material);
+  };
+  const openLink = (url: string) => { window.open(url, "_blank", "noopener"); };
+
+  if (reading) return <ReaderView material={reading} onBack={() => setReading(undefined)} onOpenLink={openLink} />;
 
   return (
     <div className={askOpen ? "grid h-full grid-cols-[236px_minmax(0,1fr)_360px] grid-rows-[56px_minmax(0,1fr)] gap-3 p-3" : "grid h-full grid-cols-[236px_minmax(0,1fr)] grid-rows-[56px_minmax(0,1fr)] gap-3 p-3"}>
@@ -30,13 +65,25 @@ export function App() {
         <ToolbarTitle title={titles[view]} subtitle={view === "inbox" ? `${unread} unread · 9 sources` : undefined} />
         <ToolbarGroup>
           {view === "inbox" ? <Segmented aria-label="Group by" defaultSelectedKeys={["date"]}><Segment id="date">Date</Segment><Segment id="source">Source</Segment></Segmented> : null}
-          <ToolbarButton aria-label="Add"><Plus /></ToolbarButton>
+          <ToolbarButton aria-label="Add (⌘N)" isSelected={addOpen} onChange={(on) => setAddOpen(on)}><Plus /></ToolbarButton>
           <ToolbarButton aria-label="Search"><SearchIcon /></ToolbarButton>
           <AskButton aria-label="Ask" isSelected={askOpen} onChange={(open) => { setAskOpen(open); if (open) setInspectorTab("agent"); }}><Sparkles />Ask<Kbd>⌘J</Kbd></AskButton>
         </ToolbarGroup>
       </Toolbar>
 
       <main className="grid min-h-0 grid-cols-[420px_minmax(0,1fr)] overflow-hidden rounded-panel bg-content shadow-[0_0_0_1px_var(--separator-soft),0_6px_20px_rgba(15,17,21,.04)]">
+        {view === "library" ? (
+          <div className="flex min-h-0 flex-col border-r border-separator-soft">
+            <ItemGroup>Kept · {library.length}</ItemGroup>
+            {library.length ? (
+              <ItemList aria-label="Library" items={library} selectionMode="single" selectedKeys={librarySelected} onSelectionChange={setLibrarySelected} onAction={(key) => void openMaterial(String(key))} className="flex-1">
+                {(item) => <ItemRow id={item.id} title={item.title} source={new URL(item.url).hostname} time={timeOf(item.fetchedAt)} minutes={item.readingMinutes} state="read" {...(item.quality.safety === "degraded_plaintext" ? { tag: "summary" as const } : {})} />}
+              </ItemList>
+            ) : (
+              <div className="grid flex-1 place-items-center px-6 text-center text-label-2"><div><strong className="mb-1.5 block text-[16px] font-semibold text-label">Nothing kept yet.</strong><span className="text-[13px]">Press ⌘N and paste a page URL to read it here.</span></div></div>
+            )}
+          </div>
+        ) : (
         <div className="flex min-h-0 flex-col border-r border-separator-soft">
           <ItemGroup>Today</ItemGroup>
           <ItemList aria-label={titles[view]} items={items} selectionMode="single" selectedKeys={selected} onSelectionChange={setSelected} className="flex-1">
@@ -55,8 +102,21 @@ export function App() {
             )}
           </ItemList>
         </div>
+        )}
         <section className="flex min-h-0 flex-col overflow-auto">
-          {current ? (
+          {view === "library" ? (() => {
+            const chosen = library.find((item) => librarySelected !== "all" && librarySelected.has(item.id));
+            return chosen ? (
+              <>
+                <div className="px-9 pt-7">
+                  <div className="flex items-center gap-2 text-[12.5px] text-label-2">{new URL(chosen.url).hostname}<span className="rounded-pill bg-fill px-2 py-px text-[11.5px] font-medium">{chosen.quality.safety === "degraded_plaintext" ? "plain text only" : "web extract"}</span></div>
+                  <h1 className="mb-1.5 mt-2.5 text-[24px] font-bold leading-[29px] tracking-[-.02em] text-balance">{chosen.title}</h1>
+                  <div className="flex flex-wrap gap-x-3 text-[12.5px] text-label-2">{chosen.byline ? <span>{chosen.byline}</span> : null}<span>{chosen.readingMinutes} min</span><span>kept {timeOf(chosen.fetchedAt)}</span></div>
+                </div>
+                <div className="flex items-center gap-2 px-9 py-[18px]"><Button variant="primary" onPress={() => void openMaterial(chosen.id)}>Open <Kbd>↵</Kbd></Button></div>
+              </>
+            ) : <div className="grid flex-1 place-items-center text-center text-label-2"><div><strong className="mb-1.5 block text-[18px] font-semibold text-label">Nothing selected</strong><span className="text-[13px]">Select something you kept.</span></div></div>;
+          })() : current ? (
             <>
               <div className="px-9 pt-7">
                 <div className="flex items-center gap-2 text-[12.5px] text-label-2">{current.sourceTitle}<span className="rounded-pill bg-fill px-2 py-px text-[11.5px] font-medium">feed full text</span></div>
@@ -93,6 +153,7 @@ export function App() {
           </InspectorPanel>
         </Inspector>
       ) : null}
+      <AddSheet open={addOpen} busy={addBusy} error={addError} onClose={() => { setAddOpen(false); setAddError(undefined); }} onSubmit={(url) => void submitUrl(url)} />
     </div>
   );
 }

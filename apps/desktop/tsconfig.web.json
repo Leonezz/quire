@@ -11,11 +11,20 @@
       ],
       "@read/core": [
         "../../packages/core/src/index.ts"
+      ],
+      "@read/reader": [
+        "../../packages/reader/src/index.ts"
+      ],
+      "@read/normalize/contract": [
+        "../../packages/normalize/src/contract.ts"
       ]
-    }
+    },
+    "noUncheckedIndexedAccess": false,
+    "exactOptionalPropertyTypes": false
   },
   "include": [
+    "src/preload/index.d.ts",
     "src/renderer/src",
-    "src/preload/index.d.ts"
+    "src/shared"
   ]
 }

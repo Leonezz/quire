@@ -64,3 +64,5 @@
   backdrop-filter: blur(24px) saturate(1.5);
   box-shadow: inset 0 0 0 1px var(--glass-edge), var(--shadow-float);
 }
+
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }

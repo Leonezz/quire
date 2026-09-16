@@ -1,0 +1,143 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ChevronLeft, Highlighter, List, Sparkles, Text } from "lucide-react";
+import { AskButton, Inspector, InspectorPanel, InspectorSection, InspectorTab, InspectorTabs, Kbd, Toolbar, ToolbarButton, ToolbarGroup, ToolbarTitle, type Key } from "@read/ui";
+import { ReaderDocumentSurface, useDocumentReadingPosition } from "@read/reader";
+import type { MaterialRecord } from "../../shared/contracts";
+
+type OutlineEntry = { id: string; label: string; level: number };
+
+function qualityLabel(material: MaterialRecord): { text: string; low: boolean } {
+  const q = material.quality;
+  if (q.safety === "degraded_plaintext") return { text: "plain text only", low: true };
+  if (q.completeness === "summary") return { text: "summary only", low: true };
+  if (q.conformance === "recoverable") return { text: "web extract · partial", low: true };
+  return { text: material.origin === "feed" ? "feed full text" : "web extract", low: false };
+}
+
+/** Headings in the rendered document become the Contents list; ids are assigned once per render. */
+function outlineOf(root: HTMLElement | null): OutlineEntry[] {
+  if (!root) return [];
+  const entries: OutlineEntry[] = [];
+  root.querySelectorAll<HTMLHeadingElement>("h2, h3, h4").forEach((heading, index) => {
+    const label = heading.textContent?.trim();
+    if (!label) return;
+    if (!heading.id) heading.id = `s-${index}-${label.toLowerCase().replace(/[^a-z0-9\u4e00-\u9fff]+/g, "-").slice(0, 40)}`;
+    entries.push({ id: heading.id, label, level: Number(heading.tagName.slice(1)) });
+  });
+  return entries;
+}
+
+export function ReaderView({ material, onBack, onOpenLink }: { material: MaterialRecord; onBack: () => void; onOpenLink: (url: string) => void }) {
+  const viewportRef = useRef<HTMLDivElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const [inspectorTab, setInspectorTab] = useState<Key | null>(null);
+  const [outline, setOutline] = useState<OutlineEntry[]>([]);
+  const [progress, setProgress] = useState(0);
+  const [reading, setReading] = useState(false);
+  const quality = qualityLabel(material);
+  const identity = material.reader ? `${material.id}:${material.reader.schema}` : material.id;
+
+  useDocumentReadingPosition(viewportRef, identity);
+
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setOutline(outlineOf(bodyRef.current)));
+    return () => cancelAnimationFrame(frame);
+  }, [material.id]);
+
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport) return;
+    let idle: number | undefined;
+    const onScroll = () => {
+      const max = viewport.scrollHeight - viewport.clientHeight;
+      setProgress(max > 0 ? Math.min(100, Math.round((viewport.scrollTop / max) * 100)) : 100);
+      setReading(viewport.scrollTop > 40);
+      if (idle !== undefined) window.clearTimeout(idle);
+    };
+    viewport.addEventListener("scroll", onScroll, { passive: true });
+    onScroll();
+    return () => viewport.removeEventListener("scroll", onScroll);
+  }, [material.id]);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+      if (event.key === "Escape") { event.preventDefault(); if (inspectorTab) setInspectorTab(null); else onBack(); }
+      if (event.key === "t") { event.preventDefault(); setInspectorTab((tab) => (tab === "contents" ? null : "contents")); }
+      if (event.key === "n") { event.preventDefault(); setInspectorTab((tab) => (tab === "notes" ? null : "notes")); }
+      if ((event.metaKey || event.ctrlKey) && event.key === "j") { event.preventDefault(); setInspectorTab((tab) => (tab === "agent" ? null : "agent")); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [inspectorTab, onBack]);
+
+  const fallback = useMemo(() => (material.markdown ? { content: material.markdown, format: "gfm" as const } : { content: material.plain ?? "", format: "plain" as const }), [material]);
+  const subtitle = [new URL(material.finalUrl).hostname, `${progress}%`, `${material.readingMinutes} min`].join(" · ");
+  const inspectorOpen = inspectorTab !== null;
+
+  return (
+    <div className={inspectorOpen ? "grid h-full grid-cols-[minmax(0,1fr)_360px] grid-rows-[56px_minmax(0,1fr)] gap-3 p-3" : "grid h-full grid-cols-[minmax(0,1fr)] grid-rows-[56px_minmax(0,1fr)] gap-3 p-3"}>
+      <Toolbar aria-label="Reader toolbar" className={`titlebar-drag col-span-full pl-[92px] transition-opacity ${reading ? "opacity-70 hover:opacity-100" : ""}`}>
+        <ToolbarGroup><ToolbarButton aria-label="Back" isSelected={false} onChange={onBack}><ChevronLeft /></ToolbarButton></ToolbarGroup>
+        <ToolbarTitle title={material.title} subtitle={subtitle} />
+        <ToolbarGroup>
+          <span className={`mr-1.5 inline-flex h-[22px] items-center gap-1 rounded-pill px-2.5 text-[11.5px] font-medium ${quality.low ? "bg-orange-soft text-orange-text" : "bg-fill text-label-2"}`}>{quality.text}</span>
+          <ToolbarButton aria-label="Contents (t)" isSelected={inspectorTab === "contents"} onChange={(on) => setInspectorTab(on ? "contents" : null)}><List /></ToolbarButton>
+          <ToolbarButton aria-label="Notes (n)" isSelected={inspectorTab === "notes"} onChange={(on) => setInspectorTab(on ? "notes" : null)}><Highlighter /></ToolbarButton>
+          <AskButton aria-label="Ask" isSelected={inspectorTab === "agent"} onChange={(on) => setInspectorTab(on ? "agent" : null)}><Sparkles />Ask<Kbd>⌘J</Kbd></AskButton>
+        </ToolbarGroup>
+      </Toolbar>
+
+      <main className="grid min-h-0 grid-rows-[2px_minmax(0,1fr)] overflow-hidden rounded-panel bg-content shadow-[0_0_0_1px_var(--separator-soft),0_6px_20px_rgba(15,17,21,.04)]">
+        <div className="bg-separator-soft"><i className="block h-full bg-accent opacity-80" style={{ width: `${progress}%` }} /></div>
+        <div ref={viewportRef} className="overflow-auto px-14 pb-[120px] pt-12">
+          <article ref={bodyRef} className="reader-body">
+            <p className="mb-3 text-[13px] font-medium text-accent-text">{new URL(material.finalUrl).hostname}</p>
+            <h1>{material.title}</h1>
+            <div className="mb-8 flex flex-wrap gap-x-3 text-[12.5px] text-label-2">
+              {material.byline ? <span>{material.byline}</span> : null}
+              {material.publishedAt ? <span>{new Date(material.publishedAt).toLocaleDateString()}</span> : null}
+              <span>{material.readingMinutes} min</span>
+              <a href={material.finalUrl} onClick={(event) => { event.preventDefault(); onOpenLink(material.finalUrl); }}>Open original ↗</a>
+            </div>
+            {material.quality.safety === "degraded_plaintext" ? (
+              <div className="mb-6 grid gap-2 rounded-card bg-content-2 p-4 text-[13px] text-label-2"><strong className="text-[16px] text-label">Could not extract an article from this page.</strong><span>What the page returned is shown below as plain text. Open the original for the full page.</span></div>
+            ) : null}
+            <ReaderDocumentSurface
+              schema={material.reader?.schema ?? "none"}
+              payload={material.reader?.payload ?? ""}
+              fallback={fallback}
+              onOpenLink={onOpenLink}
+              showFallbackNotice={false}
+            />
+          </article>
+        </div>
+      </main>
+
+      {inspectorOpen ? (
+        <Inspector aria-label="Inspector" selectedKey={inspectorTab} onSelectionChange={setInspectorTab}>
+          <InspectorTabs>
+            <InspectorTab id="contents"><Text />Contents</InspectorTab>
+            <InspectorTab id="notes"><Highlighter />Notes</InspectorTab>
+            <InspectorTab id="agent"><Sparkles />Agent</InspectorTab>
+          </InspectorTabs>
+          <InspectorPanel id="contents">
+            <InspectorSection title="Contents">
+              {outline.length ? (
+                <nav className="grid gap-0.5">
+                  {outline.map((entry) => (
+                    <a key={entry.id} href={`#${entry.id}`} onClick={(event) => { event.preventDefault(); document.getElementById(entry.id)?.scrollIntoView({ block: "start", behavior: "smooth" }); }}
+                      className={`block rounded-[9px] px-2.5 py-[7px] text-[13.5px] font-medium text-label-2 hover:bg-fill ${entry.level >= 3 ? "pl-6 text-[12.5px] font-normal" : ""}`}>{entry.label}</a>
+                  ))}
+                </nav>
+              ) : <p className="text-[13px] text-label-2">This article has no section headings.</p>}
+            </InspectorSection>
+            <InspectorSection title="Reading"><p className="text-[11.5px] text-label-3">{progress}% · position remembered · {material.problems.length ? `${material.problems.length} extraction notes` : "clean extraction"}</p></InspectorSection>
+          </InspectorPanel>
+          <InspectorPanel id="notes"><InspectorSection title="Notes"><p className="text-[13px] text-label-2">Highlights arrive in M1.</p></InspectorSection></InspectorPanel>
+          <InspectorPanel id="agent"><InspectorSection title="Context"><span className="inline-flex h-[26px] items-center rounded-pill bg-content px-2.5 text-[12.5px] font-medium shadow-[0_0_0_1px_var(--separator)]">this article</span></InspectorSection><p className="text-[11.5px] text-label-3">Connect Codex in Settings to use Ask.</p></InspectorPanel>
+        </Inspector>
+      ) : null}
+    </div>
+  );
+}

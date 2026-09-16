@@ -1,0 +1,40 @@
+{
+  "name": "@read/reader",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Renders reader.document v1/v2 with math, code, find, text-quote anchoring and CSS highlights. Browser only.",
+  "exports": {
+    ".": "./src/index.ts",
+    "./reader.css": "./src/reader.css"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "echo 'reader: consumed from source'",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "react": "^19",
+    "react-dom": "^19"
+  },
+  "dependencies": {
+    "@read/normalize": "workspace:*",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "katex": "^0.18.4",
+    "@shikijs/core": "4.4.3",
+    "@shikijs/engine-javascript": "4.4.3",
+    "@shikijs/langs": "4.4.3",
+    "@shikijs/themes": "4.4.3",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "typescript": "5.9.3",
+    "vitest": "4.1.11",
+    "jsdom": "^26.1.0"
+  }
+}

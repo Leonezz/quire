@@ -17,7 +17,11 @@
     "react-dom": "19.3.0",
     "react-aria-components": "1.21.1",
     "lucide-react": "1.46.0",
-    "react-resizable-panels": "4.12.4"
+    "react-resizable-panels": "4.12.4",
+    "@read/reader": "workspace:*",
+    "@mixmark-io/domino": "2.2.0",
+    "mathml-to-latex": "1.8.0",
+    "temml": "0.13.5"
   },
   "devDependencies": {
     "electron": "44.4.1",

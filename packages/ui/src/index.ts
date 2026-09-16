@@ -14,3 +14,6 @@ export { cx } from "./cx";
 // Re-exported so apps never import react-aria-components directly.
 export { useDragAndDrop } from "react-aria-components";
 export type { Selection, Key } from "react-aria-components";
+export { Sheet, SheetDialog, SheetFooter, DialogTrigger } from "./primitives/Sheet";
+export { TextField } from "./primitives/TextField";
+export type { TextFieldProps } from "./primitives/TextField";

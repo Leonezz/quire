@@ -2,17 +2,31 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "lib": [
-      "ES2023"
+      "ES2023",
+      "DOM",
+      "DOM.Iterable"
     ],
     "types": [
       "node",
       "electron-vite/node"
     ],
-    "noEmit": true
+    "noEmit": true,
+    "paths": {
+      "@read/normalize": [
+        "../../packages/normalize/src/index.ts"
+      ],
+      "@read/normalize/contract": [
+        "../../packages/normalize/src/contract.ts"
+      ]
+    },
+    "noUncheckedIndexedAccess": false,
+    "exactOptionalPropertyTypes": false
   },
   "include": [
+    "../../packages/normalize/src/env.d.ts",
     "electron.vite.config.ts",
     "src/main",
-    "src/preload"
+    "src/preload",
+    "src/shared"
   ]
 }

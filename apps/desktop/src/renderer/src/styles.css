@@ -2,6 +2,7 @@
 @import "@read/ui/tokens.css";
 @import "@read/ui/theme.css";
 @source "../../../../../packages/ui/src";
+@import "@read/reader/reader.css";
 
 html, body, #root { height: 100%; margin: 0; }
 /* Transparent page: the window's vibrancy shows through the gutters. */
