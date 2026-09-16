@@ -1,0 +1,8 @@
+node_modules/
+dist/
+out/
+*.log
+.DS_Store
+storybook-static/
+.vite/
+apps/desktop/release/

@@ -1,0 +1,10 @@
+packages:
+  - apps/*
+  - packages/*
+onlyBuiltDependencies:
+  - electron
+  - esbuild
+  - "@swc/core"
+  - "@tailwindcss/oxide"
+  - better-sqlite3
+  - playwright

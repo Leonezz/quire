@@ -1,0 +1,66 @@
+/* Tailwind v4 theme: utilities resolve to the tokens, never to raw values.
+   Usage: text-label, bg-content, border-separator, rounded-card, font-sans … */
+@theme inline {
+  --color-label: var(--label);
+  --color-label-2: var(--label-2);
+  --color-label-3: var(--label-3);
+  --color-label-4: var(--label-4);
+  --color-separator: var(--separator);
+  --color-separator-soft: var(--separator-soft);
+  --color-ground: var(--ground-flat);
+  --color-glass: var(--glass);
+  --color-glass-strong: var(--glass-strong);
+  --color-glass-edge: var(--glass-edge);
+  --color-content: var(--content);
+  --color-content-2: var(--content-2);
+  --color-fill: var(--fill);
+  --color-fill-2: var(--fill-2);
+  --color-accent: var(--accent);
+  --color-accent-2: var(--accent-2);
+  --color-accent-text: var(--accent-text);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-ring: var(--accent-ring);
+  --color-on-accent: var(--on-accent);
+  --color-mark: var(--mark);
+  --color-mark-soft: var(--mark-soft);
+  --color-orange: var(--orange);
+  --color-orange-soft: var(--orange-soft);
+  --color-orange-text: var(--orange-text);
+  --color-red: var(--red);
+  --color-red-soft: var(--red-soft);
+  --color-green: var(--green);
+  --color-purple: var(--purple);
+  --color-purple-soft: var(--purple-soft);
+  --color-purple-text: var(--purple-text);
+  --color-tint-paper: var(--tint-paper);
+  --color-tint-feed: var(--tint-feed);
+  --color-tint-note: var(--tint-note);
+  --color-tint-code: var(--tint-code);
+  --color-tint-web: var(--tint-web);
+  --radius-control: var(--r-control);
+  --radius-pill: var(--r-pill);
+  --radius-card: var(--r-card);
+  --radius-panel: var(--r-panel);
+  --radius-window: var(--r-window);
+  --font-sans: var(--font);
+  --font-display: var(--font-display);
+  --font-serif: var(--font-serif);
+  --font-mono: var(--mono);
+  --shadow-float: var(--shadow-float);
+  --shadow-window: var(--shadow-window);
+  --shadow-glass: var(--glass-shadow);
+}
+
+/* Glass surface: the one place backdrop-filter lives. */
+@utility glass {
+  background: var(--glass);
+  -webkit-backdrop-filter: blur(28px) saturate(1.5);
+  backdrop-filter: blur(28px) saturate(1.5);
+  box-shadow: inset 0 0 0 1px var(--glass-edge), var(--glass-shadow);
+}
+@utility glass-strong {
+  background: var(--glass-strong);
+  -webkit-backdrop-filter: blur(24px) saturate(1.5);
+  backdrop-filter: blur(24px) saturate(1.5);
+  box-shadow: inset 0 0 0 1px var(--glass-edge), var(--shadow-float);
+}

@@ -1,0 +1,5 @@
+@import "tailwindcss";
+@import "./tokens.css";
+@import "./theme.css";
+
+html, body, #storybook-root { margin: 0; background: var(--ground-flat); color: var(--label); font: 400 14px/20px var(--font); -webkit-font-smoothing: antialiased; }

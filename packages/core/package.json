@@ -1,0 +1,13 @@
+{
+  "name": "@read/core",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "echo 'core: no build step'",
+    "test": "echo 'core: no tests yet'"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "types": [
+      "vite/client"
+    ],
+    "paths": {
+      "@read/ui": [
+        "../../packages/ui/src/index.ts"
+      ],
+      "@read/core": [
+        "../../packages/core/src/index.ts"
+      ]
+    }
+  },
+  "include": [
+    "src/renderer/src",
+    "src/preload/index.d.ts"
+  ]
+}

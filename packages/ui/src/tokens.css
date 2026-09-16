@@ -1,0 +1,105 @@
+/* @read/ui tokens — the single source of colour, type and shape.
+   Mirrors design/reading-first/apple.css (tokens section). Light in :root,
+   dark under prefers-color-scheme and [data-theme="dark"]. */
+
+/* ============================================================ tokens */
+:root {
+  --label:            #0f1115;
+  --label-2:          rgba(28, 32, 40, .78);   /* ≈7.6:1 on white */
+  --label-3:          rgba(28, 32, 40, .68);   /* ≥4.6:1 on white and on the accent wash at 10.5px */
+  --label-4:          rgba(28, 32, 40, .20);
+  --separator:        rgba(28, 32, 40, .12);
+  --separator-soft:   rgba(28, 32, 40, .07);
+  --ground:           linear-gradient(160deg, #f4f5f9 0%, #eceef4 55%, #e9ebf2 100%);
+  --ground-flat:      #eef0f5;
+  --glass:            rgba(255, 255, 255, .58);
+  --glass-strong:     rgba(255, 255, 255, .78);
+  --glass-edge:       rgba(255, 255, 255, .62);
+  --glass-shadow:     0 1px 2px rgba(15, 17, 21, .03), 0 8px 24px rgba(15, 17, 21, .05);
+  --content:          #ffffff;
+  --content-2:        #f7f8fb;
+  --fill:             rgba(28, 32, 40, .06);
+  --fill-2:           rgba(28, 32, 40, .10);
+  --accent:           #3467e0;
+  --accent-2:         #5b86ea;
+  --accent-text:      #2653c4;
+  --accent-soft:      rgba(52, 103, 224, .09);
+  --accent-ring:      rgba(47, 107, 255, .30);
+  --on-accent:        #ffffff;
+  --mark:             #ffd54a;
+  --mark-soft:        rgba(255, 213, 74, .45);
+  --orange:           #ff8f1f;   --orange-soft: rgba(255, 143, 31, .14);  --orange-text: #a75600;
+  --red:              #ff4d4a;   --red-soft: rgba(255, 77, 74, .12);
+  --green:            #22c46a;
+  --purple:           #8a5cf6;   --purple-soft: rgba(138, 92, 246, .12);  --purple-text: #6b40e0;
+  --tint-paper: #6e6cff; --tint-feed: #ff9b3d; --tint-note: #ffc933; --tint-code: #8f96a3; --tint-web: #35b6ea;
+
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Helvetica Neue", Helvetica, Arial, sans-serif;
+  --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", sans-serif;
+  --font-serif: ui-serif, "New York", "Iowan Old Style", Georgia, serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --t-caption2: 500 10.5px/14px var(--font);
+  --t-caption:  400 11.5px/15px var(--font);
+  --t-footnote: 400 12.5px/17px var(--font);
+  --t-subhead:  400 13px/18.5px var(--font);
+  --t-body:     400 14px/20px var(--font);
+  --t-body-em:  600 14px/20px var(--font);
+  --t-callout:  400 15px/21px var(--font);
+  --t-headline: 600 16px/21px var(--font);
+  --t-title3:   600 18px/23px var(--font-display);
+  --t-title2:   700 24px/29px var(--font-display);
+  --t-title1:   700 30px/35px var(--font-display);
+  --t-reading:  400 18px/1.65 var(--font);
+
+  --r-control: 10px;
+  --r-pill:    999px;
+  --r-card:    14px;
+  --r-panel:   18px;
+  --r-window:  22px;
+  --shadow-float: 0 2px 6px rgba(15,17,21,.05), 0 16px 40px rgba(15,17,21,.09);
+  --shadow-window: 0 30px 80px rgba(15,17,21,.22), 0 0 0 .5px rgba(15,17,21,.12);
+  --sidebar-w: 236px;
+  --list-w:    420px;
+  --inspector-w: 360px;
+  --toolbar-h: 56px;
+  --measure: 680px;
+  --gutter: 12px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --label: #f2f3f7; --label-2: rgba(226,229,236,.78); --label-3: rgba(226,229,236,.68); --label-4: rgba(226,229,236,.20);
+    --separator: rgba(226,229,236,.14); --separator-soft: rgba(226,229,236,.08);
+    --ground: linear-gradient(160deg, #15171c 0%, #101216 55%, #0d0f13 100%); --ground-flat: #101216;
+    --glass: rgba(34, 37, 44, .55); --glass-strong: rgba(38, 41, 49, .78); --glass-edge: rgba(255,255,255,.10);
+    --glass-shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px rgba(0,0,0,.35);
+    --content: #191b20; --content-2: #1f2228;
+    --fill: rgba(226,229,236,.08); --fill-2: rgba(226,229,236,.13);
+    --accent: #4f7fff; --accent-2: #7aa0ff; --accent-text: #8fb0ff; --accent-soft: rgba(79,127,255,.18); --accent-ring: rgba(79,127,255,.4);
+    --mark: #ffd54a; --mark-soft: rgba(255,213,74,.32);
+    --orange: #ff9f3d; --orange-soft: rgba(255,159,61,.18); --orange-text: #ffb466;
+    --red: #ff5f5c; --red-soft: rgba(255,95,92,.18); --green: #34d476;
+    --purple: #a583ff; --purple-soft: rgba(165,131,255,.16); --purple-text: #c4adff;
+    --tint-paper: #8785ff; --tint-feed: #ffab5c; --tint-note: #ffd24d; --tint-code: #9aa1ad; --tint-web: #5fc8f2;
+    --shadow-float: 0 2px 6px rgba(0,0,0,.35), 0 18px 48px rgba(0,0,0,.5);
+    --shadow-window: 0 30px 80px rgba(0,0,0,.6), 0 0 0 .5px rgba(255,255,255,.1);
+  }
+}
+:root[data-theme="dark"], [data-theme="dark"] {
+  --label: #f2f3f7; --label-2: rgba(226,229,236,.78); --label-3: rgba(226,229,236,.68); --label-4: rgba(226,229,236,.20);
+  --separator: rgba(226,229,236,.14); --separator-soft: rgba(226,229,236,.08);
+  --ground: linear-gradient(160deg, #15171c 0%, #101216 55%, #0d0f13 100%); --ground-flat: #101216;
+  --glass: rgba(34, 37, 44, .55); --glass-strong: rgba(38, 41, 49, .78); --glass-edge: rgba(255,255,255,.10);
+  --glass-shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 30px rgba(0,0,0,.35);
+  --content: #191b20; --content-2: #1f2228;
+  --fill: rgba(226,229,236,.08); --fill-2: rgba(226,229,236,.13);
+  --accent: #4f7fff; --accent-2: #7aa0ff; --accent-text: #8fb0ff; --accent-soft: rgba(79,127,255,.18); --accent-ring: rgba(79,127,255,.4);
+  --mark: #ffd54a; --mark-soft: rgba(255,213,74,.32);
+  --orange: #ff9f3d; --orange-soft: rgba(255,159,61,.18); --orange-text: #ffb466;
+  --red: #ff5f5c; --red-soft: rgba(255,95,92,.18); --green: #34d476;
+  --purple: #a583ff; --purple-soft: rgba(165,131,255,.16); --purple-text: #c4adff;
+  --tint-paper: #8785ff; --tint-feed: #ffab5c; --tint-note: #ffd24d; --tint-code: #9aa1ad; --tint-web: #5fc8f2;
+  --shadow-float: 0 2px 6px rgba(0,0,0,.35), 0 18px 48px rgba(0,0,0,.5);
+  --shadow-window: 0 30px 80px rgba(0,0,0,.6), 0 0 0 .5px rgba(255,255,255,.1);
+}
+
