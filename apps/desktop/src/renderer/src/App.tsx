@@ -5,6 +5,7 @@ import { items, signalsOf, timeOf } from "./fixtures";
 import { ReaderView } from "./ReaderView";
 import { AddSheet } from "./AddSheet";
 import type { MaterialRecord, MaterialSummary } from "../../shared/contracts";
+import { read } from "./api";
 
 type View = "inbox" | "queue" | "library" | "sources";
 const titles: Record<View, string> = { inbox: "Inbox", queue: "Queue", library: "Library", sources: "Sources" };
@@ -23,7 +24,7 @@ export function App() {
   const [addBusy, setAddBusy] = useState(false);
   const [addError, setAddError] = useState<string | undefined>();
 
-  const refreshLibrary = useCallback(async () => setLibrary(await window.read.listMaterials()), []);
+  const refreshLibrary = useCallback(async () => setLibrary(await read.listMaterials()), []);
   useEffect(() => { void refreshLibrary(); }, [refreshLibrary]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if ((event.metaKey || event.ctrlKey) && event.key === "n") { event.preventDefault(); setAddOpen(true); } };
@@ -33,7 +34,7 @@ export function App() {
 
   const submitUrl = async (url: string) => {
     setAddBusy(true); setAddError(undefined);
-    const result = await window.read.openUrl(url);
+    const result = await read.openUrl(url);
     setAddBusy(false);
     if (!result.ok) { setAddError(result.message); return; }
     setAddOpen(false);
@@ -41,13 +42,37 @@ export function App() {
     setView("library");
     setReading(result.material);
   };
+  const submitFile = async (file: File) => {
+    setAddBusy(true); setAddError(undefined);
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const result = await read.openFile({ name: file.name, mediaType: file.type, bytes });
+    setAddBusy(false);
+    if (!result.ok) { setAddOpen(true); setAddError(result.message); return; }
+    setAddOpen(false);
+    await refreshLibrary();
+    setView("library");
+    setReading(result.material);
+  };
+  useEffect(() => {
+    const over = (event: DragEvent) => { event.preventDefault(); };
+    const drop = (event: DragEvent) => {
+      event.preventDefault();
+      const file = event.dataTransfer?.files?.[0];
+      if (file) void submitFile(file);
+    };
+    window.addEventListener("dragover", over);
+    window.addEventListener("drop", drop);
+    return () => { window.removeEventListener("dragover", over); window.removeEventListener("drop", drop); };
+  });
   const openMaterial = async (id: string) => {
-    const material = await window.read.getMaterial(id);
+    const material = await read.getMaterial(id);
     if (material) setReading(material);
   };
   const openLink = (url: string) => { window.open(url, "_blank", "noopener"); };
 
-  if (reading) return <ReaderView material={reading} onBack={() => setReading(undefined)} onOpenLink={openLink} />;
+  // The sheet lives outside the view switch so a dropped file (and its error) is visible while reading too.
+  const addSheet = <AddSheet open={addOpen} busy={addBusy} error={addError} onClose={() => { setAddOpen(false); setAddError(undefined); }} onSubmit={(url) => void submitUrl(url)} />;
+  if (reading) return <><ReaderView material={reading} onBack={() => setReading(undefined)} onOpenLink={openLink} />{addSheet}</>;
 
   return (
     <div className={askOpen ? "grid h-full grid-cols-[236px_minmax(0,1fr)_360px] grid-rows-[56px_minmax(0,1fr)] gap-3 p-3" : "grid h-full grid-cols-[236px_minmax(0,1fr)] grid-rows-[56px_minmax(0,1fr)] gap-3 p-3"}>
@@ -77,7 +102,7 @@ export function App() {
             <ItemGroup>Kept · {library.length}</ItemGroup>
             {library.length ? (
               <ItemList aria-label="Library" items={library} selectionMode="single" selectedKeys={librarySelected} onSelectionChange={setLibrarySelected} onAction={(key) => void openMaterial(String(key))} className="flex-1">
-                {(item) => <ItemRow id={item.id} title={item.title} source={new URL(item.url).hostname} time={timeOf(item.fetchedAt)} minutes={item.readingMinutes} state="read" {...(item.quality.safety === "degraded_plaintext" ? { tag: "summary" as const } : {})} />}
+                {(item) => <ItemRow id={item.id} title={item.title} source={(item.origin === "file" ? "Local file" : new URL(item.url).hostname)} time={timeOf(item.fetchedAt)} minutes={item.readingMinutes} state="read" {...(item.quality.safety === "degraded_plaintext" ? { tag: "summary" as const } : {})} />}
               </ItemList>
             ) : (
               <div className="grid flex-1 place-items-center px-6 text-center text-label-2"><div><strong className="mb-1.5 block text-[16px] font-semibold text-label">Nothing kept yet.</strong><span className="text-[13px]">Press ⌘N and paste a page URL to read it here.</span></div></div>
@@ -109,7 +134,7 @@ export function App() {
             return chosen ? (
               <>
                 <div className="px-9 pt-7">
-                  <div className="flex items-center gap-2 text-[12.5px] text-label-2">{new URL(chosen.url).hostname}<span className="rounded-pill bg-fill px-2 py-px text-[11.5px] font-medium">{chosen.quality.safety === "degraded_plaintext" ? "plain text only" : "web extract"}</span></div>
+                  <div className="flex items-center gap-2 text-[12.5px] text-label-2">{(chosen.origin === "file" ? "Local file" : new URL(chosen.url).hostname)}<span className="rounded-pill bg-fill px-2 py-px text-[11.5px] font-medium">{chosen.quality.safety === "degraded_plaintext" ? "plain text only" : "web extract"}</span></div>
                   <h1 className="mb-1.5 mt-2.5 text-[24px] font-bold leading-[29px] tracking-[-.02em] text-balance">{chosen.title}</h1>
                   <div className="flex flex-wrap gap-x-3 text-[12.5px] text-label-2">{chosen.byline ? <span>{chosen.byline}</span> : null}<span>{chosen.readingMinutes} min</span><span>kept {timeOf(chosen.fetchedAt)}</span></div>
                 </div>
@@ -153,7 +178,7 @@ export function App() {
           </InspectorPanel>
         </Inspector>
       ) : null}
-      <AddSheet open={addOpen} busy={addBusy} error={addError} onClose={() => { setAddOpen(false); setAddError(undefined); }} onSubmit={(url) => void submitUrl(url)} />
+      {addSheet}
     </div>
   );
 }

@@ -7,8 +7,9 @@
       "DOM.Iterable"
     ],
     "types": [
+      "electron-vite/node",
       "node",
-      "electron-vite/node"
+      "vitest/globals"
     ],
     "noEmit": true,
     "paths": {
@@ -27,6 +28,7 @@
     "electron.vite.config.ts",
     "src/main",
     "src/preload",
-    "src/shared"
+    "src/shared",
+    "vitest.config.ts"
   ]
 }

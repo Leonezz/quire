@@ -20,7 +20,8 @@
       ]
     },
     "noUncheckedIndexedAccess": false,
-    "exactOptionalPropertyTypes": false
+    "exactOptionalPropertyTypes": false,
+    "resolveJsonModule": true
   },
   "include": [
     "src/preload/index.d.ts",

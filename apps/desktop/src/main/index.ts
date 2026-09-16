@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, shell } from "electron";
+import { app, BrowserWindow, ipcMain, nativeTheme, shell } from "electron";
 import { join } from "node:path";
 import { MaterialStore } from "./engine/materials";
 
@@ -11,6 +11,17 @@ function boundedString(value: unknown, max: number, code: string): string {
 
 // One JSON-RPC-ish boundary; every handler validates its input before touching the store.
 ipcMain.handle("material:openUrl", (_event, url: unknown) => store.openUrl(boundedString(url, 4096, "IPC_INVALID_URL")));
+ipcMain.handle("material:openFile", (_event, input: unknown) => {
+  const value = input as { name?: unknown; mediaType?: unknown; bytes?: unknown };
+  const name = boundedString(value?.name, 255, "IPC_INVALID_FILE_NAME");
+  const mediaType = typeof value?.mediaType === "string" ? value.mediaType.slice(0, 100) : "";
+  if (!(value?.bytes instanceof Uint8Array) || value.bytes.byteLength === 0 || value.bytes.byteLength > 8 * 1024 * 1024) throw new Error("IPC_INVALID_FILE_BYTES");
+  return store.openFile({ name, mediaType, bytes: value.bytes });
+});
+ipcMain.handle("theme:set", (_event, theme: unknown) => {
+  if (theme !== "system" && theme !== "light" && theme !== "dark") throw new Error("IPC_INVALID_THEME");
+  nativeTheme.themeSource = theme;
+});
 ipcMain.handle("material:get", (_event, id: unknown) => store.get(boundedString(id, 64, "IPC_INVALID_ID")));
 ipcMain.handle("material:list", () => store.list());
 

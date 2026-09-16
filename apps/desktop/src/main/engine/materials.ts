@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { createMarkdownRepresentations, normalizeArticleCapture, type ContentMaterialization, type NormalizationProblem } from "@read/normalize";
-import type { MaterialRecord, MaterialSummary, OpenUrlResult } from "../../shared/contracts";
+import type { MaterialRecord, MaterialSummary, OpenFileInput, OpenUrlResult } from "../../shared/contracts";
 import { FetchError, assertPublicHttpUrl, fetchPage } from "./fetch";
 
 const BUDGET = { maxBytes: 8 * 1024 * 1024, maxDepth: 100, maxNodes: 100_000, maxOutputBytes: 8 * 1024 * 1024 };
@@ -48,9 +48,25 @@ export class MaterialStore {
     }
   }
 
-  private materialize(bytes: Uint8Array, mediaType: string, finalUrl: string, requestedUrl: string): MaterialRecord {
+  /** A dropped or opened file. The bytes already crossed the bridge; only the type is decided here. */
+  async openFile(input: OpenFileInput): Promise<OpenUrlResult> {
+    try {
+      const name = input.name.replace(/[\\/]/g, "_").slice(0, 200) || "file";
+      const mediaType = input.mediaType || mediaTypeForName(name);
+      // The article extractor only resolves http(s) bases; a synthetic origin keeps relative links well-formed.
+      const locator = `https://file.local/${encodeURIComponent(name)}`;
+      const record = this.materialize(input.bytes, mediaType, locator, `file:///${encodeURIComponent(name)}`, "file", sha256(input.bytes).slice(7, 23));
+      await this.save(record);
+      return { ok: true, material: record };
+    } catch (error) {
+      if (error instanceof FetchError) return { ok: false, code: error.code, message: error.message };
+      return { ok: false, code: "NORMALIZE_FAILED", message: error instanceof Error ? error.message : "Could not read this file." };
+    }
+  }
+
+  private materialize(bytes: Uint8Array, mediaType: string, finalUrl: string, requestedUrl: string, origin: "web" | "file" = "web", id = idFor(finalUrl)): MaterialRecord {
     const fetchedAt = new Date().toISOString();
-    const base = { id: idFor(finalUrl), url: requestedUrl, finalUrl, mediaType, fetchedAt, origin: "web" as const };
+    const base = { id, url: requestedUrl, finalUrl, mediaType, fetchedAt, origin };
     if (mediaType === "text/html" || mediaType === "application/xhtml+xml") {
       const outcome = normalizeArticleCapture({ budget: BUDGET, capture: { baseLocator: finalUrl, bytes, contentIdentity: sha256(bytes), mediaType } });
       if (!outcome.ok) {
@@ -61,7 +77,7 @@ export class MaterialStore {
       const parts = pick(article.materialization);
       return {
         ...base,
-        title: article.title,
+        title: article.title.trim() || titleFromHtml(bytes) || new URL(finalUrl).hostname,
         ...(article.byline ? { byline: article.byline } : {}),
         ...(article.publishedAt ? { publishedAt: article.publishedAt } : {}),
         ...(article.lang ? { lang: article.lang } : {}),
@@ -79,7 +95,7 @@ export class MaterialStore {
       const { representations } = createMarkdownRepresentations({ baseUri: finalUrl, content, maxDepth: BUDGET.maxDepth, maxNodes: BUDGET.maxNodes, maxOutputBytes: BUDGET.maxOutputBytes, outputBudgetErrorCode: "MARKDOWN_TOO_LARGE" });
       const by = (schema: string) => representations.find((r) => r.schema === schema)?.content;
       const v2 = by("reader.document.v2"); const v1 = by("reader.document.v1");
-      const title = /^#\s+(.+)$/m.exec(content)?.[1]?.trim() ?? new URL(finalUrl).pathname.split("/").pop() ?? finalUrl;
+      const title = /^#\s+(.+)$/m.exec(content)?.[1]?.trim() ?? decodeURIComponent(new URL(finalUrl).pathname.split("/").pop() ?? finalUrl);
       return {
         ...base, title,
         ...(v2 ? { reader: { schema: "reader.document.v2" as const, payload: v2 } } : v1 ? { reader: { schema: "reader.document.v1" as const, payload: v1 } } : {}),
@@ -110,6 +126,20 @@ export class MaterialStore {
       .sort((a, b) => b.fetchedAt.localeCompare(a.fetchedAt))
       .map(({ id, url, title, byline, publishedAt, fetchedAt, readingMinutes, origin, quality }) => ({ id, url, title, fetchedAt, readingMinutes, origin, quality, ...(byline ? { byline } : {}), ...(publishedAt ? { publishedAt } : {}) }));
   }
+}
+
+function titleFromHtml(bytes: Uint8Array): string | undefined {
+  const head = new TextDecoder("utf-8", { fatal: false }).decode(bytes.subarray(0, 64 * 1024));
+  const match = /<title[^>]*>([^<]{1,300})<\/title>/i.exec(head);
+  return match?.[1]?.replace(/\s+/g, " ").trim() || undefined;
+}
+
+function mediaTypeForName(name: string): string {
+  const ext = name.toLowerCase().split(".").pop() ?? "";
+  if (ext === "md" || ext === "markdown") return "text/markdown";
+  if (ext === "txt") return "text/plain";
+  if (ext === "html" || ext === "htm" || ext === "xhtml") return "text/html";
+  return "application/octet-stream";
 }
 
 function degradedQuality(problems: NormalizationProblem[]) {

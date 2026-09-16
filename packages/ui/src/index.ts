@@ -17,3 +17,4 @@ export type { Selection, Key } from "react-aria-components";
 export { Sheet, SheetDialog, SheetFooter, DialogTrigger } from "./primitives/Sheet";
 export { TextField } from "./primitives/TextField";
 export type { TextFieldProps } from "./primitives/TextField";
+export { Popover } from "./primitives/Popover";

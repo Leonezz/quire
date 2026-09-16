@@ -31,10 +31,21 @@ export type OpenUrlResult =
   | { ok: true; material: MaterialRecord }
   | { ok: false; code: string; message: string };
 
+export interface OpenFileInput {
+  name: string;
+  mediaType: string;
+  bytes: Uint8Array;
+}
+
+export type ThemeSource = "system" | "light" | "dark";
+
 export interface ReadApi {
   version: string;
   platform: string;
+  /** Sync the window's native appearance (vibrancy, menus) with the reading theme. */
+  setTheme: (theme: ThemeSource) => Promise<void>;
   openUrl: (url: string) => Promise<OpenUrlResult>;
+  openFile: (input: OpenFileInput) => Promise<OpenUrlResult>;
   getMaterial: (id: string) => Promise<MaterialRecord | undefined>;
   listMaterials: () => Promise<MaterialSummary[]>;
 }

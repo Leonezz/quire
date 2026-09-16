@@ -2,6 +2,9 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, Highlighter, List, Sparkles, Text } from "lucide-react";
 import { AskButton, Inspector, InspectorPanel, InspectorSection, InspectorTab, InspectorTabs, Kbd, Toolbar, ToolbarButton, ToolbarGroup, ToolbarTitle, type Key } from "@read/ui";
 import { ReaderDocumentSurface, useDocumentReadingPosition } from "@read/reader";
+import { FindBar } from "./FindBar";
+import { ReadingSettings } from "./ReadingSettings";
+import { applyTheme, loadPrefs, prefsStyle, savePrefs, type ReadingPrefs } from "./readingPrefs";
 import type { MaterialRecord } from "../../shared/contracts";
 
 type OutlineEntry = { id: string; label: string; level: number };
@@ -34,13 +37,18 @@ export function ReaderView({ material, onBack, onOpenLink }: { material: Materia
   const [outline, setOutline] = useState<OutlineEntry[]>([]);
   const [progress, setProgress] = useState(0);
   const [reading, setReading] = useState(false);
+  const [prefs, setPrefs] = useState<ReadingPrefs>(loadPrefs);
+  const [findOpen, setFindOpen] = useState(false);
+  const [bodyGeneration, setBodyGeneration] = useState(0);
+  useEffect(() => { savePrefs(prefs); applyTheme(prefs.theme); }, [prefs]);
+  useEffect(() => { if (prefs.focus) setInspectorTab(null); }, [prefs.focus]);
   const quality = qualityLabel(material);
   const identity = material.reader ? `${material.id}:${material.reader.schema}` : material.id;
 
   useDocumentReadingPosition(viewportRef, identity);
 
   useEffect(() => {
-    const frame = requestAnimationFrame(() => setOutline(outlineOf(bodyRef.current)));
+    const frame = requestAnimationFrame(() => { setOutline(outlineOf(bodyRef.current)); setBodyGeneration((value) => value + 1); });
     return () => cancelAnimationFrame(frame);
   }, [material.id]);
 
@@ -66,14 +74,15 @@ export function ReaderView({ material, onBack, onOpenLink }: { material: Materia
       if (event.key === "t") { event.preventDefault(); setInspectorTab((tab) => (tab === "contents" ? null : "contents")); }
       if (event.key === "n") { event.preventDefault(); setInspectorTab((tab) => (tab === "notes" ? null : "notes")); }
       if ((event.metaKey || event.ctrlKey) && event.key === "j") { event.preventDefault(); setInspectorTab((tab) => (tab === "agent" ? null : "agent")); }
+      if ((event.metaKey || event.ctrlKey) && event.key === "f") { event.preventDefault(); setFindOpen(true); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [inspectorTab, onBack]);
 
   const fallback = useMemo(() => (material.markdown ? { content: material.markdown, format: "gfm" as const } : { content: material.plain ?? "", format: "plain" as const }), [material]);
-  const subtitle = [new URL(material.finalUrl).hostname, `${progress}%`, `${material.readingMinutes} min`].join(" · ");
-  const inspectorOpen = inspectorTab !== null;
+  const subtitle = [(material.origin === "file" ? decodeURIComponent(material.url.replace("file:///", "")) : new URL(material.finalUrl).hostname), `${progress}%`, `${material.readingMinutes} min`].join(" · ");
+  const inspectorOpen = inspectorTab !== null && !prefs.focus;
 
   return (
     <div className={inspectorOpen ? "grid h-full grid-cols-[minmax(0,1fr)_360px] grid-rows-[56px_minmax(0,1fr)] gap-3 p-3" : "grid h-full grid-cols-[minmax(0,1fr)] grid-rows-[56px_minmax(0,1fr)] gap-3 p-3"}>
@@ -84,15 +93,17 @@ export function ReaderView({ material, onBack, onOpenLink }: { material: Materia
           <span className={`mr-1.5 inline-flex h-[22px] items-center gap-1 rounded-pill px-2.5 text-[11.5px] font-medium ${quality.low ? "bg-orange-soft text-orange-text" : "bg-fill text-label-2"}`}>{quality.text}</span>
           <ToolbarButton aria-label="Contents (t)" isSelected={inspectorTab === "contents"} onChange={(on) => setInspectorTab(on ? "contents" : null)}><List /></ToolbarButton>
           <ToolbarButton aria-label="Notes (n)" isSelected={inspectorTab === "notes"} onChange={(on) => setInspectorTab(on ? "notes" : null)}><Highlighter /></ToolbarButton>
+          <ReadingSettings prefs={prefs} onChange={setPrefs} />
           <AskButton aria-label="Ask" isSelected={inspectorTab === "agent"} onChange={(on) => setInspectorTab(on ? "agent" : null)}><Sparkles />Ask<Kbd>⌘J</Kbd></AskButton>
         </ToolbarGroup>
       </Toolbar>
 
-      <main className="grid min-h-0 grid-rows-[2px_minmax(0,1fr)] overflow-hidden rounded-panel bg-content shadow-[0_0_0_1px_var(--separator-soft),0_6px_20px_rgba(15,17,21,.04)]">
-        <div className="bg-separator-soft"><i className="block h-full bg-accent opacity-80" style={{ width: `${progress}%` }} /></div>
-        <div ref={viewportRef} className="overflow-auto px-14 pb-[120px] pt-12">
-          <article ref={bodyRef} className="reader-body">
-            <p className="mb-3 text-[13px] font-medium text-accent-text">{new URL(material.finalUrl).hostname}</p>
+      <main className="relative grid min-h-0 grid-rows-[2px_minmax(0,1fr)] overflow-hidden rounded-panel bg-content shadow-[0_0_0_1px_var(--separator-soft),0_6px_20px_rgba(15,17,21,.04)]">
+        <div className="bg-separator-soft">{prefs.focus ? null : <i className="block h-full bg-accent opacity-80" style={{ width: `${progress}%` }} />}</div>
+        {findOpen ? <FindBar root={bodyRef.current} generation={bodyGeneration} onClose={() => setFindOpen(false)} /> : null}
+        <div ref={viewportRef} className="overflow-auto px-14 pb-[120px] pt-12" style={prefsStyle(prefs)}>
+          <article ref={bodyRef} className="reader-body" style={{ textAlign: prefs.justify ? "justify" : "start" }}>
+            <p className="mb-3 text-[13px] font-medium text-accent-text">{(material.origin === "file" ? decodeURIComponent(material.url.replace("file:///", "")) : new URL(material.finalUrl).hostname)}</p>
             <h1>{material.title}</h1>
             <div className="mb-8 flex flex-wrap gap-x-3 text-[12.5px] text-label-2">
               {material.byline ? <span>{material.byline}</span> : null}
