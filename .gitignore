@@ -6,3 +6,4 @@ out/
 storybook-static/
 .vite/
 apps/desktop/release/
+apps/desktop/src/renderer/public/dev/*.pdf

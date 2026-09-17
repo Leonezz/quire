@@ -1,0 +1,14 @@
+{
+  "id": "5f725f31pdf00001",
+  "url": "https://arxiv.org/pdf/1706.03762",
+  "finalUrl": "https://arxiv.org/pdf/1706.03762",
+  "title": "Attention Is All You Need",
+  "byline": "Vaswani et al.",
+  "fetchedAt": "2026-09-17T09:00:00.000Z",
+  "readingMinutes": 38,
+  "origin": "web",
+  "mediaType": "application/pdf",
+  "pdf": { "pages": 15, "byteLength": 2215244, "textLayer": "available" },
+  "quality": { "completeness": "declared_full", "conformance": "conformant", "identityConfidence": "strong", "safety": "safe", "warnings": [] },
+  "problems": []
+}

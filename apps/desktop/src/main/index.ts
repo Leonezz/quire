@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, nativeTheme, shell } from "electron";
 import { join } from "node:path";
 import { MaterialStore } from "./engine/materials";
+import { MAX_BYTES } from "./engine/fetch";
 
 const store = new MaterialStore(app.getPath("userData"));
 
@@ -15,7 +16,7 @@ ipcMain.handle("material:openFile", (_event, input: unknown) => {
   const value = input as { name?: unknown; mediaType?: unknown; bytes?: unknown };
   const name = boundedString(value?.name, 255, "IPC_INVALID_FILE_NAME");
   const mediaType = typeof value?.mediaType === "string" ? value.mediaType.slice(0, 100) : "";
-  if (!(value?.bytes instanceof Uint8Array) || value.bytes.byteLength === 0 || value.bytes.byteLength > 8 * 1024 * 1024) throw new Error("IPC_INVALID_FILE_BYTES");
+  if (!(value?.bytes instanceof Uint8Array) || value.bytes.byteLength === 0 || value.bytes.byteLength > MAX_BYTES) throw new Error("IPC_INVALID_FILE_BYTES");
   return store.openFile({ name, mediaType, bytes: value.bytes });
 });
 ipcMain.handle("theme:set", (_event, theme: unknown) => {
@@ -23,6 +24,7 @@ ipcMain.handle("theme:set", (_event, theme: unknown) => {
   nativeTheme.themeSource = theme;
 });
 ipcMain.handle("material:get", (_event, id: unknown) => store.get(boundedString(id, 64, "IPC_INVALID_ID")));
+ipcMain.handle("material:bytes", (_event, id: unknown) => store.bytes(boundedString(id, 64, "IPC_INVALID_ID")));
 ipcMain.handle("material:list", () => store.list());
 
 // One window. Native vibrancy behind a transparent page so the glass panels

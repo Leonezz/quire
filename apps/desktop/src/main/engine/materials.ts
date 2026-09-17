@@ -4,9 +4,11 @@ import { join } from "node:path";
 import { createMarkdownRepresentations, normalizeArticleCapture, type ContentMaterialization, type NormalizationProblem } from "@read/normalize";
 import type { MaterialRecord, MaterialSummary, OpenFileInput, OpenUrlResult } from "../../shared/contracts";
 import { FetchError, assertPublicHttpUrl, fetchPage } from "./fetch";
+import { PdfError, inspectPdf } from "./pdf";
 
 const BUDGET = { maxBytes: 8 * 1024 * 1024, maxDepth: 100, maxNodes: 100_000, maxOutputBytes: 8 * 1024 * 1024 };
 const WORDS_PER_MINUTE = 240;
+const MINUTES_PER_PDF_PAGE = 2.5;
 
 function sha256(bytes: Uint8Array): `sha256:${string}` {
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
@@ -39,11 +41,11 @@ export class MaterialStore {
     try {
       const url = assertPublicHttpUrl(raw);
       const page = await fetchPage(url);
-      const record = this.materialize(page.bytes, page.mediaType, page.finalUrl, raw);
+      const record = await this.materializeAny(page.bytes, page.mediaType, page.finalUrl, raw);
       await this.save(record);
       return { ok: true, material: record };
     } catch (error) {
-      if (error instanceof FetchError) return { ok: false, code: error.code, message: error.message };
+      if (error instanceof FetchError || error instanceof PdfError) return { ok: false, code: error.code, message: error.message };
       return { ok: false, code: "NORMALIZE_FAILED", message: error instanceof Error ? error.message : "Could not read this page." };
     }
   }
@@ -55,13 +57,32 @@ export class MaterialStore {
       const mediaType = input.mediaType || mediaTypeForName(name);
       // The article extractor only resolves http(s) bases; a synthetic origin keeps relative links well-formed.
       const locator = `https://file.local/${encodeURIComponent(name)}`;
-      const record = this.materialize(input.bytes, mediaType, locator, `file:///${encodeURIComponent(name)}`, "file", sha256(input.bytes).slice(7, 23));
+      const record = await this.materializeAny(input.bytes, mediaType, locator, `file:///${encodeURIComponent(name)}`, "file", sha256(input.bytes).slice(7, 23));
       await this.save(record);
       return { ok: true, material: record };
     } catch (error) {
-      if (error instanceof FetchError) return { ok: false, code: error.code, message: error.message };
+      if (error instanceof FetchError || error instanceof PdfError) return { ok: false, code: error.code, message: error.message };
       return { ok: false, code: "NORMALIZE_FAILED", message: error instanceof Error ? error.message : "Could not read this file." };
     }
+  }
+
+  /** PDFs keep their bytes on disk next to the record; everything else is materialized synchronously. */
+  private async materializeAny(bytes: Uint8Array, mediaType: string, finalUrl: string, requestedUrl: string, origin: "web" | "file" = "web", id = idFor(finalUrl)): Promise<MaterialRecord> {
+    if (mediaType !== "application/pdf" && !(mediaType === "application/octet-stream" && looksLikePdf(bytes))) return this.materialize(bytes, mediaType, finalUrl, requestedUrl, origin, id);
+    const inspection = await inspectPdf(bytes);
+    await mkdir(this.dir, { recursive: true });
+    await writeFile(this.pdfPath(id), bytes);
+    const fileName = decodeURIComponent(new URL(finalUrl).pathname.split("/").pop() ?? "").replace(/\.pdf$/i, "");
+    return {
+      id, url: requestedUrl, finalUrl, mediaType: "application/pdf", fetchedAt: new Date().toISOString(), origin,
+      title: inspection.title ?? fileName ?? new URL(finalUrl).hostname,
+      ...(inspection.author ? { byline: inspection.author } : {}),
+      ...(inspection.sampleText ? { plain: inspection.sampleText } : {}),
+      readingMinutes: Math.max(1, Math.round(inspection.pages * MINUTES_PER_PDF_PAGE)),
+      pdf: { pages: inspection.pages, byteLength: bytes.byteLength, textLayer: inspection.textLayer },
+      quality: { completeness: "declared_full", conformance: "conformant", identityConfidence: origin === "file" ? "derived" : "strong", safety: "safe", warnings: [] },
+      problems: [],
+    };
   }
 
   private materialize(bytes: Uint8Array, mediaType: string, finalUrl: string, requestedUrl: string, origin: "web" | "file" = "web", id = idFor(finalUrl)): MaterialRecord {
@@ -104,12 +125,21 @@ export class MaterialStore {
         problems: [],
       };
     }
-    throw new FetchError("UNSUPPORTED_TYPE", `This is ${mediaType}; only pages, Markdown and plain text can be read in M0.`);
+    throw new FetchError("UNSUPPORTED_TYPE", `This is ${mediaType}; only pages, PDFs, Markdown and plain text can be read in M0.`);
   }
 
   private async save(record: MaterialRecord) {
     await mkdir(this.dir, { recursive: true });
     await writeFile(join(this.dir, `${record.id}.json`), JSON.stringify(record), "utf8");
+  }
+
+  private pdfPath(id: string) { return join(this.dir, `${id}.pdf`); }
+
+  /** Bytes of a stored PDF. Undefined when the id is unknown or the material is not a PDF. */
+  async bytes(id: string): Promise<Uint8Array | undefined> {
+    if (!/^[a-f0-9]{16}$/.test(id)) return undefined;
+    try { return new Uint8Array(await readFile(this.pdfPath(id))); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
   }
 
   async get(id: string): Promise<MaterialRecord | undefined> {
@@ -124,8 +154,12 @@ export class MaterialStore {
     const records = await Promise.all(files.map(async (name) => JSON.parse(await readFile(join(this.dir, name), "utf8")) as MaterialRecord));
     return records
       .sort((a, b) => b.fetchedAt.localeCompare(a.fetchedAt))
-      .map(({ id, url, title, byline, publishedAt, fetchedAt, readingMinutes, origin, quality }) => ({ id, url, title, fetchedAt, readingMinutes, origin, quality, ...(byline ? { byline } : {}), ...(publishedAt ? { publishedAt } : {}) }));
+      .map(({ id, url, title, byline, publishedAt, fetchedAt, readingMinutes, origin, mediaType, quality }) => ({ id, url, title, fetchedAt, readingMinutes, origin, mediaType, quality, ...(byline ? { byline } : {}), ...(publishedAt ? { publishedAt } : {}) }));
   }
+}
+
+function looksLikePdf(bytes: Uint8Array): boolean {
+  return bytes.length > 4 && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46; // %PDF
 }
 
 function titleFromHtml(bytes: Uint8Array): string | undefined {
@@ -139,6 +173,7 @@ function mediaTypeForName(name: string): string {
   if (ext === "md" || ext === "markdown") return "text/markdown";
   if (ext === "txt") return "text/plain";
   if (ext === "html" || ext === "htm" || ext === "xhtml") return "text/html";
+  if (ext === "pdf") return "application/pdf";
   return "application/octet-stream";
 }
 

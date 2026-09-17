@@ -9,6 +9,7 @@ const api: ReadApi = {
   openUrl: (url) => ipcRenderer.invoke("material:openUrl", url),
   openFile: (input) => ipcRenderer.invoke("material:openFile", input),
   getMaterial: (id) => ipcRenderer.invoke("material:get", id),
+  getMaterialBytes: (id) => ipcRenderer.invoke("material:bytes", id),
   listMaterials: () => ipcRenderer.invoke("material:list"),
 };
 contextBridge.exposeInMainWorld("read", api);

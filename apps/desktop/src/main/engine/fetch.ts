@@ -4,7 +4,7 @@ export class FetchError extends Error {
   constructor(public readonly code: string, message: string) { super(message); }
 }
 
-const MAX_BYTES = 8 * 1024 * 1024;
+export const MAX_BYTES = 32 * 1024 * 1024;
 const TIMEOUT_MS = 20_000;
 
 function isPrivateHost(hostname: string): boolean {
@@ -42,13 +42,13 @@ export async function fetchPage(url: URL): Promise<FetchedPage> {
     const response = await fetch(url, {
       redirect: "follow",
       signal: controller.signal,
-      headers: { accept: "text/html,application/xhtml+xml,text/markdown,text/plain;q=0.9,*/*;q=0.5", "user-agent": "Read/0.1 (+reading-workbench)" },
+      headers: { accept: "text/html,application/xhtml+xml,application/pdf,text/markdown,text/plain;q=0.9,*/*;q=0.5", "user-agent": "Read/0.1 (+reading-workbench)" },
     });
     if (!response.ok) throw new FetchError(`HTTP_${response.status}`, `The page answered ${response.status}.`);
     const finalUrl = response.url || url.toString();
     if (isPrivateHost(new URL(finalUrl).hostname)) throw new FetchError("URL_PRIVATE", "The page redirected to a private address.");
     const declared = Number(response.headers.get("content-length") ?? 0);
-    if (declared > MAX_BYTES) throw new FetchError("PAGE_TOO_LARGE", "The page is larger than 8 MB.");
+    if (declared > MAX_BYTES) throw new FetchError("PAGE_TOO_LARGE", "The page is larger than 32 MB.");
     const mediaType = (response.headers.get("content-type") ?? "application/octet-stream").split(";")[0]!.trim().toLowerCase();
     const reader = response.body?.getReader();
     if (!reader) throw new FetchError("EMPTY_BODY", "The page had no body.");
@@ -58,7 +58,7 @@ export async function fetchPage(url: URL): Promise<FetchedPage> {
       const { done, value } = await reader.read();
       if (done) break;
       total += value.byteLength;
-      if (total > MAX_BYTES) { await reader.cancel(); throw new FetchError("PAGE_TOO_LARGE", "The page is larger than 8 MB."); }
+      if (total > MAX_BYTES) { await reader.cancel(); throw new FetchError("PAGE_TOO_LARGE", "The page is larger than 32 MB."); }
       chunks.push(value);
     }
     const bytes = new Uint8Array(total);

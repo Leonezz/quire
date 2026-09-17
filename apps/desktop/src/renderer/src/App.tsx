@@ -3,6 +3,8 @@ import { BookOpen, Highlighter, Inbox as InboxIcon, List, ListOrdered, Plus, Rad
 import { AskButton, Button, Inspector, InspectorPanel, InspectorSection, InspectorTab, InspectorTabs, ItemGroup, ItemList, ItemRow, Kbd, Segment, Segmented, Sidebar, SidebarItem, SidebarSection, Toolbar, ToolbarButton, ToolbarGroup, ToolbarTitle, type Key, type Selection } from "@read/ui";
 import { items, signalsOf, timeOf } from "./fixtures";
 import { ReaderView } from "./ReaderView";
+import { PdfReaderView } from "./PdfReaderView";
+import { ErrorBoundary } from "./ErrorBoundary";
 import { AddSheet } from "./AddSheet";
 import type { MaterialRecord, MaterialSummary } from "../../shared/contracts";
 import { read } from "./api";
@@ -72,7 +74,7 @@ export function App() {
 
   // The sheet lives outside the view switch so a dropped file (and its error) is visible while reading too.
   const addSheet = <AddSheet open={addOpen} busy={addBusy} error={addError} onClose={() => { setAddOpen(false); setAddError(undefined); }} onSubmit={(url) => void submitUrl(url)} />;
-  if (reading) return <><ReaderView material={reading} onBack={() => setReading(undefined)} onOpenLink={openLink} />{addSheet}</>;
+  if (reading) return <><ErrorBoundary key={reading.id} label="The reader" onReset={() => setReading(undefined)}>{reading.pdf ? <PdfReaderView material={reading} onBack={() => setReading(undefined)} /> : <ReaderView material={reading} onBack={() => setReading(undefined)} onOpenLink={openLink} />}</ErrorBoundary>{addSheet}</>;
 
   return (
     <div className={askOpen ? "grid h-full grid-cols-[236px_minmax(0,1fr)_360px] grid-rows-[56px_minmax(0,1fr)] gap-3 p-3" : "grid h-full grid-cols-[236px_minmax(0,1fr)] grid-rows-[56px_minmax(0,1fr)] gap-3 p-3"}>
@@ -102,7 +104,7 @@ export function App() {
             <ItemGroup>Kept · {library.length}</ItemGroup>
             {library.length ? (
               <ItemList aria-label="Library" items={library} selectionMode="single" selectedKeys={librarySelected} onSelectionChange={setLibrarySelected} onAction={(key) => void openMaterial(String(key))} className="flex-1">
-                {(item) => <ItemRow id={item.id} title={item.title} source={(item.origin === "file" ? "Local file" : new URL(item.url).hostname)} time={timeOf(item.fetchedAt)} minutes={item.readingMinutes} state="read" {...(item.quality.safety === "degraded_plaintext" ? { tag: "summary" as const } : {})} />}
+                {(item) => <ItemRow id={item.id} title={item.title} source={(item.origin === "file" ? "Local file" : new URL(item.url).hostname)} time={timeOf(item.fetchedAt)} minutes={item.readingMinutes} state="read" signals={item.mediaType === "application/pdf" ? ["pdf"] : []} {...(item.quality.safety === "degraded_plaintext" ? { tag: "summary" as const } : {})} />}
               </ItemList>
             ) : (
               <div className="grid flex-1 place-items-center px-6 text-center text-label-2"><div><strong className="mb-1.5 block text-[16px] font-semibold text-label">Nothing kept yet.</strong><span className="text-[13px]">Press ⌘N and paste a page URL to read it here.</span></div></div>

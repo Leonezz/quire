@@ -1,0 +1,1297 @@
+import { act, useEffect, useRef, useState } from "react";
+import { createRoot } from "react-dom/client";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+const pdfMockState = vi.hoisted(() => ({
+  deferredPageLoads: new Map<number, () => void>(),
+  deferPageLoads: false,
+  nativeRotations: {} as Record<number, number>,
+  resolveDeferredSearch: undefined as
+    | ((value: { items: readonly { str: string }[] }) => void)
+    | undefined,
+}));
+
+vi.mock("react-pdf", () => ({
+  Document: ({
+    children,
+    file,
+    onItemClick,
+    onLoadSuccess,
+  }: {
+    children: React.ReactNode;
+    file?: string;
+    onItemClick?: (input: {
+      dest?: unknown;
+      pageIndex: number;
+      pageNumber: number;
+    }) => void;
+    onLoadSuccess?: (document: {
+      getPage: (page: number) => Promise<{
+        getTextContent: () => Promise<{
+          items: readonly { str: string }[];
+        }>;
+      }>;
+      numPages: number;
+    }) => void;
+  }) => {
+    const called = useRef(false);
+    const [ready, setReady] = useState(!file?.includes("deferred"));
+    useEffect(() => {
+      if (called.current) return;
+      called.current = true;
+      pdfMockState.nativeRotations = file?.includes("mixed-native-rotation")
+        ? { 1: 90, 2: 270 }
+        : {};
+      pdfMockState.deferPageLoads = Boolean(file?.includes("late-page-load"));
+      const numPages = file?.includes("large") ? 12 : 3;
+      onLoadSuccess?.({
+        getPage: async (page) => ({
+          getTextContent: async () => {
+            if (file?.includes("deferred-search")) {
+              return await new Promise<{ items: readonly { str: string }[] }>(
+                (resolve) => {
+                  pdfMockState.resolveDeferredSearch = resolve;
+                },
+              );
+            }
+            return {
+              items:
+                page === 1
+                  ? [{ str: "alpha beta alpha" }]
+                  : page === 2
+                    ? [{ str: "gamma alpha" }]
+                    : [],
+            };
+          },
+        }),
+        numPages,
+      });
+      setReady(true);
+    }, [file, onLoadSuccess]);
+    return (
+      <div className="react-pdf__Document">
+        {ready && file?.includes("internal-link") ? (
+          <button
+            aria-label="Internal PDF link to page 3"
+            onClick={() => onItemClick?.({ pageIndex: 2, pageNumber: 3 })}
+            type="button"
+          >
+            Internal link
+          </button>
+        ) : null}
+        {ready ? children : null}
+      </div>
+    );
+  },
+  Outline: ({
+    onLoadSuccess,
+    onItemClick,
+  }: {
+    onLoadSuccess?: (outline: readonly unknown[] | null) => void;
+    onItemClick?: (input: { pageNumber: number }) => void;
+  }) => {
+    useEffect(() => {
+      onLoadSuccess?.([{ title: "Introduction" }]);
+    }, [onLoadSuccess]);
+    return (
+      <nav aria-label="Mock outline">
+        <button onClick={() => onItemClick?.({ pageNumber: 2 })} type="button">
+          Introduction
+        </button>
+      </nav>
+    );
+  },
+  Page: ({
+    onLoadSuccess,
+    pageNumber,
+    rotate,
+    width,
+  }: {
+    onLoadSuccess?: (page: {
+      rotate: number;
+      getViewport: () => { height: number; width: number };
+    }) => void;
+    pageNumber: number;
+    rotate?: number;
+    width?: number;
+  }) => {
+    const nativeRotation = pdfMockState.nativeRotations[pageNumber] ?? 0;
+    useEffect(() => {
+      const reportLoaded = () => onLoadSuccess?.({
+        getViewport: () => nativeRotation === 90 || nativeRotation === 270
+          ? { height: 600, width: 800 }
+          : { height: 800, width: 600 },
+        rotate: nativeRotation,
+      });
+      if (pdfMockState.deferPageLoads) {
+        pdfMockState.deferredPageLoads.set(pageNumber, reportLoaded);
+        return () => {
+          if (pdfMockState.deferredPageLoads.get(pageNumber) === reportLoaded)
+            pdfMockState.deferredPageLoads.delete(pageNumber);
+        };
+      }
+      reportLoaded();
+    }, [nativeRotation, onLoadSuccess]);
+    return (
+      <div className="react-pdf__Page" data-render-rotation={rotate} data-render-width={width}>
+        <div className="react-pdf__Page__textContent">
+          {pageNumber === 1
+            ? "alpha beta alpha"
+            : pageNumber === 2
+              ? "gamma alpha"
+              : `Selectable page ${pageNumber}`}
+        </div>
+      </div>
+    );
+  },
+  Thumbnail: ({
+    onItemClick,
+    pageNumber,
+  }: {
+    onItemClick?: (input: { pageIndex: number; pageNumber: number }) => void;
+    pageNumber: number;
+  }) => (
+    <a
+      className="react-pdf__Thumbnail"
+      href="#"
+      onClick={(event) => {
+        event.preventDefault();
+        onItemClick?.({ pageIndex: pageNumber - 1, pageNumber });
+      }}
+    >
+      Thumbnail {pageNumber}
+    </a>
+  ),
+  pdfjs: { GlobalWorkerOptions: {} },
+}));
+
+import { PdfCanvasViewer, type PdfCanvasViewerHandle } from "./PdfCanvasViewer";
+import { canonicalPdfRect, displayedPdfRect } from "./pdf-page-geometry";
+
+(
+  globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
+).IS_REACT_ACT_ENVIRONMENT = true;
+
+const rangeGetClientRectsDescriptor = Object.getOwnPropertyDescriptor(
+  Range.prototype,
+  "getClientRects",
+);
+
+function renderViewer(
+  props: Partial<React.ComponentProps<typeof PdfCanvasViewer>> = {},
+) {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  return {
+    container,
+    root,
+    render: (
+      nextProps: React.ComponentProps<typeof PdfCanvasViewer> = {
+        title: "A paper",
+        url: "research-resource://paper.pdf",
+        ...props,
+      },
+    ) => root.render(<PdfCanvasViewer {...nextProps} />),
+  };
+}
+
+async function flushViewer() {
+  await act(async () => {
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+  });
+}
+
+async function flushSearch() {
+  await act(async () => {
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 180));
+    await Promise.resolve();
+  });
+}
+
+async function flushSearchHighlight() {
+  await act(async () => {
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 40));
+  });
+}
+
+function setInputValue(input: HTMLInputElement, value: string) {
+  const setter = Object.getOwnPropertyDescriptor(
+    HTMLInputElement.prototype,
+    "value",
+  )?.set;
+  setter?.call(input, value);
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+function keydown(target: EventTarget, key: string, init: KeyboardEventInit = {}) {
+  target.dispatchEvent(
+    new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key, ...init }),
+  );
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+  pdfMockState.deferredPageLoads.clear();
+  pdfMockState.deferPageLoads = false;
+  pdfMockState.nativeRotations = {};
+  pdfMockState.resolveDeferredSearch?.({ items: [] });
+  pdfMockState.resolveDeferredSearch = undefined;
+  document.body.innerHTML = "";
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  if (rangeGetClientRectsDescriptor) {
+    Object.defineProperty(
+      Range.prototype,
+      "getClientRects",
+      rangeGetClientRectsDescriptor,
+    );
+  } else {
+    Reflect.deleteProperty(Range.prototype, "getClientRects");
+  }
+});
+
+describe("PdfCanvasViewer", () => {
+  it("keeps PDF regions in canonical page coordinates across rotations", () => {
+    const canonical = { height: 0.1, width: 0.3, x: 0.1, y: 0.2 };
+
+    expect(displayedPdfRect(canonical, 90)).toEqual({
+      height: 0.3,
+      width: 0.1,
+      x: 0.7,
+      y: 0.1,
+    });
+    for (const rotation of [90, 180, 270]) {
+      expect(
+        canonicalPdfRect(displayedPdfRect(canonical, rotation), rotation),
+      ).toEqual(canonical);
+    }
+  });
+
+  it("renders a compact reader toolbar, continuous pages, and collapsible navigation", async () => {
+    const view = renderViewer({ pageCount: 3, textLayer: "available" });
+    await act(async () => {
+      view.render();
+    });
+    await flushViewer();
+
+    expect(
+      view.container.querySelector('[aria-label="PDF reader toolbar"]'),
+    ).toBeTruthy();
+    expect(
+      view.container.querySelectorAll(".pdf-canvas-viewer__page-shell"),
+    ).toHaveLength(3);
+    expect(
+      view.container.querySelectorAll("[aria-label^='Go to page ']"),
+    ).toHaveLength(3);
+    expect(view.container.textContent).toContain("/ 3");
+
+    const outlineTab = Array.from(
+      view.container.querySelectorAll("button"),
+    ).find((button) => button.textContent === "Contents");
+    await act(async () => outlineTab?.focus());
+    expect(
+      view.container.querySelector('[aria-label="Mock outline"]'),
+    ).toBeTruthy();
+
+    const sidebarToggle = view.container.querySelector<HTMLButtonElement>(
+      '[aria-label="Hide PDF sidebar"]',
+    );
+    await act(async () => sidebarToggle?.click());
+    expect(
+      view.container
+        .querySelector(".pdf-canvas-viewer__body")
+        ?.classList.contains("is-sidebar-collapsed"),
+    ).toBe(true);
+
+    await act(async () => view.root.unmount());
+  });
+
+  it("uses a roving keyboard tab stop for PDF pages and outline navigation", async () => {
+    const view = renderViewer({ pageCount: 3, textLayer: "available" });
+    await act(async () => {
+      view.render();
+    });
+    await flushViewer();
+
+    const tabs = () =>
+      Array.from(
+        view.container.querySelectorAll<HTMLButtonElement>(
+          '[aria-label="PDF sidebar views"] [role="tab"]',
+        ),
+      );
+    const [pages, outline] = tabs();
+    expect(tabs()).toHaveLength(2);
+    await act(async () => {
+      view.container.querySelector<HTMLElement>('[aria-label="PDF sidebar views"]')?.focus();
+    });
+    await flushViewer();
+    expect(document.activeElement).toBe(pages);
+    expect(pages?.tabIndex).toBe(0);
+    expect(outline?.tabIndex).toBe(-1);
+    expect(pages?.getAttribute("aria-selected")).toBe("true");
+    expect(
+      view.container
+        .querySelector(`[id="${pages?.getAttribute("aria-controls")}"]`)
+        ?.getAttribute("aria-labelledby"),
+    ).toBe(pages?.id);
+
+    pages?.focus();
+    await act(async () => keydown(pages!, "ArrowRight"));
+    await flushViewer();
+    expect(document.activeElement).toBe(outline);
+    expect(outline?.tabIndex).toBe(0);
+    expect(pages?.tabIndex).toBe(-1);
+    expect(outline?.getAttribute("aria-selected")).toBe("true");
+    expect(
+      view.container
+        .querySelector(`[id="${outline?.getAttribute("aria-controls")}"]`)
+        ?.getAttribute("aria-labelledby"),
+    ).toBe(outline?.id);
+    expect(
+      view.container.querySelector('[aria-label="Mock outline"]'),
+    ).toBeTruthy();
+
+    await act(async () => keydown(outline!, "ArrowRight"));
+    await flushViewer();
+    expect(document.activeElement).toBe(pages);
+
+    await act(async () => keydown(pages!, "ArrowLeft"));
+    await flushViewer();
+    expect(document.activeElement).toBe(outline);
+
+    await act(async () => keydown(outline!, "Home"));
+    await flushViewer();
+    expect(document.activeElement).toBe(pages);
+
+    await act(async () => keydown(pages!, "End"));
+    await flushViewer();
+    expect(document.activeElement).toBe(outline);
+
+    await act(async () => view.root.unmount());
+  });
+
+  it("reports the trailing page when the scroll range cannot align it to the top", async () => {
+    const onPageChange = vi.fn();
+    const view = renderViewer({ onPageChange, pageCount: 3 });
+    await act(async () => view.render());
+    await flushViewer();
+
+    const root = view.container.querySelector<HTMLElement>(
+      ".pdf-canvas-viewer__page-scroll",
+    )!;
+    const pages = Array.from(
+      view.container.querySelectorAll<HTMLElement>("[data-pdf-page-number]"),
+    );
+    Object.defineProperties(root, {
+      clientHeight: { configurable: true, value: 500 },
+      scrollHeight: { configurable: true, value: 800 },
+      scrollTop: { configurable: true, value: 300, writable: true },
+    });
+    Object.defineProperty(root, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        bottom: 500,
+        height: 500,
+        left: 0,
+        right: 800,
+        top: 0,
+        width: 800,
+        x: 0,
+        y: 0,
+      }),
+    });
+    const pageRects = [
+      { bottom: 300, top: -400 },
+      { bottom: 900, top: 320 },
+      { bottom: 1_500, top: 920 },
+    ];
+    for (const [index, page] of pages.entries()) {
+      Object.defineProperty(page, "getBoundingClientRect", {
+        configurable: true,
+        value: () => ({
+          ...pageRects[index],
+          height: pageRects[index]!.bottom - pageRects[index]!.top,
+          left: 0,
+          right: 600,
+          width: 600,
+          x: 0,
+          y: pageRects[index]!.top,
+        }),
+      });
+    }
+
+    await act(async () => root.dispatchEvent(new Event("scroll")));
+    expect(onPageChange).toHaveBeenLastCalledWith(2);
+    expect(
+      view.container.querySelector<HTMLInputElement>(
+        '[aria-label="Current page"]',
+      )?.value,
+    ).toBe("2");
+
+    await act(async () => view.root.unmount());
+  });
+
+  it("treats navigation as a transient drawer on narrow viewports", async () => {
+    vi.stubGlobal(
+      "matchMedia",
+      vi.fn(() => ({
+        addEventListener: vi.fn(),
+        matches: true,
+        media: "(max-width: 760px)",
+        onchange: null,
+        removeEventListener: vi.fn(),
+      })),
+    );
+    const compact = renderViewer({ pageCount: 3 });
+    await act(async () => compact.render());
+    await flushViewer();
+
+    expect(
+      compact.container
+        .querySelector(".pdf-canvas-viewer__body")
+        ?.classList.contains("is-sidebar-collapsed"),
+    ).toBe(true);
+    expect(
+      compact.container.querySelector('[aria-label="Fit page width"]'),
+    ).toBeTruthy();
+    expect(
+      compact.container
+        .querySelector('[aria-label="Fit page width"]')
+        ?.classList.contains("pdf-canvas-viewer__mobile-tool-button"),
+    ).toBe(true);
+
+    await act(async () => {
+      compact.container
+        .querySelector<HTMLButtonElement>('[aria-label="Show PDF sidebar"]')
+        ?.click();
+    });
+    await flushViewer();
+    expect(
+      compact.container.querySelector('[aria-label="Dismiss PDF navigation"]'),
+    ).toBeTruthy();
+    expect(document.activeElement?.getAttribute("role")).toBe("tab");
+    expect(document.activeElement?.textContent).toBe("Pages");
+
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          cancelable: true,
+          key: "Tab",
+          shiftKey: true,
+        }),
+      );
+    });
+    expect(document.activeElement?.getAttribute("aria-label")).toBe(
+      "Go to page 3",
+    );
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { cancelable: true, key: "Tab" }),
+      );
+    });
+    expect(document.activeElement?.textContent).toBe("Pages");
+
+    await act(async () => {
+      compact.container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Dismiss PDF navigation"]',
+        )
+        ?.click();
+    });
+    expect(document.activeElement?.getAttribute("aria-label")).toBe(
+      "Show PDF sidebar",
+    );
+    await act(async () => {
+      compact.container
+        .querySelector<HTMLButtonElement>('[aria-label="Show PDF sidebar"]')
+        ?.click();
+    });
+    await flushViewer();
+    await act(async () => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+    });
+    expect(
+      compact.container
+        .querySelector(".pdf-canvas-viewer__body")
+        ?.classList.contains("is-sidebar-collapsed"),
+    ).toBe(true);
+    expect(document.activeElement?.getAttribute("aria-label")).toBe(
+      "Show PDF sidebar",
+    );
+    await act(async () => {
+      compact.container
+        .querySelector<HTMLButtonElement>('[aria-label="Show PDF sidebar"]')
+        ?.click();
+    });
+    await flushViewer();
+    await act(async () => {
+      compact.container
+        .querySelector<HTMLAnchorElement>('[aria-label="Go to page 2"]')
+        ?.click();
+    });
+    await flushViewer();
+    expect(
+      compact.container
+        .querySelector(".pdf-canvas-viewer__body")
+        ?.classList.contains("is-sidebar-collapsed"),
+    ).toBe(true);
+    expect(document.activeElement?.getAttribute("aria-label")).toBe(
+      "PDF pages",
+    );
+    expect(
+      compact.container.querySelector(
+        '[role="separator"][aria-label="Resize PDF navigation sidebar"]',
+      ),
+    ).toBeNull();
+    await act(async () => compact.root.unmount());
+
+    const restored = renderViewer({
+      initialState: { sidebarOpen: true },
+      pageCount: 3,
+    });
+    await act(async () => restored.render());
+    await flushViewer();
+    expect(
+      restored.container
+        .querySelector(".pdf-canvas-viewer__body")
+        ?.classList.contains("is-sidebar-collapsed"),
+    ).toBe(true);
+    await act(async () => restored.root.unmount());
+  });
+
+  it("preserves intrinsic PDF page rotation and composes reader rotation", async () => {
+    const view = renderViewer({
+      pageCount: 3,
+      url: "research-resource://mixed-native-rotation.pdf",
+    });
+    await act(async () => view.render());
+    await flushViewer();
+
+    const renderedPages = () => Array.from(
+      view.container.querySelectorAll<HTMLElement>(".react-pdf__Page"),
+    );
+    expect(renderedPages()[0]?.dataset.renderRotation).toBe("90");
+    expect(renderedPages()[1]?.dataset.renderRotation).toBe("270");
+
+    await act(async () => {
+      view.container
+        .querySelector<HTMLButtonElement>('[aria-label="Rotate clockwise"]')
+        ?.click();
+    });
+    expect(renderedPages()[0]?.dataset.renderRotation).toBe("180");
+    expect(renderedPages()[1]?.dataset.renderRotation).toBe("0");
+
+    await act(async () => view.root.unmount());
+  });
+
+  it("measures the page viewport after the PDF document mounts its children", async () => {
+    const observedNodes: Element[] = [];
+    class ResizeObserverMock {
+      constructor(private readonly callback: ResizeObserverCallback) {}
+
+      disconnect() {}
+
+      observe(node: Element) {
+        observedNodes.push(node);
+        Object.defineProperty(node, "clientWidth", {
+          configurable: true,
+          value: 1280,
+        });
+        this.callback([], this as unknown as ResizeObserver);
+      }
+
+      unobserve() {}
+    }
+    vi.stubGlobal("ResizeObserver", ResizeObserverMock);
+    const view = renderViewer({
+      pageCount: 3,
+      url: "research-resource://deferred.pdf",
+    });
+
+    await act(async () => view.render());
+    await flushViewer();
+
+    const observedPageScrolls = observedNodes.filter((node) =>
+      node.classList.contains("pdf-canvas-viewer__page-scroll"),
+    );
+    expect(observedPageScrolls).toHaveLength(1);
+    expect(
+      view.container
+        .querySelector(".react-pdf__Page")
+        ?.getAttribute("data-render-width"),
+    ).toBe("1216");
+
+    await act(async () => view.root.unmount());
+  });
+
+  it("honors initialPage and exposes programmatic page navigation", async () => {
+    const scrollTo = vi.fn(function (
+      this: HTMLElement,
+      options: ScrollToOptions,
+    ) {
+      this.scrollTop = Number(options.top ?? 0);
+    });
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+      configurable: true,
+      value: scrollTo,
+    });
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollIntoView", {
+      configurable: true,
+      value: scrollIntoView,
+    });
+    const onPageChange = vi.fn();
+    const viewerRef = {
+      current: null,
+    } as React.RefObject<PdfCanvasViewerHandle | null>;
+    const view = renderViewer({
+      initialPage: 2,
+      onPageChange,
+      pageCount: 3,
+    });
+
+    await act(async () => {
+      view.root.render(
+        <PdfCanvasViewer
+          initialPage={2}
+          onPageChange={onPageChange}
+          pageCount={3}
+          ref={viewerRef}
+          title="A paper"
+          url="research-resource://paper.pdf"
+        />,
+      );
+    });
+    await flushViewer();
+
+    expect(
+      view.container
+        .querySelector('[aria-current="page"]')
+        ?.getAttribute("aria-label"),
+    ).toBe("Go to page 2");
+    expect(scrollTo).toHaveBeenCalled();
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    await act(async () => {
+      viewerRef.current?.goToPage(3);
+      await Promise.resolve();
+    });
+    expect(scrollTo).toHaveBeenLastCalledWith({ behavior: "auto", top: 0 });
+    expect(onPageChange).toHaveBeenCalledWith(3);
+
+    const zoomIn = view.container.querySelector<HTMLButtonElement>(
+      '[aria-label="Zoom in"]',
+    );
+    await act(async () => zoomIn?.click());
+    expect(
+      view.container.querySelector('[aria-label="Zoom level"]')?.textContent,
+    ).toBe("110%");
+
+    await act(async () => view.root.unmount());
+  });
+
+  it("keeps an exact return path after an explicit PDF jump", async () => {
+    const scrollTo = vi.fn(function (
+      this: HTMLElement,
+      options: ScrollToOptions,
+    ) {
+      this.scrollTop = Number(options.top ?? 0);
+    });
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+      configurable: true,
+      value: scrollTo,
+    });
+    const onReaderStateChange = vi.fn();
+    const view = renderViewer({
+      initialState: { page: 1, pageOffset: 0.4 },
+      onReaderStateChange,
+      pageCount: 3,
+      url: "research-resource://internal-link.pdf",
+    });
+
+    await act(async () => {
+      view.root.render(
+        <PdfCanvasViewer
+          initialState={{ page: 1, pageOffset: 0.4 }}
+          onReaderStateChange={onReaderStateChange}
+          pageCount={3}
+          title="A paper"
+          url="research-resource://internal-link.pdf"
+        />,
+      );
+    });
+    await flushViewer();
+
+    expect(
+      view.container.querySelector('[aria-label^="Back to page"]'),
+    ).toBeNull();
+    await act(async () =>
+      view.container
+        .querySelector<HTMLButtonElement>(
+          '[aria-label="Internal PDF link to page 3"]',
+        )
+        ?.click(),
+    );
+    const back = view.container.querySelector<HTMLButtonElement>(
+      '[aria-label="Back to page 1"]',
+    );
+    expect(back).not.toBeNull();
+    expect(back?.textContent).toContain("Back · page 1");
+
+    await act(async () => back?.click());
+    expect(
+      view.container.querySelector('[aria-label^="Back to page"]'),
+    ).toBeNull();
+    expect(onReaderStateChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ page: 1, pageOffset: 0.4 }),
+    );
+    expect(document.activeElement).toBe(
+      view.container.querySelector<HTMLElement>(
+        ".pdf-canvas-viewer__page-scroll",
+      ),
+    );
+
+    await act(async () => view.root.unmount());
+  });
+
+  it("does not reinterpret an observed page echo as a new navigation", async () => {
+    const scrollTo = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+      configurable: true,
+      value: scrollTo,
+    });
+    const viewerRef = {
+      current: null,
+    } as React.RefObject<PdfCanvasViewerHandle | null>;
+    const view = renderViewer({ pageCount: 3 });
+    await act(async () => {
+      view.root.render(
+        <PdfCanvasViewer
+          initialPage={1}
+          pageCount={3}
+          ref={viewerRef}
+          title="A paper"
+          url="research-resource://paper.pdf"
+        />,
+      );
+    });
+    await flushViewer();
+
+    await act(async () => viewerRef.current?.goToPage(2));
+    scrollTo.mockClear();
+    await act(async () => {
+      view.root.render(
+        <PdfCanvasViewer
+          initialPage={2}
+          pageCount={3}
+          ref={viewerRef}
+          title="A paper"
+          url="research-resource://paper.pdf"
+        />,
+      );
+    });
+    await flushViewer();
+
+    expect(scrollTo).not.toHaveBeenCalled();
+    expect(
+      view.container
+        .querySelector('[aria-current="page"]')
+        ?.getAttribute("aria-label"),
+    ).toBe("Go to page 2");
+    await act(async () => view.root.unmount());
+  });
+
+  it("keeps all page shells while windowing full pages and thumbnails", async () => {
+    const view = renderViewer({
+      pageCount: 12,
+      url: "research-resource://large.pdf",
+    });
+    await act(async () => view.render());
+    await flushViewer();
+
+    expect(
+      view.container.querySelectorAll(".pdf-canvas-viewer__page-shell"),
+    ).toHaveLength(12);
+    expect(view.container.querySelectorAll(".react-pdf__Page")).toHaveLength(3);
+    expect(
+      view.container.querySelectorAll(".react-pdf__Thumbnail"),
+    ).toHaveLength(5);
+
+    const pageTen = view.container.querySelector<HTMLButtonElement>(
+      '[aria-label="Go to page 10"]',
+    );
+    await act(async () => pageTen?.click());
+    expect(
+      Array.from(
+        view.container.querySelectorAll(".react-pdf__Page__textContent"),
+      ).map((element) => element.textContent?.trim()),
+    ).toEqual([
+      "Selectable page 8",
+      "Selectable page 9",
+      "Selectable page 10",
+      "Selectable page 11",
+      "Selectable page 12",
+    ]);
+
+    await act(async () => view.root.unmount());
+  });
+
+  it("searches PDF.js text with keyboard navigation and reports scanned PDFs", async () => {
+    const scrollTo = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+      configurable: true,
+      value: scrollTo,
+    });
+    Object.defineProperty(Range.prototype, "getClientRects", {
+      configurable: true,
+      value(this: Range) {
+        const top = this.startOffset > 0 ? 300 : 100;
+        return [{
+          bottom: top + 20,
+          height: 20,
+          left: 120,
+          right: 240,
+          top,
+          width: 120,
+          x: 120,
+          y: top,
+        }];
+      },
+    });
+    const view = renderViewer({ pageCount: 3, textLayer: "available" });
+    await act(async () => view.render());
+    await flushViewer();
+
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "f", metaKey: true }),
+      );
+    });
+    const firstPage = view.container.querySelector<HTMLElement>(
+      '[data-pdf-page-number="1"]',
+    )!;
+    Object.defineProperty(firstPage, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        bottom: 800,
+        height: 800,
+        left: 0,
+        right: 600,
+        top: 0,
+        width: 600,
+        x: 0,
+        y: 0,
+      }),
+    });
+    const input = view.container.querySelector<HTMLInputElement>(
+      '[aria-label="Search text"]',
+    )!;
+    await act(async () => setInputValue(input, "alpha"));
+    await flushSearch();
+    await flushSearchHighlight();
+
+    expect(view.container.textContent).toContain("1 / 3");
+    expect(view.container.textContent).toContain("Match 1 of 3");
+    expect(
+      view.container.querySelector<HTMLElement>(
+        ".pdf-canvas-viewer__search-region",
+      )?.style.top,
+    ).toBe("12.5%");
+    const next = view.container.querySelector<HTMLButtonElement>(
+      '[aria-label="Next search result"]',
+    );
+    await act(async () => next?.click());
+    await flushSearchHighlight();
+    expect(
+      view.container.querySelector<HTMLElement>(
+        ".pdf-canvas-viewer__search-region",
+      )?.style.top,
+    ).toBe("37.5%");
+    await act(async () => next?.click());
+    expect(view.container.textContent).toContain("3 / 3");
+    expect(
+      view.container
+        .querySelector('[aria-current="page"]')
+        ?.getAttribute("aria-label"),
+    ).toBe("Go to page 2");
+
+    await act(async () => view.root.unmount());
+
+    const scanned = renderViewer({ pageCount: 3, textLayer: "absent" });
+    await act(async () => scanned.render());
+    await flushViewer();
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { ctrlKey: true, key: "f" }),
+      );
+    });
+    expect(
+      scanned.container.querySelector<HTMLInputElement>(
+        '[aria-label="Search text"]',
+      )?.disabled,
+    ).toBe(true);
+    expect(scanned.container.textContent).toContain("No searchable text layer");
+    await act(async () => scanned.root.unmount());
+  });
+
+  it("cancels an in-flight full-document search when the search surface closes", async () => {
+    const view = renderViewer({
+      pageCount: 3,
+      textLayer: "available",
+      url: "research-resource://deferred-search.pdf",
+    });
+    await act(async () => view.render());
+    await flushViewer();
+    await act(async () => {
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "f", metaKey: true }),
+      );
+    });
+    const input = view.container.querySelector<HTMLInputElement>(
+      '[aria-label="Search text"]',
+    )!;
+    await act(async () => setInputValue(input, "alpha"));
+    await act(async () => {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 160));
+    });
+    expect(pdfMockState.resolveDeferredSearch).toBeTypeOf("function");
+
+    await act(async () => {
+      view.container
+        .querySelector<HTMLButtonElement>('[aria-label="Close PDF search"]')
+        ?.click();
+      pdfMockState.resolveDeferredSearch?.({
+        items: [{ str: "alpha beta alpha" }],
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(
+      view.container.querySelector(".pdf-canvas-viewer__search-page-marker"),
+    ).toBeNull();
+    expect(
+      view.container.querySelector(".pdf-canvas-viewer__search-region"),
+    ).toBeNull();
+    await act(async () => view.root.unmount());
+  });
+
+  it("restores and reports full reader state including intra-page offset", async () => {
+    const onReaderStateChange = vi.fn();
+    const view = renderViewer({
+      initialState: {
+        fitWidth: false,
+        page: 1,
+        pageOffset: 0.25,
+        rotation: 0,
+        sidebarOpen: false,
+        sidebarView: "outline",
+        zoom: 1.4,
+      },
+      onReaderStateChange,
+      pageCount: 3,
+    });
+    await act(async () => view.render());
+    await flushViewer();
+
+    expect(
+      view.container
+        .querySelector(".pdf-canvas-viewer__body")
+        ?.classList.contains("is-sidebar-collapsed"),
+    ).toBe(true);
+    expect(
+      view.container.querySelector('[aria-label="Zoom level"]')?.textContent,
+    ).toBe("140%");
+
+    const root = view.container.querySelector<HTMLElement>(
+      ".pdf-canvas-viewer__page-scroll",
+    )!;
+    const pages = Array.from(
+      view.container.querySelectorAll<HTMLElement>("[data-pdf-page-number]"),
+    );
+    Object.defineProperty(root, "clientHeight", {
+      configurable: true,
+      value: 500,
+    });
+    Object.defineProperty(root, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        bottom: 500,
+        height: 500,
+        left: 0,
+        right: 800,
+        top: 0,
+        width: 800,
+        x: 0,
+        y: 0,
+      }),
+    });
+    Object.defineProperty(pages[0], "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        bottom: 424,
+        height: 800,
+        left: 0,
+        right: 600,
+        top: -376,
+        width: 600,
+        x: 0,
+        y: -376,
+      }),
+    });
+    Object.defineProperty(pages[1], "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        bottom: 1246,
+        height: 800,
+        left: 0,
+        right: 600,
+        top: 446,
+        width: 600,
+        x: 0,
+        y: 446,
+      }),
+    });
+    await act(async () => root.dispatchEvent(new Event("scroll")));
+
+    expect(onReaderStateChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        fitWidth: false,
+        page: 1,
+        pageOffset: 0.5,
+        sidebarOpen: false,
+        sidebarView: "outline",
+        zoom: 1.4,
+      }),
+    );
+    await act(async () => view.root.unmount());
+  });
+
+  it("resizes the desktop navigation sidebar and reports the exact width", async () => {
+    const onReaderStateChange = vi.fn();
+    const view = renderViewer({ onReaderStateChange, pageCount: 3 });
+    await act(async () => view.render());
+    await flushViewer();
+
+    const separator = view.container.querySelector<HTMLElement>(
+      '[role="separator"][aria-label="Resize PDF navigation sidebar"]',
+    );
+    expect(separator).not.toBeNull();
+    expect(separator?.getAttribute("aria-valuenow")).toBe("216");
+
+    await act(async () => keydown(separator!, "End"));
+    expect(separator?.getAttribute("aria-valuenow")).toBe("400");
+    expect(onReaderStateChange).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sidebarWidth: 400 }),
+    );
+
+    await act(async () => keydown(separator!, "Home"));
+    expect(separator?.getAttribute("aria-valuenow")).toBe("180");
+
+    await act(async () => {
+      separator?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+    });
+    expect(separator?.getAttribute("aria-valuenow")).toBe("216");
+    await act(async () => view.root.unmount());
+  });
+
+  it("reserves readable PDF canvas width inside a narrow desktop pane", async () => {
+    vi.stubGlobal("ResizeObserver", undefined);
+    const view = renderViewer({ pageCount: 3 });
+    await act(async () => view.render());
+    await flushViewer();
+
+    const body = view.container.querySelector<HTMLElement>(
+      ".pdf-canvas-viewer__body",
+    )!;
+    Object.defineProperty(body, "clientWidth", {
+      configurable: true,
+      value: 808,
+    });
+    await act(async () => window.dispatchEvent(new Event("resize")));
+
+    const separator = view.container.querySelector<HTMLElement>(
+      '[role="separator"][aria-label="Resize PDF navigation sidebar"]',
+    )!;
+    expect(separator.getAttribute("aria-valuemax")).toBe("200");
+    expect(separator.getAttribute("aria-valuenow")).toBe("200");
+    expect(body.style.getPropertyValue("--pdf-reader-sidebar-width")).toBe(
+      "200px",
+    );
+    await act(async () => view.root.unmount());
+  });
+
+  it("uses an accessible overlay drawer when the reader pane is too narrow", async () => {
+    vi.stubGlobal("ResizeObserver", undefined);
+    const view = renderViewer({ pageCount: 3 });
+    await act(async () => view.render());
+    await flushViewer();
+
+    const body = view.container.querySelector<HTMLElement>(
+      ".pdf-canvas-viewer__body",
+    )!;
+    Object.defineProperty(body, "clientWidth", {
+      configurable: true,
+      value: 482,
+    });
+    await act(async () => window.dispatchEvent(new Event("resize")));
+
+    expect(body.classList.contains("is-sidebar-overlay")).toBe(true);
+    expect(body.classList.contains("is-sidebar-collapsed")).toBe(true);
+    expect(
+      view.container.querySelector(
+        '[role="separator"][aria-label="Resize PDF navigation sidebar"]',
+      ),
+    ).toBeNull();
+
+    await act(async () => {
+      view.container
+        .querySelector<HTMLButtonElement>('[aria-label="Show PDF sidebar"]')
+        ?.click();
+    });
+    await flushViewer();
+    expect(
+      view.container
+        .querySelector('[aria-label="PDF navigation sidebar"]')
+        ?.getAttribute("role"),
+    ).toBe("dialog");
+    expect(
+      view.container.querySelector('[aria-label="Dismiss PDF navigation"]'),
+    ).toBeTruthy();
+    await act(async () => view.root.unmount());
+  });
+
+  it("returns focus to the toggle when a layout transition hides navigation", async () => {
+    vi.stubGlobal("ResizeObserver", undefined);
+    const view = renderViewer({ pageCount: 3 });
+    await act(async () => view.render());
+    await flushViewer();
+
+    let bodyWidth = 808;
+    const body = view.container.querySelector<HTMLElement>(
+      ".pdf-canvas-viewer__body",
+    )!;
+    Object.defineProperty(body, "clientWidth", {
+      configurable: true,
+      get: () => bodyWidth,
+    });
+    await act(async () => window.dispatchEvent(new Event("resize")));
+
+    view.container.querySelector<HTMLButtonElement>('[role="tab"]')?.focus();
+    bodyWidth = 780;
+    await act(async () => window.dispatchEvent(new Event("resize")));
+    expect(document.activeElement?.getAttribute("aria-label")).toBe(
+      "Show PDF sidebar",
+    );
+
+    bodyWidth = 808;
+    await act(async () => window.dispatchEvent(new Event("resize")));
+    await act(async () => {
+      view.container
+        .querySelector<HTMLButtonElement>('[aria-label="Hide PDF sidebar"]')
+        ?.click();
+    });
+    bodyWidth = 780;
+    await act(async () => window.dispatchEvent(new Event("resize")));
+    await act(async () => {
+      view.container
+        .querySelector<HTMLButtonElement>('[aria-label="Show PDF sidebar"]')
+        ?.click();
+    });
+    await flushViewer();
+    expect(document.activeElement?.getAttribute("role")).toBe("tab");
+
+    bodyWidth = 808;
+    await act(async () => window.dispatchEvent(new Event("resize")));
+    expect(document.activeElement?.getAttribute("aria-label")).toBe(
+      "Show PDF sidebar",
+    );
+    await act(async () => view.root.unmount());
+  });
+
+  it("returns one-page normalized text selections and blocks cross-page selections", async () => {
+    const view = renderViewer({ pageCount: 3, textLayer: "available" });
+    const viewerRef = {
+      current: null,
+    } as React.RefObject<PdfCanvasViewerHandle | null>;
+    await act(async () => {
+      view.root.render(
+        <PdfCanvasViewer
+          pageCount={3}
+          ref={viewerRef}
+          title="A paper"
+          url="research-resource://paper.pdf"
+        />,
+      );
+    });
+    await flushViewer();
+
+    const pages = Array.from(
+      view.container.querySelectorAll<HTMLElement>("[data-pdf-page-number]"),
+    );
+    const firstText = pages[0]!.querySelector(
+      ".react-pdf__Page__textContent",
+    )!.firstChild!;
+    const range = document.createRange();
+    range.setStart(firstText, 0);
+    range.setEnd(firstText, firstText.textContent!.length);
+    Object.defineProperty(pages[0], "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        left: 100,
+        top: 50,
+        right: 500,
+        bottom: 850,
+        width: 400,
+        height: 800,
+      }),
+    });
+    Object.defineProperty(range, "getBoundingClientRect", {
+      configurable: true,
+      value: () => ({
+        left: 140,
+        top: 130,
+        right: 340,
+        bottom: 170,
+        width: 200,
+        height: 40,
+      }),
+    });
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    expect(viewerRef.current?.readSelection()).toEqual({
+      height: 0.05,
+      kind: "selection",
+      pageNumber: 1,
+      rects: [{
+        height: 0.05,
+        width: 0.5,
+        x: 0.1,
+        y: 0.1,
+      }],
+      text: "alpha beta alpha",
+      width: 0.5,
+      x: 0.1,
+      y: 0.1,
+    });
+
+    const secondText = pages[1]!.querySelector(
+      ".react-pdf__Page__textContent",
+    )!.firstChild!;
+    const crossPageRange = document.createRange();
+    crossPageRange.setStart(firstText, 0);
+    crossPageRange.setEnd(secondText, secondText.textContent!.length);
+    selection.removeAllRanges();
+    selection.addRange(crossPageRange);
+    expect(viewerRef.current?.readSelection()).toEqual({
+      kind: "blocked",
+      reason: "Select text from one page at a time to create an excerpt.",
+    });
+    selection.removeAllRanges();
+
+    await act(async () => view.root.unmount());
+  });
+});

@@ -10,12 +10,20 @@ export interface MaterialSummary {
   fetchedAt: string;
   readingMinutes: number;
   origin: "web" | "feed" | "file";
+  mediaType: string;
   quality: ContentNormalizationQuality;
+}
+
+/** Present when the material is a PDF; the bytes live next to the record and are read with getMaterialBytes. */
+export interface PdfInfo {
+  pages: number;
+  byteLength: number;
+  textLayer: "available" | "absent";
 }
 
 export interface MaterialRecord extends MaterialSummary {
   finalUrl: string;
-  mediaType: string;
+  pdf?: PdfInfo;
   lang?: string;
   dir?: "ltr" | "rtl";
   /** Reader representation: schema id and JSON payload (v2 preferred, v1 otherwise). */
@@ -47,5 +55,7 @@ export interface ReadApi {
   openUrl: (url: string) => Promise<OpenUrlResult>;
   openFile: (input: OpenFileInput) => Promise<OpenUrlResult>;
   getMaterial: (id: string) => Promise<MaterialRecord | undefined>;
+  /** Raw bytes of a stored PDF; undefined when the material has none. */
+  getMaterialBytes: (id: string) => Promise<Uint8Array | undefined>;
   listMaterials: () => Promise<MaterialSummary[]>;
 }
