@@ -67,6 +67,15 @@ import {
   type ScrollPosition,
 } from "./pdf-zoom-gesture";
 import {
+  NO_ZOOM_SNAPSHOTS,
+  PdfZoomSnapshotOverlay,
+  releaseSnapshotBitmap,
+  snapshotsForZoomCommit,
+  snapshotsWithinWindow,
+  withoutRenderedSnapshot,
+  type PdfZoomSnapshots,
+} from "./pdf-zoom-snapshot";
+import {
   MAX_PDF_ZOOM,
   MIN_PDF_ZOOM,
   normalizedReaderRotation,
@@ -157,6 +166,13 @@ function clampPage(page: number, pageCount: number) {
 
 function clampZoom(value: number) {
   return Math.min(MAX_PDF_ZOOM, Math.max(MIN_PDF_ZOOM, Number(value.toFixed(2))));
+}
+
+/** The CSS width every page is laid out at for this container and zoom. */
+function pageWidthFor(containerWidth: number, fitWidth: boolean, zoom: number) {
+  const available = containerWidth || DEFAULT_PAGE_WIDTH;
+  const fitWidthValue = Math.max(1, Math.floor(available));
+  return Math.round(fitWidth ? fitWidthValue : fitWidthValue * zoom);
 }
 
 function readerStateFromProps(
@@ -331,6 +347,7 @@ export const PdfCanvasViewer = forwardRef<
   });
   const zoomRef = useRef(startingState.zoom);
   const fitWidthRef = useRef(startingState.fitWidth);
+  const containerWidthRef = useRef(0);
   // A pinch only CSS-scales the pages container; `pinchGesture` is the rendered
   // snapshot of `pinchGestureRef`, updated at most once per animation frame.
   const [pinchGesture, setPinchGesture] = useState<PinchGesture>();
@@ -340,6 +357,11 @@ export const PdfCanvasViewer = forwardRef<
   const pagesRef = useRef<HTMLDivElement | null>(null);
   // Scroll offsets to apply once the pages have re-laid out at a committed zoom.
   const pendingScrollRef = useRef<ScrollPosition | undefined>(undefined);
+  // Copies of the page bitmaps taken right before a zoom commit; each covers
+  // its page until pdf.js has rendered that page at the committed zoom.
+  const [zoomSnapshots, setZoomSnapshots] =
+    useState<PdfZoomSnapshots>(NO_ZOOM_SNAPSHOTS);
+  const shownZoomSnapshotsRef = useRef<PdfZoomSnapshots>(NO_ZOOM_SNAPSHOTS);
   const onOutlineChangeRef = useRef(onOutlineChange);
 
   const knownPageCount = loadedPageCount || Math.max(0, pageCountHint);
@@ -357,6 +379,16 @@ export const PdfCanvasViewer = forwardRef<
   const textLayerEnabled = textLayerIsEnabled(textLayer);
   const notice = textLayerNotice(textLayer);
   const activeSearchResult = searchResults[searchResultIndex];
+  const activeSearchPage = activeSearchResult?.page;
+
+  // Full pages render in a window around the current page (plus the active
+  // search hit); the other shells keep their size and show a placeholder.
+  const pageIsRendered = useCallback(
+    (page: number) =>
+      Math.abs(page - currentPage) <= PAGE_RENDER_RADIUS ||
+      activeSearchPage === page,
+    [activeSearchPage, currentPage],
+  );
 
   const displayRotationForPage = useCallback(
     (page: number) =>
@@ -626,6 +658,7 @@ export const PdfCanvasViewer = forwardRef<
     searchTextCacheRef.current.clear();
     setPageAspectRatios({});
     setPageNativeRotations({});
+    setZoomSnapshots(NO_ZOOM_SNAPSHOTS);
     pageRefs.current.clear();
     pendingNavigationRef.current = {
       page: nextState.page,
@@ -743,7 +776,9 @@ export const PdfCanvasViewer = forwardRef<
         Number.isFinite(paddingLeft) && Number.isFinite(paddingRight)
           ? paddingLeft + paddingRight
           : 64;
-      setContainerWidth(Math.max(1, node.clientWidth - horizontalPadding));
+      const nextWidth = Math.max(1, node.clientWidth - horizontalPadding);
+      containerWidthRef.current = nextWidth;
+      setContainerWidth(nextWidth);
     };
     measure();
     if (typeof ResizeObserver !== "undefined") {
@@ -820,11 +855,10 @@ export const PdfCanvasViewer = forwardRef<
     zoom,
   ]);
 
-  const pageWidth = useMemo(() => {
-    const available = containerWidth || DEFAULT_PAGE_WIDTH;
-    const fitWidthValue = Math.max(1, Math.floor(available));
-    return Math.round(fitWidth ? fitWidthValue : fitWidthValue * zoom);
-  }, [containerWidth, fitWidth, zoom]);
+  const pageWidth = useMemo(
+    () => pageWidthFor(containerWidth, fitWidth, zoom),
+    [containerWidth, fitWidth, zoom],
+  );
 
   const assignPageRef = useCallback(
     (page: number, element: HTMLElement | null) => {
@@ -908,12 +942,68 @@ export const PdfCanvasViewer = forwardRef<
           pages?.offsetTop ?? 0,
         );
       }
+      // The snapshots are taken now, synchronously, and committed in the same
+      // render as the zoom: the overlays are in the DOM before the browser
+      // paints the new layout, so the reader never sees the hidden canvases
+      // react-pdf mounts while pdf.js redraws each page. A commit that leaves
+      // the page width as it is re-renders nothing, so it needs no bridge.
+      const containerWidth = containerWidthRef.current;
+      const currentWidth = pageWidthFor(
+        containerWidth,
+        fitWidthRef.current,
+        previous,
+      );
+      const nextWidth = pageWidthFor(containerWidth, nextFitWidth, next);
+      if (nextWidth !== currentWidth) {
+        setZoomSnapshots(
+          snapshotsForZoomCommit(
+            pageRefs.current,
+            shownZoomSnapshotsRef.current,
+            currentWidth,
+            nextWidth,
+          ),
+        );
+      }
       zoomRef.current = next;
       fitWidthRef.current = nextFitWidth;
       pinchGestureRef.current = undefined;
       setPinchGesture(undefined);
       setFitWidth(nextFitWidth);
       setZoom(next);
+    },
+    [],
+  );
+
+  const releaseZoomSnapshot = useCallback(
+    (page: number, renderedWidth: number) => {
+      setZoomSnapshots((current) =>
+        withoutRenderedSnapshot(current, page, renderedWidth),
+      );
+    },
+    [],
+  );
+
+  // A page scrolled out of the render window unmounts its <Page> and can no
+  // longer report a render, so its snapshot is dropped with it.
+  useEffect(() => {
+    setZoomSnapshots((current) => snapshotsWithinWindow(current, pageIsRendered));
+  }, [pageIsRendered]);
+
+  // Bitmaps that left the map are released as soon as they are off screen;
+  // the ref lets the next commit reuse a snapshot for a page still rendering.
+  useEffect(() => {
+    const shown = shownZoomSnapshotsRef.current;
+    shownZoomSnapshotsRef.current = zoomSnapshots;
+    for (const [page, snapshot] of shown) {
+      if (zoomSnapshots.get(page) !== snapshot) releaseSnapshotBitmap(snapshot);
+    }
+  }, [zoomSnapshots]);
+
+  useEffect(
+    () => () => {
+      for (const snapshot of shownZoomSnapshotsRef.current.values())
+        releaseSnapshotBitmap(snapshot);
+      shownZoomSnapshotsRef.current = NO_ZOOM_SNAPSHOTS;
     },
     [],
   );
@@ -1599,9 +1689,10 @@ export const PdfCanvasViewer = forwardRef<
               {renderedPageCount ? (
                 Array.from({ length: renderedPageCount }, (_, index) => {
                   const page = index + 1;
-                  const shouldRenderPage =
-                    Math.abs(page - currentPage) <= PAGE_RENDER_RADIUS ||
-                    activeSearchResult?.page === page;
+                  const shouldRenderPage = pageIsRendered(page);
+                  const zoomSnapshot = shouldRenderPage
+                    ? zoomSnapshots.get(page)
+                    : undefined;
                   const baseAspectRatio =
                     pageAspectRatios[page] ?? DEFAULT_PAGE_ASPECT_RATIO;
                   const pageAspectRatio =
@@ -1649,6 +1740,15 @@ export const PdfCanvasViewer = forwardRef<
                                 : { ...previous, [page]: nativeRotation },
                             );
                           }}
+                          // react-pdf calls these from the render that mounted
+                          // the canvas, so this `pageWidth` identifies which
+                          // commit the render belongs to.
+                          onRenderError={() =>
+                            releaseZoomSnapshot(page, pageWidth)
+                          }
+                          onRenderSuccess={() =>
+                            releaseZoomSnapshot(page, pageWidth)
+                          }
                           pageNumber={page}
                           renderAnnotationLayer
                           renderTextLayer={textLayerEnabled}
@@ -1661,6 +1761,9 @@ export const PdfCanvasViewer = forwardRef<
                           Page {page}
                         </span>
                       )}
+                      {zoomSnapshot ? (
+                        <PdfZoomSnapshotOverlay snapshot={zoomSnapshot} />
+                      ) : null}
                       {searchRegions.length ? (
                         <div
                           aria-hidden="true"

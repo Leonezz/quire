@@ -540,6 +540,22 @@
   max-width: none;
 }
 
+/* The previous render, stretched to the new page size, shown while pdf.js
+   redraws the page after a zoom commit. Above the (hidden) new canvas, text
+   and annotation layers; below search highlights. */
+.pdf-canvas-viewer__zoom-snapshot {
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+  z-index: 4;
+}
+
+.pdf-canvas-viewer__zoom-snapshot > canvas {
+  display: block;
+  height: 100%;
+  width: 100%;
+}
+
 /* ---- loading / error states */
 
 .pdf-canvas-viewer__state {

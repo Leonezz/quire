@@ -1,10 +1,14 @@
 import { act, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const pdfMockState = vi.hoisted(() => ({
   deferredPageLoads: new Map<number, () => void>(),
   deferPageLoads: false,
+  // Like react-pdf, the mocked page reports a render per width/rotation; a
+  // deferred report stands in for pdf.js still drawing the page.
+  deferredPageRenders: new Map<number, () => void>(),
+  deferPageRenders: false,
   nativeRotations: {} as Record<number, number>,
   resolveDeferredSearch: undefined as
     | ((value: { items: readonly { str: string }[] }) => void)
@@ -120,6 +124,7 @@ vi.mock("react-pdf", () => ({
   },
   Page: ({
     onLoadSuccess,
+    onRenderSuccess,
     pageNumber,
     rotate,
     width,
@@ -128,6 +133,7 @@ vi.mock("react-pdf", () => ({
       rotate: number;
       getViewport: () => { height: number; width: number };
     }) => void;
+    onRenderSuccess?: () => void;
     pageNumber: number;
     rotate?: number;
     width?: number;
@@ -149,8 +155,22 @@ vi.mock("react-pdf", () => ({
       }
       reportLoaded();
     }, [nativeRotation, onLoadSuccess]);
+    // The render report uses the callback from the render that started it,
+    // exactly as react-pdf's canvas effect does, so it is left out of the deps.
+    useEffect(() => {
+      const reportRendered = () => onRenderSuccess?.();
+      if (pdfMockState.deferPageRenders) {
+        pdfMockState.deferredPageRenders.set(pageNumber, reportRendered);
+        return () => {
+          if (pdfMockState.deferredPageRenders.get(pageNumber) === reportRendered)
+            pdfMockState.deferredPageRenders.delete(pageNumber);
+        };
+      }
+      reportRendered();
+    }, [pageNumber, rotate, width]);
     return (
       <div className="react-pdf__Page" data-render-rotation={rotate} data-render-width={width}>
+        <canvas className="react-pdf__Page__canvas" height={3} width={2} />
         <div className="react-pdf__Page__textContent">
           {pageNumber === 1
             ? "alpha beta alpha"
@@ -262,6 +282,27 @@ async function flushAnimationFrame() {
   });
 }
 
+// One ctrl+wheel notch (≈165%), then the settle delay that commits the zoom.
+async function pinchAndCommit(region: HTMLElement) {
+  useFakeGestureTimers();
+  await act(async () => {
+    region.dispatchEvent(
+      new WheelEvent("wheel", {
+        bubbles: true,
+        cancelable: true,
+        ctrlKey: true,
+        deltaY: -50,
+      }),
+    );
+  });
+  await act(async () => {
+    vi.advanceTimersByTime(16);
+  });
+  await act(async () => {
+    vi.advanceTimersByTime(PINCH_COMMIT_DELAY_MS + 10);
+  });
+}
+
 function isThumbnailGroup(element: Element | null) {
   return Boolean(
     element?.classList.contains("pdf-canvas-viewer__sidebar-scroll"),
@@ -274,10 +315,19 @@ function keydown(target: EventTarget, key: string, init: KeyboardEventInit = {})
   );
 }
 
+// jsdom has no canvas 2D context; the snapshot copy only needs drawImage.
+beforeEach(() => {
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
+    () => ({ drawImage() {} }) as unknown as CanvasRenderingContext2D,
+  );
+});
+
 afterEach(() => {
   vi.useRealTimers();
   pdfMockState.deferredPageLoads.clear();
   pdfMockState.deferPageLoads = false;
+  pdfMockState.deferredPageRenders.clear();
+  pdfMockState.deferPageRenders = false;
   pdfMockState.nativeRotations = {};
   pdfMockState.resolveDeferredSearch?.({ items: [] });
   pdfMockState.resolveDeferredSearch = undefined;
@@ -507,6 +557,87 @@ describe("PdfCanvasViewer", () => {
     expect(root.scrollTop).toBeCloseTo(
       (topBeforeKeyboard + 250) * (1.75 / 1.65) - 250,
     );
+
+    await act(async () => view.root.unmount());
+  });
+
+  it("covers each rendered page with its previous bitmap until it re-renders at the committed zoom", async () => {
+    // Twelve pages, three of them rendered: the overlays must follow the
+    // rendered window, not the shells.
+    pdfMockState.deferPageRenders = true;
+    const view = renderViewer({
+      pageCount: 12,
+      url: "research-resource://large.pdf",
+    });
+    await act(async () => view.render());
+    await flushViewer();
+
+    const overlays = () =>
+      view.container.querySelectorAll(".pdf-canvas-viewer__zoom-snapshot");
+    const overlayBitmap = (page: number) =>
+      view.container.querySelector(
+        `[data-pdf-page-number="${page}"] .pdf-canvas-viewer__zoom-snapshot > canvas`,
+      );
+    const renderedWidth = () =>
+      view.container
+        .querySelector(".react-pdf__Page")
+        ?.getAttribute("data-render-width");
+    expect(view.container.querySelectorAll(".react-pdf__Page")).toHaveLength(3);
+    expect(overlays()).toHaveLength(0);
+    // A render report that belongs to the zoom before the commit.
+    const staleReport = pdfMockState.deferredPageRenders.get(1)!;
+    const widthBeforePinch = renderedWidth();
+
+    const region = view.container.querySelector<HTMLElement>(
+      '[role="region"][aria-label="PDF pages"]',
+    )!;
+    await pinchAndCommit(region);
+    // The pages re-lay out at the new width and, in the same commit, every
+    // rendered page is already covered by a copy of its previous bitmap.
+    expect(renderedWidth()).not.toBe(widthBeforePinch);
+    expect(overlays()).toHaveLength(3);
+    expect(overlayBitmap(1)).toBeInstanceOf(HTMLCanvasElement);
+    expect(overlayBitmap(4)).toBeNull();
+
+    // A late report from the previous zoom does not uncover the page.
+    await act(async () => staleReport());
+    expect(overlays()).toHaveLength(3);
+
+    await act(async () => pdfMockState.deferredPageRenders.get(1)?.());
+    expect(overlayBitmap(1)).toBeNull();
+    expect(overlays()).toHaveLength(2);
+    await act(async () => {
+      for (const report of pdfMockState.deferredPageRenders.values()) report();
+    });
+    expect(overlays()).toHaveLength(0);
+
+    await act(async () => view.root.unmount());
+  });
+
+  it("re-renders without a snapshot when no canvas 2D context is available", async () => {
+    // jsdom's own behaviour: the copy target cannot provide a context.
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
+      () => null,
+    );
+    pdfMockState.deferPageRenders = true;
+    const view = renderViewer({ pageCount: 3 });
+    await act(async () => view.render());
+    await flushViewer();
+
+    const renderedWidth = () =>
+      view.container
+        .querySelector(".react-pdf__Page")
+        ?.getAttribute("data-render-width");
+    const widthBeforePinch = renderedWidth();
+    await pinchAndCommit(
+      view.container.querySelector<HTMLElement>(
+        '[role="region"][aria-label="PDF pages"]',
+      )!,
+    );
+    expect(renderedWidth()).not.toBe(widthBeforePinch);
+    expect(
+      view.container.querySelectorAll(".pdf-canvas-viewer__zoom-snapshot"),
+    ).toHaveLength(0);
 
     await act(async () => view.root.unmount());
   });
