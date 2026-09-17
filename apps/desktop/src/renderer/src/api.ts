@@ -1,4 +1,4 @@
-import type { MaterialRecord, MaterialSummary, OpenUrlResult, ReadApi } from "../../shared/contracts";
+import type { Annotation, MaterialRecord, MaterialSummary, OpenUrlResult, ReadApi } from "../../shared/contracts";
 import sample from "./dev/sample-material.json";
 import samplePdf from "./dev/sample-pdf.json";
 
@@ -32,6 +32,14 @@ async function corpusMaterial(id: string): Promise<MaterialRecord | undefined> {
   return (await response.json()) as MaterialRecord;
 }
 
+function previewAnnotations(materialId: string): Annotation[] {
+  try { return JSON.parse(localStorage.getItem(`read:preview-annotations:${materialId}`) ?? "[]") as Annotation[]; }
+  catch (error) { throw new Error(`Preview annotations unreadable: ${(error as Error).message}`); }
+}
+function writePreviewAnnotations(materialId: string, annotations: Annotation[]) {
+  localStorage.setItem(`read:preview-annotations:${materialId}`, JSON.stringify(annotations));
+}
+
 const browserPreview: ReadApi = {
   version: "preview",
   platform: "browser",
@@ -42,6 +50,17 @@ const browserPreview: ReadApi = {
   openUrl: async () => unavailable,
   openFile: async () => unavailable,
   getMaterial: async (id) => samples.find((material) => material.id === id) ?? (await corpusMaterial(id)),
+  // Preview annotations live in localStorage so the reading flow can be exercised without the engine.
+  listAnnotations: async (materialId) => previewAnnotations(materialId),
+  saveAnnotation: async (annotation) => {
+    const now = new Date().toISOString();
+    const existing = previewAnnotations(annotation.materialId);
+    const previous = existing.find((item) => item.id === annotation.id);
+    const saved = { ...annotation, createdAt: previous?.createdAt ?? now, updatedAt: now };
+    writePreviewAnnotations(annotation.materialId, previous ? existing.map((item) => (item.id === saved.id ? saved : item)) : [...existing, saved]);
+    return saved;
+  },
+  deleteAnnotation: async (materialId, id) => { writePreviewAnnotations(materialId, previewAnnotations(materialId).filter((item) => item.id !== id)); },
   // No engine in the preview: images stay placeholders (the page CSP blocks remote hosts anyway).
   resolveImage: async () => undefined,
   getMaterialBytes: async (id) => {

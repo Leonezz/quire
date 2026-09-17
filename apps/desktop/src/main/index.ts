@@ -3,10 +3,12 @@ import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { MaterialStore } from "./engine/materials";
 import { ImageCache } from "./engine/images";
+import { AnnotationStore } from "./engine/annotations";
 import { MAX_BYTES } from "./engine/fetch";
 
 const store = new MaterialStore(app.getPath("userData"));
 const images = new ImageCache(app.getPath("userData"));
+const annotations = new AnnotationStore(app.getPath("userData"));
 
 function boundedString(value: unknown, max: number, code: string): string {
   if (typeof value !== "string" || value.length === 0 || value.length > max) throw new Error(code);
@@ -41,6 +43,20 @@ async function importCorpus() {
   return result;
 }
 ipcMain.handle("material:importCorpus", () => importCorpus());
+ipcMain.handle("annotation:list", (_event, materialId: unknown) => annotations.list(boundedString(materialId, 64, "IPC_INVALID_ID")));
+ipcMain.handle("annotation:save", (_event, annotation: unknown) => {
+  const value = annotation as Record<string, unknown>;
+  if (!value || typeof value !== "object") throw new Error("IPC_INVALID_ANNOTATION");
+  const kind = value.kind; const color = value.color;
+  if (kind !== "highlight" && kind !== "underline" && kind !== "comment") throw new Error("IPC_INVALID_ANNOTATION");
+  if (color !== "#ffd400" && color !== "#5fb236" && color !== "#2ea8e5" && color !== "#e56eee") throw new Error("IPC_INVALID_ANNOTATION");
+  return annotations.save({
+    id: boundedString(value.id, 64, "IPC_INVALID_ID"), materialId: boundedString(value.materialId, 64, "IPC_INVALID_ID"),
+    locator: boundedString(value.locator, 20_000, "IPC_INVALID_ANNOTATION"), quote: typeof value.quote === "string" ? value.quote.slice(0, 20_000) : "",
+    ...(typeof value.note === "string" ? { note: value.note.slice(0, 20_000) } : {}), kind, color, createdAt: "", updatedAt: "",
+  });
+});
+ipcMain.handle("annotation:delete", (_event, materialId: unknown, id: unknown) => annotations.delete(boundedString(materialId, 64, "IPC_INVALID_ID"), boundedString(id, 64, "IPC_INVALID_ID")));
 ipcMain.handle("image:resolve", (_event, url: unknown) => images.resolve(boundedString(url, 4096, "IPC_INVALID_URL")));
 ipcMain.handle("material:bytes", (_event, id: unknown) => store.bytes(boundedString(id, 64, "IPC_INVALID_ID")));
 ipcMain.handle("material:list", () => store.list());

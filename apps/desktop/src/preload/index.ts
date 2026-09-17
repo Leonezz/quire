@@ -17,6 +17,9 @@ const api: ReadApi = {
   getMaterial: (id) => ipcRenderer.invoke("material:get", id),
   getMaterialBytes: (id) => ipcRenderer.invoke("material:bytes", id),
   resolveImage: (url) => ipcRenderer.invoke("image:resolve", url),
+  listAnnotations: (materialId) => ipcRenderer.invoke("annotation:list", materialId),
+  saveAnnotation: (annotation) => ipcRenderer.invoke("annotation:save", annotation),
+  deleteAnnotation: (materialId, id) => ipcRenderer.invoke("annotation:delete", materialId, id),
   listMaterials: () => ipcRenderer.invoke("material:list"),
 };
 contextBridge.exposeInMainWorld("read", api);

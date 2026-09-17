@@ -1,7 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronLeft, Highlighter, List, Sparkles } from "lucide-react";
-import { AskButton, Inspector, InspectorPanel, InspectorSection, InspectorTab, InspectorTabs, Kbd, TocRail, Toolbar, ToolbarButton, ToolbarGroup, ToolbarTitle, type Key } from "@read/ui";
-import { ReaderDocumentSurface, useDocumentReadingPosition } from "@read/reader";
+import { ChevronLeft, Copy, Highlighter, List, Sparkles, Trash2 } from "lucide-react";
+import { AskButton, Button, Inspector, InspectorPanel, InspectorSection, InspectorTab, InspectorTabs, Kbd, TextField, TocRail, Toolbar, ToolbarButton, ToolbarGroup, ToolbarTitle, type Key } from "@read/ui";
+import { ReaderDocumentSurface, installTextAnnotationHighlights, resolveTextQuoteRange, textAnnotationHighlightStyles, useDocumentReadingPosition } from "@read/reader";
+import { ANNOTATION_COLORS, annotationsMarkdown, citationFor, useAnnotations } from "./annotations";
+import { SelectionToolbar, type SelectionCapture } from "./SelectionToolbar";
+import type { Annotation } from "../../shared/contracts";
 import { FindBar } from "./FindBar";
 import { ReadingSettings } from "./ReadingSettings";
 import { applyTheme, loadPrefs, prefsStyle, savePrefs, type ReadingPrefs } from "./readingPrefs";
@@ -56,12 +59,70 @@ export function ReaderView({ material, onBack, onOpenLink }: { material: Materia
   const [prefs, setPrefs] = useState<ReadingPrefs>(loadPrefs);
   const [findOpen, setFindOpen] = useState(false);
   const [bodyGeneration, setBodyGeneration] = useState(0);
+  const { annotations, error: annotationsError, add, update, remove } = useAnnotations(material.id);
+  const [noteDraft, setNoteDraft] = useState<{ id: string; value: string } | null>(null);
+  const [activeAnnotation, setActiveAnnotation] = useState<string | undefined>(undefined);
   useEffect(() => { savePrefs(prefs); applyTheme(prefs.theme); }, [prefs]);
   useEffect(() => { if (prefs.focus) setInspectorTab(null); }, [prefs.focus]);
   const quality = qualityLabel(material);
   const identity = material.reader ? `${material.id}:${material.reader.schema}` : material.id;
 
   useDocumentReadingPosition(viewportRef, identity);
+
+  // The ::highlight() rules for notes are generated once per page.
+  useEffect(() => {
+    if (document.getElementById("read-note-highlight-styles")) return;
+    const style = document.createElement("style");
+    style.id = "read-note-highlight-styles";
+    style.textContent = textAnnotationHighlightStyles("read-note");
+    document.head.append(style);
+  }, []);
+
+  useEffect(() => {
+    const root = bodyRef.current;
+    if (!root || annotations.length === 0) return;
+    const installed = installTextAnnotationHighlights({
+      annotations: annotations.map((annotation) => ({ id: annotation.id, locator: annotation.locator, quote: annotation.quote, kind: annotation.kind, color: annotation.color, ...(annotation.note ? { note: annotation.note } : {}) })),
+      namePrefix: "read-note",
+      onActivate: (id) => { setActiveAnnotation(id); setInspectorTab("notes"); },
+      root,
+    });
+    return installed.dispose;
+  }, [annotations, bodyGeneration]);
+
+  const sectionOf = (range: Range | undefined) => {
+    if (!range) return undefined;
+    let node: Node | null = range.startContainer;
+    while (node && node !== bodyRef.current) {
+      let sibling: Node | null = node;
+      while (sibling) {
+        if (sibling instanceof HTMLElement && /^H[2-4]$/.test(sibling.tagName)) return sibling.textContent?.trim();
+        sibling = sibling.previousSibling;
+      }
+      node = node.parentNode;
+    }
+    return undefined;
+  };
+  const copyText = async (text: string) => { await navigator.clipboard.writeText(text); };
+  const jumpTo = (annotation: Annotation) => {
+    const root = bodyRef.current;
+    if (!root) return;
+    const range = resolveTextQuoteRange(root, annotation.locator, annotation.quote);
+    if (!range) return;
+    (range.startContainer.parentElement ?? root).scrollIntoView({ block: "center", behavior: "smooth" });
+    setActiveAnnotation(annotation.id);
+  };
+  const onHighlight = (capture: SelectionCapture, color: Annotation["color"]) => { void add({ ...capture, kind: "highlight", color }); };
+  const onNote = async (capture: SelectionCapture) => {
+    const saved = await add({ ...capture, kind: "comment", color: ANNOTATION_COLORS[0]!.color });
+    setInspectorTab("notes");
+    setActiveAnnotation(saved.id);
+    setNoteDraft({ id: saved.id, value: "" });
+  };
+  const onCopyCapture = (capture: SelectionCapture) => {
+    const range = bodyRef.current ? resolveTextQuoteRange(bodyRef.current, capture.locator, capture.quote) : undefined;
+    void copyText(citationFor(material, { quote: capture.quote }, sectionOf(range)));
+  };
 
   useEffect(() => {
     const frame = requestAnimationFrame(() => { setOutline(outlineOf(bodyRef.current)); setBodyGeneration((value) => value + 1); });
@@ -89,7 +150,7 @@ export function ReaderView({ material, onBack, onOpenLink }: { material: Materia
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
       if (event.key === "Escape") { event.preventDefault(); if (inspectorTab) setInspectorTab(null); else onBack(); }
       if (event.key === "t") { event.preventDefault(); setTocPinned((pinned) => !pinned); }
-      if (event.key === "n") { event.preventDefault(); setInspectorTab((tab) => (tab === "notes" ? null : "notes")); }
+      if (event.key === "n" && !event.metaKey && !event.ctrlKey) { event.preventDefault(); setInspectorTab((tab) => (tab === "notes" ? null : "notes")); }
       if ((event.metaKey || event.ctrlKey) && event.key === "j") { event.preventDefault(); setInspectorTab((tab) => (tab === "agent" ? null : "agent")); }
       if ((event.metaKey || event.ctrlKey) && event.key === "f") { event.preventDefault(); setFindOpen(true); }
     };
@@ -118,6 +179,7 @@ export function ReaderView({ material, onBack, onOpenLink }: { material: Materia
       <main className="relative grid min-h-0 grid-rows-[2px_minmax(0,1fr)] overflow-hidden rounded-panel bg-content shadow-[0_0_0_1px_var(--separator-soft),0_6px_20px_rgba(15,17,21,.04)]">
         <div className="bg-separator-soft">{prefs.focus ? null : <i className="block h-full bg-accent opacity-80" style={{ width: `${progress}%` }} />}</div>
         {findOpen ? <FindBar root={bodyRef.current} generation={bodyGeneration} onClose={() => setFindOpen(false)} /> : null}
+        <SelectionToolbar root={bodyRef.current} viewport={viewportRef.current} onHighlight={onHighlight} onNote={(capture) => void onNote(capture)} onCopy={onCopyCapture} />
         {outline.length > 1 ? (
           <div className="pointer-events-none absolute inset-y-6 right-5 z-10 flex items-center">
             <TocRail aria-label="Contents" entries={outline.map((entry) => ({ id: entry.id, label: entry.label, level: entry.level - 1 }))} activeId={activeHeading} pinned={tocPinned} onSelect={(id) => document.getElementById(id)?.scrollIntoView({ block: "start", behavior: "smooth" })} />
@@ -157,7 +219,34 @@ export function ReaderView({ material, onBack, onOpenLink }: { material: Materia
             <InspectorTab id="notes"><Highlighter />Notes</InspectorTab>
             <InspectorTab id="agent"><Sparkles />Agent</InspectorTab>
           </InspectorTabs>
-          <InspectorPanel id="notes"><InspectorSection title="Notes"><p className="text-[13px] text-label-2">Highlights arrive in M1.</p></InspectorSection></InspectorPanel>
+          <InspectorPanel id="notes">
+            <InspectorSection title={annotations.length ? `${annotations.length} ${annotations.length === 1 ? "note" : "notes"}` : "Notes"}>
+              {annotationsError ? <p role="alert" className="text-[13px] text-red">{annotationsError}</p> : null}
+              {annotations.length === 0 && !annotationsError ? <p className="text-[13px] text-label-2">Select text to highlight it or add a note. Highlights are kept with this material.</p> : null}
+              <ul className="m-0 grid list-none gap-2 p-0">
+                {annotations.map((annotation) => (
+                  <li key={annotation.id} className={`rounded-card bg-content-2 p-3 ${activeAnnotation === annotation.id ? "shadow-[inset_0_0_0_1.5px_var(--accent)]" : "shadow-[inset_0_0_0_1px_var(--separator-soft)]"}`}>
+                    <button type="button" className="block w-full cursor-default border-0 bg-transparent p-0 text-left" onClick={() => jumpTo(annotation)}>
+                      <span className="mb-1.5 flex items-center gap-2 text-[11px] text-label-3"><i aria-hidden="true" className="size-2.5 rounded-full" style={{ background: annotation.color }} />{new Date(annotation.updatedAt).toLocaleDateString()}</span>
+                      <span className="block text-[13px] leading-[18px] text-label" style={{ boxShadow: `inset 3px 0 0 ${annotation.color}`, paddingLeft: 10 }}>{annotation.quote.length > 220 ? `${annotation.quote.slice(0, 220)}…` : annotation.quote}</span>
+                    </button>
+                    {noteDraft?.id === annotation.id ? (
+                      <TextField autoFocus aria-label="Note" placeholder="Why it matters…" value={noteDraft.value} onChange={(value) => setNoteDraft({ id: annotation.id, value })} className="mt-2"
+                        onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void update(annotation.id, { note: noteDraft.value.trim() }); setNoteDraft(null); } if (event.key === "Escape") { event.stopPropagation(); setNoteDraft(null); } }} />
+                    ) : annotation.note ? (
+                      <p className="mt-2 cursor-text text-[13px] text-label-2" onClick={() => setNoteDraft({ id: annotation.id, value: annotation.note ?? "" })}>{annotation.note}</p>
+                    ) : null}
+                    <div className="mt-2 flex items-center gap-1">
+                      {noteDraft?.id !== annotation.id && !annotation.note ? <Button variant="plain" size="sm" onPress={() => setNoteDraft({ id: annotation.id, value: "" })}>Add note</Button> : null}
+                      <Button variant="quiet" size="sm" aria-label="Copy citation" onPress={() => void copyText(citationFor(material, annotation, sectionOf(bodyRef.current ? resolveTextQuoteRange(bodyRef.current, annotation.locator, annotation.quote) : undefined)))}><Copy className="size-3.5" /></Button>
+                      <Button variant="quiet" size="sm" aria-label="Delete" onPress={() => void remove(annotation.id)}><Trash2 className="size-3.5" /></Button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+              {annotations.length ? <Button variant="default" size="sm" className="mt-3" onPress={() => void copyText(annotationsMarkdown(material, annotations))}>Copy all as Markdown</Button> : null}
+            </InspectorSection>
+          </InspectorPanel>
           <InspectorPanel id="agent"><InspectorSection title="Context"><span className="inline-flex h-[26px] items-center rounded-pill bg-content px-2.5 text-[12.5px] font-medium shadow-[0_0_0_1px_var(--separator)]">this article</span></InspectorSection><p className="text-[11.5px] text-label-3">Connect Codex in Settings to use Ask.</p></InspectorPanel>
         </Inspector>
       ) : null}

@@ -45,6 +45,22 @@ export interface OpenFileInput {
   bytes: Uint8Array;
 }
 
+export type AnnotationKind = "highlight" | "underline" | "comment";
+export type AnnotationColor = "#ffd400" | "#5fb236" | "#2ea8e5" | "#e56eee";
+
+/** A highlight or a note, anchored by a locator the reader understands (text-quote for pages, pdf-region for PDFs). */
+export interface Annotation {
+  id: string;
+  materialId: string;
+  locator: string;
+  quote: string;
+  note?: string;
+  kind: AnnotationKind;
+  color: AnnotationColor;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export type ThemeSource = "system" | "light" | "dark";
 
 export interface CorpusImportResult {
@@ -67,6 +83,9 @@ export interface ReadApi {
   getMaterial: (id: string) => Promise<MaterialRecord | undefined>;
   /** A remote image as a data: URL from the local cache (fetched once); undefined when it cannot be cached. */
   resolveImage: (url: string) => Promise<string | undefined>;
+  listAnnotations: (materialId: string) => Promise<Annotation[]>;
+  saveAnnotation: (annotation: Annotation) => Promise<Annotation>;
+  deleteAnnotation: (materialId: string, id: string) => Promise<void>;
   /** Raw bytes of a stored PDF; undefined when the material has none. */
   getMaterialBytes: (id: string) => Promise<Uint8Array | undefined>;
   listMaterials: () => Promise<MaterialSummary[]>;
