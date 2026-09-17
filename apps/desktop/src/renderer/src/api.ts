@@ -14,6 +14,24 @@ function summaryOf({ id, url, title, byline, publishedAt, fetchedAt, readingMinu
 }
 const unavailable: OpenUrlResult = { ok: false, code: "PREVIEW_MODE", message: "The engine is not available in the browser preview. Run the desktop app to add material." };
 
+// The evaluation corpus, when exported (EXPORT=1 in eval), is browsable in the preview too.
+// A missing export is the normal state of a fresh checkout, so a 404 means "no corpus", nothing else.
+async function corpusIndex(): Promise<MaterialSummary[]> {
+  const response = await fetch("/dev/corpus/index.json");
+  // The Vite dev server answers unknown paths with index.html (200), so the type is the real signal.
+  if (response.status === 404 || !(response.headers.get("content-type") ?? "").includes("json")) return [];
+  if (!response.ok) throw new Error(`Preview corpus index failed: HTTP ${response.status}`);
+  return (await response.json()) as MaterialSummary[];
+}
+
+async function corpusMaterial(id: string): Promise<MaterialRecord | undefined> {
+  if (!/^[a-f0-9]{16}$/.test(id)) return undefined;
+  const response = await fetch(`/dev/corpus/${id}.json`);
+  if (response.status === 404 || !(response.headers.get("content-type") ?? "").includes("json")) return undefined;
+  if (!response.ok) throw new Error(`Preview corpus material failed: HTTP ${response.status}`);
+  return (await response.json()) as MaterialRecord;
+}
+
 const browserPreview: ReadApi = {
   version: "preview",
   platform: "browser",
@@ -21,14 +39,14 @@ const browserPreview: ReadApi = {
   setTheme: async () => undefined,
   openUrl: async () => unavailable,
   openFile: async () => unavailable,
-  getMaterial: async (id) => samples.find((material) => material.id === id),
+  getMaterial: async (id) => samples.find((material) => material.id === id) ?? (await corpusMaterial(id)),
   getMaterialBytes: async (id) => {
     if (id !== samplePdfMaterial.id) return undefined;
     const response = await fetch("/dev/sample.pdf");
     if (!response.ok) throw new Error(`Preview PDF missing: put any PDF at apps/desktop/src/renderer/public/dev/sample.pdf (HTTP ${response.status}).`);
     return new Uint8Array(await response.arrayBuffer());
   },
-  listMaterials: async () => samples.map(summaryOf),
+  listMaterials: async () => [...samples.map(summaryOf), ...(await corpusIndex())],
 };
 
 export const read: ReadApi = typeof window !== "undefined" && "read" in window && window.read ? window.read : browserPreview;
