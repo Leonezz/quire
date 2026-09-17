@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from "react";
-import { ChevronLeft, Sparkles } from "lucide-react";
-import { AskButton, Kbd, Toolbar, ToolbarButton, ToolbarGroup, ToolbarTitle } from "@read/ui";
-import { PdfCanvasViewer, pdfReadingProgress, usePdfReaderStateMemory, type PdfReaderState } from "@read/reader-pdf";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { ChevronLeft, List, Sparkles } from "lucide-react";
+import { AskButton, Kbd, TocRail, Toolbar, ToolbarButton, ToolbarGroup, ToolbarTitle } from "@read/ui";
+import { PdfCanvasViewer, pdfReadingProgress, usePdfReaderStateMemory, type PdfCanvasViewerHandle, type PdfOutlineEntry, type PdfReaderState } from "@read/reader-pdf";
 import type { MaterialRecord } from "../../shared/contracts";
 import { read } from "./api";
 import { ReadingSettings } from "./ReadingSettings";
@@ -16,6 +16,10 @@ export function PdfReaderView({ material, onBack }: { material: MaterialRecord; 
   const [prefs, setPrefs] = useState<ReadingPrefs>(loadPrefs);
   const [progress, setProgress] = useState(0);
   const [askOpen, setAskOpen] = useState(false);
+  const [outline, setOutline] = useState<readonly PdfOutlineEntry[]>([]);
+  const [page, setPage] = useState(1);
+  const [tocPinned, setTocPinned] = useState(false);
+  const viewerRef = useRef<PdfCanvasViewerHandle>(null);
   const identity = `${material.id}:pdf`;
   const { initialState, remember } = usePdfReaderStateMemory(identity, pdf?.pages ?? 0);
   const urlRef = useRef<string | undefined>(undefined);
@@ -47,13 +51,19 @@ export function PdfReaderView({ material, onBack }: { material: MaterialRecord; 
       const typing = target?.tagName === "INPUT" || target?.tagName === "TEXTAREA";
       if (event.key === "Escape" && !typing) { event.preventDefault(); if (askOpen) setAskOpen(false); else onBack(); }
       if ((event.metaKey || event.ctrlKey) && event.key === "j") { event.preventDefault(); setAskOpen((open) => !open); }
+      if (event.key === "t" && !typing && !event.metaKey && !event.ctrlKey) { event.preventDefault(); setTocPinned((pinned) => !pinned); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [askOpen, onBack]);
 
+  // The current section is the last outline entry that starts on or before the visible page.
+  const activeEntry = useMemo(() => outline.filter((entry) => entry.page <= page).at(-1)?.id, [outline, page]);
+  const tocEntries = useMemo(() => outline.map((entry) => ({ id: entry.id, label: entry.title, level: entry.level })), [outline]);
+
   const onReaderStateChange = (state: PdfReaderState) => {
     remember(state);
+    setPage(state.page);
     const fraction = pdfReadingProgress(state, pdf?.pages);
     if (fraction !== undefined) setProgress(Math.round(fraction * 100));
   };
@@ -67,6 +77,7 @@ export function PdfReaderView({ material, onBack }: { material: MaterialRecord; 
         <ToolbarTitle title={material.title} subtitle={subtitle} />
         <ToolbarGroup>
           <span className={`mr-1.5 inline-flex h-[22px] items-center gap-1 rounded-pill px-2.5 text-[11.5px] font-medium ${pdf?.textLayer === "absent" ? "bg-orange-soft text-orange-text" : "bg-fill text-label-2"}`}>{pdf?.textLayer === "absent" ? "scanned PDF" : "PDF"}</span>
+          <ToolbarButton aria-label="Contents (t)" isSelected={tocPinned} isDisabled={outline.length === 0} onChange={setTocPinned}><List /></ToolbarButton>
           <ReadingSettings prefs={prefs} onChange={setPrefs} />
           <AskButton aria-label="Ask" isSelected={askOpen} onChange={setAskOpen}><Sparkles />Ask<Kbd>⌘J</Kbd></AskButton>
         </ToolbarGroup>
@@ -74,14 +85,21 @@ export function PdfReaderView({ material, onBack }: { material: MaterialRecord; 
 
       <main className="relative grid min-h-0 grid-rows-[2px_minmax(0,1fr)] overflow-hidden rounded-panel bg-content shadow-[0_0_0_1px_var(--separator-soft),0_6px_20px_rgba(15,17,21,.04)]">
         <div className="bg-separator-soft"><i className="block h-full bg-accent opacity-80" style={{ width: `${progress}%` }} /></div>
+        {outline.length > 1 ? (
+          <div className="pointer-events-none absolute inset-y-6 right-6 z-10 flex items-center">
+            <TocRail aria-label="Contents" entries={tocEntries} activeId={activeEntry} pinned={tocPinned} onSelect={(id) => { const entry = outline.find((item) => item.id === id); if (entry) viewerRef.current?.goToPage(entry.page); }} />
+          </div>
+        ) : null}
         {loaded.status === "ready" && pdf ? (
           <PdfCanvasViewer
+            ref={viewerRef}
             url={loaded.url}
             title={material.title}
             pageCount={pdf.pages}
             textLayer={pdf.textLayer}
             initialState={initialState}
             onReaderStateChange={onReaderStateChange}
+            onOutlineChange={setOutline}
           />
         ) : loaded.status === "error" ? (
           <div className="grid place-items-center p-10 text-center"><div className="grid max-w-[420px] gap-2"><strong className="text-[16px] text-label">Could not open this PDF.</strong><span className="text-[13px] text-label-2">{loaded.message}</span></div></div>

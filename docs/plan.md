@@ -22,6 +22,7 @@
 - 主进程 `engine/pdf.ts`：pdf.js 在 Node 里读页数、Info 字典、首三页文本；Info 无标题时取首页最大字号的正立文本作标题（arXiv 需要）。字节落盘 `<id>.pdf`，`material:bytes` IPC 取回，渲染端转 blob URL；CSP 放行 `connect-src blob:`。
 - 拖入 PDF / 粘贴 arXiv PDF 链接即读；页位置与侧栏状态按材料记忆；阅读视图外加 ErrorBoundary，单个表面失败不再白屏。
 - 已验：真实 arXiv PDF 解析 292 ms；浏览器预览与桌面 app 均通过；关闭再开回到原页。
+- 补充（同日）：目录统一为刻度轨 `TocRail`（`@read/ui`，文章与 PDF 共用：一条刻度一个标题，当前段深色加长，悬停 / 聚焦 / `t` 展开标签，方向键可走）；PDF 双指缩放（ctrl+wheel）与 ⌘= / ⌘- / ⌘0，缩放锚定当前页位置；PDF 目录改为数据输出（`onOutlineChange`），侧栏只剩缩略图。
 - 未做（推后）：PDF 页面反色的暗色模式；标注（第 3 刀）。
 
 ### 第 2 刀：评测集（博客部分）与质量档位（R6 / R8）

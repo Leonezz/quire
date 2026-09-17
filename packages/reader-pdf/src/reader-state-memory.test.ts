@@ -47,7 +47,7 @@ describe("loadReaderState", () => {
       rotation: 90,
       sidebarOpen: false,
       sidebarWidth: 240,
-      sidebarView: "outline",
+      sidebarView: "pages",
       zoom: 1.4,
     };
     saveReaderState(key, state);

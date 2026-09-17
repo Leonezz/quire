@@ -11,13 +11,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import {
-  Document,
-  Outline,
-  Page,
-  pdfjs,
-  type DocumentProps,
-} from "react-pdf";
+import { Document, Page, pdfjs, type DocumentProps } from "react-pdf";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import {
   ArrowLeft,
@@ -34,7 +28,7 @@ import {
 import "react-pdf/dist/Page/AnnotationLayer.css";
 import "react-pdf/dist/Page/TextLayer.css";
 import "./pdf-canvas-viewer.css";
-import { ReaderNavigation } from "./ReaderNavigation";
+import { readPdfOutline, type PdfOutlineEntry } from "./pdf-outline";
 import { PdfNavigationThumbnail } from "./PdfNavigationThumbnail";
 import type { PdfRegion } from "./pdf-region-locator";
 import {
@@ -98,10 +92,13 @@ export type PdfCanvasViewerHandle = Readonly<{
   readSelection: () => PdfSelection | undefined;
 }>;
 
-const PDF_SIDEBAR_VIEWS = [
-  { id: "pages", label: "Pages" },
-  { id: "outline", label: "Contents" },
-] as const;
+// The sidebar shows page thumbnails only; the host renders the outline from
+// `onOutlineChange`. The view id stays in the persisted state for compatibility.
+const PDF_SIDEBAR_VIEW: PdfReaderSidebarView = "pages";
+const SIDEBAR_HEADING_ID = "pdf-navigation-sidebar-heading";
+// Chromium reports a trackpad pinch as wheel events with ctrlKey set; the
+// factor keeps one notch of deltaY close to one zoom-button step.
+const PINCH_ZOOM_SENSITIVITY = 0.01;
 
 export type PdfTextLayerStatus = "absent" | "available" | "unknown" | boolean;
 
@@ -110,6 +107,11 @@ export type PdfCanvasViewerProps = Readonly<{
   initialPage?: number;
   /** Reader state restored once for this exact representation. */
   initialState?: Partial<PdfReaderState>;
+  /**
+   * Reports the document outline flattened depth-first with 1-based pages,
+   * once per loaded document. An empty list means there is no usable outline.
+   */
+  onOutlineChange?: (entries: readonly PdfOutlineEntry[]) => void;
   /** Called when the leading visible page changes. */
   onPageChange?: (page: number) => void;
   /** Emits the full resumable reader state. */
@@ -217,6 +219,7 @@ export const PdfCanvasViewer = forwardRef<
   {
     initialPage = 1,
     initialState,
+    onOutlineChange,
     onPageChange,
     onReaderStateChange,
     pageCount: pageCountHint = 0,
@@ -245,18 +248,12 @@ export const PdfCanvasViewer = forwardRef<
   const [sidebarResizing, setSidebarResizing] = useState(false);
   const [compactViewport, setCompactViewport] = useState(compactPdfViewport);
   const [compactSidebarOpen, setCompactSidebarOpen] = useState(false);
-  const [sidebarView, setSidebarView] = useState<PdfReaderSidebarView>(
-    startingState.sidebarView,
-  );
   const [zoom, setZoom] = useState(startingState.zoom);
   const [fitWidth, setFitWidth] = useState(startingState.fitWidth);
   const [rotation, setRotation] = useState(startingState.rotation);
   const [containerWidth, setContainerWidth] = useState(0);
   const [readerBodyWidth, setReaderBodyWidth] = useState(0);
   const [textLayerError, setTextLayerError] = useState(false);
-  const [outlineState, setOutlineState] = useState<
-    "loading" | "available" | "empty" | "error"
-  >("loading");
   const [progress, setProgress] = useState<number>();
   // React-PDF starts loading during the first render; a blob: document can report
   // progress before this component has committed, and setting state then is an error.
@@ -327,6 +324,11 @@ export const PdfCanvasViewer = forwardRef<
     page: startingState.page,
     pageOffset: startingState.pageOffset,
   });
+  const zoomRef = useRef(startingState.zoom);
+  const fitWidthRef = useRef(startingState.fitWidth);
+  const pinchDeltaRef = useRef(0);
+  const pinchFrameRef = useRef<number | undefined>(undefined);
+  const onOutlineChangeRef = useRef(onOutlineChange);
 
   const knownPageCount = loadedPageCount || Math.max(0, pageCountHint);
   const renderedPageCount = pdf?.numPages ?? 0;
@@ -391,7 +393,7 @@ export const PdfCanvasViewer = forwardRef<
       rotation,
       sidebarOpen,
       sidebarWidth,
-      sidebarView,
+      sidebarView: PDF_SIDEBAR_VIEW,
       zoom,
     });
   }, [
@@ -402,7 +404,6 @@ export const PdfCanvasViewer = forwardRef<
     rotation,
     sidebarOpen,
     sidebarWidth,
-    sidebarView,
     zoom,
   ]);
 
@@ -569,9 +570,7 @@ export const PdfCanvasViewer = forwardRef<
   useEffect(() => {
     if (!sidebarUsesOverlay || !compactSidebarOpen) return;
     const focusTimer = window.setTimeout(() => {
-      sidebarRef.current
-        ?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]')
-        ?.focus();
+      thumbnailScrollRef.current?.focus();
     }, 0);
     return () => window.clearTimeout(focusTimer);
   }, [compactSidebarOpen, sidebarUsesOverlay]);
@@ -598,12 +597,12 @@ export const PdfCanvasViewer = forwardRef<
     setSidebarOpen(nextState.sidebarOpen);
     setSidebarWidth(nextState.sidebarWidth);
     setCompactSidebarOpen(false);
-    setSidebarView(nextState.sidebarView);
+    zoomRef.current = nextState.zoom;
+    fitWidthRef.current = nextState.fitWidth;
     setZoom(nextState.zoom);
     setFitWidth(nextState.fitWidth);
     setRotation(nextState.rotation);
     setTextLayerError(false);
-    setOutlineState("loading");
     setProgress(undefined);
     setLoadError(undefined);
     searchRequestRef.current += 1;
@@ -832,8 +831,7 @@ export const PdfCanvasViewer = forwardRef<
   );
 
   useEffect(() => {
-    if (!renderedPageCount || !visibleSidebarOpen || sidebarView !== "pages")
-      return;
+    if (!renderedPageCount || !visibleSidebarOpen) return;
     const nearCurrent = new Set<number>();
     for (
       let page = Math.max(1, currentPage - THUMBNAIL_RENDER_RADIUS);
@@ -864,7 +862,7 @@ export const PdfCanvasViewer = forwardRef<
     for (const element of thumbnailRefs.current.values())
       observer.observe(element);
     return () => observer.disconnect();
-  }, [currentPage, renderedPageCount, sidebarView, visibleSidebarOpen]);
+  }, [currentPage, renderedPageCount, visibleSidebarOpen]);
 
   const closeSearch = useCallback(() => {
     setSearchOpen(false);
@@ -878,6 +876,41 @@ export const PdfCanvasViewer = forwardRef<
     setSearchOpen(true);
     window.setTimeout(() => searchInputRef.current?.focus(), 0);
   }, []);
+
+  // Zooming re-lays out every page, so the reading position is queued as a
+  // pending navigation and restored once the new page sizes have rendered.
+  // The refs let the wheel and keyboard handlers stay stable across renders.
+  const anchorReadingPosition = useCallback(() => {
+    pendingNavigationRef.current = { ...readerPositionRef.current };
+  }, []);
+  const applyZoom = useCallback(
+    (compute: (zoom: number) => number) => {
+      const next = clampZoom(compute(zoomRef.current));
+      if (next === zoomRef.current && !fitWidthRef.current) return;
+      zoomRef.current = next;
+      fitWidthRef.current = false;
+      anchorReadingPosition();
+      setFitWidth(false);
+      setZoom(next);
+    },
+    [anchorReadingPosition],
+  );
+  const zoomOut = useCallback(
+    () => applyZoom((value) => value - ZOOM_STEP),
+    [applyZoom],
+  );
+  const zoomIn = useCallback(
+    () => applyZoom((value) => value + ZOOM_STEP),
+    [applyZoom],
+  );
+  const fitToWidth = useCallback(() => {
+    if (fitWidthRef.current && zoomRef.current === 1) return;
+    zoomRef.current = 1;
+    fitWidthRef.current = true;
+    anchorReadingPosition();
+    setFitWidth(true);
+    setZoom(1);
+  }, [anchorReadingPosition]);
 
   useEffect(() => {
     const trapFocusInDrawer = (event: KeyboardEvent) => {
@@ -912,9 +945,19 @@ export const PdfCanvasViewer = forwardRef<
         }
         return;
       }
-      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
+      const modifier = event.metaKey || event.ctrlKey;
+      if (modifier && event.key.toLowerCase() === "f") {
         event.preventDefault();
         openSearch();
+      } else if (modifier && (event.key === "=" || event.key === "+")) {
+        event.preventDefault();
+        zoomIn();
+      } else if (modifier && event.key === "-") {
+        event.preventDefault();
+        zoomOut();
+      } else if (modifier && event.key === "0") {
+        event.preventDefault();
+        fitToWidth();
       } else if (event.key === "Escape" && searchOpen) {
         event.preventDefault();
         closeSearch();
@@ -922,7 +965,43 @@ export const PdfCanvasViewer = forwardRef<
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [closeSearch, compactSidebarOpen, openSearch, searchOpen, sidebarUsesOverlay]);
+  }, [
+    closeSearch,
+    compactSidebarOpen,
+    fitToWidth,
+    openSearch,
+    searchOpen,
+    sidebarUsesOverlay,
+    zoomIn,
+    zoomOut,
+  ]);
+
+  useEffect(() => {
+    const root = scrollRef.current;
+    if (!root) return;
+    // Bursts of pinch events are coalesced into one zoom change per frame.
+    const flushPinch = () => {
+      pinchFrameRef.current = undefined;
+      const delta = pinchDeltaRef.current;
+      pinchDeltaRef.current = 0;
+      if (!delta) return;
+      applyZoom((value) => value * Math.exp(-delta * PINCH_ZOOM_SENSITIVITY));
+    };
+    const handleWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey && !event.metaKey) return;
+      event.preventDefault();
+      pinchDeltaRef.current += event.deltaY;
+      pinchFrameRef.current ??= window.requestAnimationFrame(flushPinch);
+    };
+    root.addEventListener("wheel", handleWheel, { passive: false });
+    return () => {
+      root.removeEventListener("wheel", handleWheel);
+      if (pinchFrameRef.current !== undefined)
+        window.cancelAnimationFrame(pinchFrameRef.current);
+      pinchFrameRef.current = undefined;
+      pinchDeltaRef.current = 0;
+    };
+  }, [applyZoom, renderedPageCount]);
 
   useEffect(() => {
     const request = ++searchRequestRef.current;
@@ -1050,8 +1129,6 @@ export const PdfCanvasViewer = forwardRef<
         page: targetPage,
         pageOffset: restored.pageOffset,
       };
-      // The outline state is reset when the url changes, not here: the Outline can
-      // report its load before this handler runs and must not be marked "loading" again.
     },
     [],
   );
@@ -1061,14 +1138,30 @@ export const PdfCanvasViewer = forwardRef<
     setLoadError(error.message || "The PDF could not be opened.");
   }, []);
 
-  const zoomOut = () => {
-    setFitWidth(false);
-    setZoom((value) => clampZoom(value - ZOOM_STEP));
-  };
-  const zoomIn = () => {
-    setFitWidth(false);
-    setZoom((value) => clampZoom(value + ZOOM_STEP));
-  };
+  useEffect(() => {
+    onOutlineChangeRef.current = onOutlineChange;
+  }, [onOutlineChange]);
+
+  useEffect(() => {
+    if (!pdf) {
+      onOutlineChangeRef.current?.([]);
+      return;
+    }
+    let cancelled = false;
+    readPdfOutline(pdf, () => cancelled)
+      .then((entries) => {
+        if (!cancelled) onOutlineChangeRef.current?.(entries);
+      })
+      .catch(() => {
+        // A document whose outline cannot be read is still readable page by
+        // page, so this is reported as "no outline" rather than as a document
+        // error. An unusable document already surfaces through onLoadError.
+        if (!cancelled) onOutlineChangeRef.current?.([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [pdf]);
 
   const documentError = loadError ? (
     <div className="pdf-canvas-viewer__state" role="alert">
@@ -1202,10 +1295,7 @@ export const PdfCanvasViewer = forwardRef<
             aria-pressed={fitWidth}
             aria-label="Fit page width"
             className="pdf-canvas-viewer__text-button pdf-canvas-viewer__mobile-tool-button"
-            onClick={() => {
-              setFitWidth(true);
-              setZoom(1);
-            }}
+            onClick={fitToWidth}
             title="Fit page width"
             type="button"
           >
@@ -1358,63 +1448,39 @@ export const PdfCanvasViewer = forwardRef<
             ref={sidebarRef}
             role={sidebarUsesOverlay ? "dialog" : "complementary"}
           >
-            <ReaderNavigation
-              activeView={sidebarView}
-              label="PDF sidebar views"
-              onSelect={setSidebarView}
-              views={PDF_SIDEBAR_VIEWS}
-              scrollClassName="pdf-canvas-viewer__sidebar-scroll"
-              scrollRef={thumbnailScrollRef}
+            <h2
+              className="pdf-canvas-viewer__sidebar-heading"
+              id={SIDEBAR_HEADING_ID}
             >
-              {(view) => view === "pages" ? (
-                <div>
-                  {renderedPageCount ? (
-                    Array.from({ length: renderedPageCount }, (_, index) => {
-                      const page = index + 1;
-                      return (
-                        <PdfNavigationThumbnail
-                          current={currentPage === page}
-                          key={page}
-                          onActivate={goToPage}
-                          onElement={(element) => assignThumbnailRef(page, element)}
-                          page={page}
-                          visible={visibleThumbnailPages.has(page)}
-                        />
-                      );
-                    })
-                  ) : (
-                    <p className="pdf-canvas-viewer__sidebar-empty">
-                      Thumbnails appear after the PDF loads.
-                    </p>
-                  )}
-                </div>
+              Pages
+            </h2>
+            <div
+              aria-labelledby={SIDEBAR_HEADING_ID}
+              className="pdf-canvas-viewer__sidebar-scroll"
+              ref={thumbnailScrollRef}
+              role="group"
+              tabIndex={0}
+            >
+              {renderedPageCount ? (
+                Array.from({ length: renderedPageCount }, (_, index) => {
+                  const page = index + 1;
+                  return (
+                    <PdfNavigationThumbnail
+                      current={currentPage === page}
+                      key={page}
+                      onActivate={goToPage}
+                      onElement={(element) => assignThumbnailRef(page, element)}
+                      page={page}
+                      visible={visibleThumbnailPages.has(page)}
+                    />
+                  );
+                })
               ) : (
-                <div>
-                  {outlineState === "empty" ? (
-                    <p className="pdf-canvas-viewer__sidebar-empty">
-                      This PDF has no outline.
-                    </p>
-                  ) : null}
-                  {outlineState === "error" ? (
-                    <p className="pdf-canvas-viewer__sidebar-empty">
-                      The outline could not be read.
-                    </p>
-                  ) : null}
-                  {outlineState === "loading" && pdf ? (
-                    <p className="pdf-canvas-viewer__sidebar-empty">
-                      Loading outline…
-                    </p>
-                  ) : null}
-                  <Outline
-                    onItemClick={({ pageNumber }) => goToPage(pageNumber)}
-                    onLoadError={() => setOutlineState("error")}
-                    onLoadSuccess={(outline) =>
-                      setOutlineState(outline?.length ? "available" : "empty")
-                    }
-                  />
-                </div>
+                <p className="pdf-canvas-viewer__sidebar-empty">
+                  Thumbnails appear after the PDF loads.
+                </p>
               )}
-            </ReaderNavigation>
+            </div>
           </div>
 
           {visibleSidebarOpen && !sidebarUsesOverlay ? (

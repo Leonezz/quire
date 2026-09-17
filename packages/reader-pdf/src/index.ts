@@ -15,5 +15,4 @@ export {
 export type { PdfReaderSidebarView, PdfReaderState } from "./reader-state-memory";
 export { parsePdfRegionLocator } from "./pdf-region-locator";
 export type { PdfRegion } from "./pdf-region-locator";
-export { ReaderNavigation } from "./ReaderNavigation";
-export type { ReaderNavigationProps } from "./ReaderNavigation";
+export type { PdfOutlineEntry } from "./pdf-outline";

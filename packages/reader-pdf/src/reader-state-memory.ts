@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import { clampPdfSidebarWidth, DEFAULT_PDF_SIDEBAR_WIDTH } from "./pdf-reader-sidebar";
 
-export type PdfReaderSidebarView = "outline" | "pages";
+/**
+ * The sidebar only shows page thumbnails now; the outline is reported to the
+ * host as data. The field stays in the persisted state so older entries load.
+ */
+export type PdfReaderSidebarView = "pages";
 
 export type PdfReaderState = Readonly<{
   fitWidth: boolean;
@@ -35,8 +39,8 @@ export function readerStateKey(identity: string) {
   return `${STORAGE_PREFIX}${identity}`;
 }
 
-export function validPdfSidebarView(value: unknown): PdfReaderSidebarView {
-  return value === "outline" ? value : "pages";
+export function validPdfSidebarView(_value: unknown): PdfReaderSidebarView {
+  return "pages";
 }
 
 export function normalizedReaderRotation(value: unknown) {

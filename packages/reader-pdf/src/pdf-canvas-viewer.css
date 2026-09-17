@@ -343,11 +343,30 @@
   display: none;
 }
 
+.pdf-canvas-viewer__sidebar-heading {
+  border-bottom: 1px solid var(--pdf-reader-border);
+  color: var(--pdf-reader-muted);
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  margin: 0;
+  padding: 12px 14px 10px;
+  text-transform: uppercase;
+}
+
 .pdf-canvas-viewer__sidebar-scroll {
   flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
+  overscroll-behavior: contain;
   padding: 10px;
+  scrollbar-width: thin;
+}
+
+.pdf-canvas-viewer__sidebar-scroll:focus-visible {
+  outline: 2px solid var(--pdf-reader-accent);
+  outline-offset: -2px;
 }
 
 /* ---- thumbnails */
@@ -424,35 +443,6 @@
   font-size: 12px;
   line-height: 1.6;
   margin: 8px 4px;
-}
-
-/* ---- outline */
-
-.pdf-canvas-viewer__sidebar .react-pdf__Outline {
-  font-size: 12px;
-}
-
-.pdf-canvas-viewer__sidebar .react-pdf__Outline ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-
-.pdf-canvas-viewer__sidebar .react-pdf__OutlineItem {
-  margin: 1px 0;
-}
-
-.pdf-canvas-viewer__sidebar .react-pdf__OutlineItem a {
-  border-radius: 5px;
-  color: var(--pdf-reader-muted);
-  display: block;
-  padding: 6px 7px;
-  text-decoration: none;
-}
-
-.pdf-canvas-viewer__sidebar .react-pdf__OutlineItem a:hover {
-  background: var(--pdf-reader-accent-soft);
-  color: var(--pdf-reader-accent-text);
 }
 
 /* ---- pages */
@@ -585,85 +575,6 @@
   position: absolute;
   white-space: nowrap;
   width: 1px;
-}
-
-/* ---- reader navigation (WAI-ARIA tabs shell used by the sidebar) */
-
-.reader-navigation {
-  --reader-chrome-border: var(--separator);
-  --reader-chrome-muted: var(--label-2);
-  --reader-chrome-ink: var(--label);
-  --reader-chrome-accent: var(--accent-text);
-  --reader-chrome-hover: var(--fill);
-  background: var(--content);
-  color: var(--reader-chrome-ink);
-  display: flex;
-  flex: 1;
-  flex-direction: column;
-  font: 400 14px/1.5 var(--font, ui-sans-serif, system-ui, sans-serif);
-  height: 100%;
-  min-height: 0;
-  min-width: 0;
-}
-
-.reader-navigation-tabs {
-  border-bottom: 1px solid var(--reader-chrome-border);
-  display: flex;
-  flex-shrink: 0;
-  min-height: 46px;
-  outline: none;
-  padding: 0 10px;
-}
-
-.reader-navigation-tab {
-  appearance: none;
-  background: transparent;
-  border: 0;
-  color: var(--reader-chrome-muted);
-  cursor: pointer;
-  flex: 1;
-  font: inherit;
-  font-size: 13px;
-  padding: 10px 6px;
-  position: relative;
-}
-
-.reader-navigation-tab[aria-selected="true"] {
-  color: var(--reader-chrome-ink);
-  font-weight: 600;
-}
-
-.reader-navigation-tab[aria-selected="true"]::after {
-  background: var(--reader-chrome-accent);
-  bottom: 0;
-  content: "";
-  height: 2px;
-  left: 10px;
-  position: absolute;
-  right: 10px;
-}
-
-.reader-navigation-tab:hover {
-  background: var(--reader-chrome-hover);
-}
-
-.reader-navigation :focus-visible {
-  outline: 2px solid var(--reader-chrome-accent);
-  outline-offset: -2px;
-}
-
-.reader-navigation-scroll {
-  flex: 1;
-  min-height: 0;
-  overflow: auto;
-  overscroll-behavior: contain;
-  padding: 12px;
-  scrollbar-width: thin;
-}
-
-.reader-navigation-panel {
-  min-width: 0;
-  outline: none;
 }
 
 /* ---- responsive */

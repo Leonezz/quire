@@ -18,3 +18,5 @@ export { Sheet, SheetDialog, SheetFooter, DialogTrigger } from "./primitives/She
 export { TextField } from "./primitives/TextField";
 export type { TextFieldProps } from "./primitives/TextField";
 export { Popover } from "./primitives/Popover";
+export { TocRail } from "./primitives/TocRail";
+export type { TocEntry, TocRailProps } from "./primitives/TocRail";

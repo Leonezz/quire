@@ -11,6 +11,29 @@ const pdfMockState = vi.hoisted(() => ({
     | undefined,
 }));
 
+type MockOutlineNode = {
+  dest: string | readonly unknown[] | null;
+  items: readonly MockOutlineNode[];
+  title: string;
+};
+
+// Two levels; one string (named) destination, one explicit array destination,
+// and one item whose named destination does not exist in the document.
+const MOCK_OUTLINE: readonly MockOutlineNode[] = [
+  {
+    dest: "intro",
+    items: [
+      {
+        dest: [{ gen: 0, num: 3 }, { name: "XYZ" }],
+        items: [],
+        title: "Background",
+      },
+    ],
+    title: "Introduction",
+  },
+  { dest: "missing", items: [], title: "Dangling" },
+];
+
 vi.mock("react-pdf", () => ({
   Document: ({
     children,
@@ -26,11 +49,14 @@ vi.mock("react-pdf", () => ({
       pageNumber: number;
     }) => void;
     onLoadSuccess?: (document: {
+      getDestination: (id: string) => Promise<readonly unknown[] | null>;
+      getOutline: () => Promise<readonly MockOutlineNode[] | null>;
       getPage: (page: number) => Promise<{
         getTextContent: () => Promise<{
           items: readonly { str: string }[];
         }>;
       }>;
+      getPageIndex: (ref: unknown) => Promise<number>;
       numPages: number;
     }) => void;
   }) => {
@@ -45,6 +71,15 @@ vi.mock("react-pdf", () => ({
       pdfMockState.deferPageLoads = Boolean(file?.includes("late-page-load"));
       const numPages = file?.includes("large") ? 12 : 3;
       onLoadSuccess?.({
+        getDestination: async (id) =>
+          id === "intro" ? [{ gen: 0, num: 2 }, { name: "Fit" }] : null,
+        getOutline: async () =>
+          file?.includes("outline") ? MOCK_OUTLINE : null,
+        getPageIndex: async (ref) => {
+          const num = (ref as { num?: number }).num;
+          if (num === undefined) throw new Error("Not a page reference");
+          return num - 1;
+        },
         getPage: async (page) => ({
           getTextContent: async () => {
             if (file?.includes("deferred-search")) {
@@ -81,24 +116,6 @@ vi.mock("react-pdf", () => ({
         ) : null}
         {ready ? children : null}
       </div>
-    );
-  },
-  Outline: ({
-    onLoadSuccess,
-    onItemClick,
-  }: {
-    onLoadSuccess?: (outline: readonly unknown[] | null) => void;
-    onItemClick?: (input: { pageNumber: number }) => void;
-  }) => {
-    useEffect(() => {
-      onLoadSuccess?.([{ title: "Introduction" }]);
-    }, [onLoadSuccess]);
-    return (
-      <nav aria-label="Mock outline">
-        <button onClick={() => onItemClick?.({ pageNumber: 2 })} type="button">
-          Introduction
-        </button>
-      </nav>
     );
   },
   Page: ({
@@ -224,6 +241,20 @@ function setInputValue(input: HTMLInputElement, value: string) {
   input.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
+async function flushAnimationFrame() {
+  await act(async () => {
+    await new Promise<void>((resolve) => {
+      window.requestAnimationFrame(() => resolve());
+    });
+  });
+}
+
+function isThumbnailGroup(element: Element | null) {
+  return Boolean(
+    element?.classList.contains("pdf-canvas-viewer__sidebar-scroll"),
+  );
+}
+
 function keydown(target: EventTarget, key: string, init: KeyboardEventInit = {}) {
   target.dispatchEvent(
     new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key, ...init }),
@@ -286,13 +317,11 @@ describe("PdfCanvasViewer", () => {
     ).toHaveLength(3);
     expect(view.container.textContent).toContain("/ 3");
 
-    const outlineTab = Array.from(
-      view.container.querySelectorAll("button"),
-    ).find((button) => button.textContent === "Contents");
-    await act(async () => outlineTab?.focus());
     expect(
-      view.container.querySelector('[aria-label="Mock outline"]'),
-    ).toBeTruthy();
+      view.container.querySelector(".pdf-canvas-viewer__sidebar-heading")
+        ?.textContent,
+    ).toBe("Pages");
+    expect(view.container.querySelector('[role="tablist"]')).toBeNull();
 
     const sidebarToggle = view.container.querySelector<HTMLButtonElement>(
       '[aria-label="Hide PDF sidebar"]',
@@ -307,66 +336,104 @@ describe("PdfCanvasViewer", () => {
     await act(async () => view.root.unmount());
   });
 
-  it("uses a roving keyboard tab stop for PDF pages and outline navigation", async () => {
-    const view = renderViewer({ pageCount: 3, textLayer: "available" });
-    await act(async () => {
-      view.render();
+  it("reports a flattened, page-resolved outline and skips unresolvable items", async () => {
+    const onOutlineChange = vi.fn();
+    const view = renderViewer({
+      onOutlineChange,
+      pageCount: 3,
+      url: "research-resource://outline.pdf",
     });
+    await act(async () => view.render());
     await flushViewer();
 
-    const tabs = () =>
-      Array.from(
-        view.container.querySelectorAll<HTMLButtonElement>(
-          '[aria-label="PDF sidebar views"] [role="tab"]',
-        ),
+    expect(onOutlineChange).toHaveBeenLastCalledWith([
+      { id: "outline:0", level: 1, page: 2, title: "Introduction" },
+      { id: "outline:0.0", level: 2, page: 3, title: "Background" },
+    ]);
+    await act(async () => view.root.unmount());
+  });
+
+  it("reports an empty outline for a PDF without one", async () => {
+    const onOutlineChange = vi.fn();
+    const view = renderViewer({ onOutlineChange, pageCount: 3 });
+    await act(async () => view.render());
+    await flushViewer();
+
+    expect(onOutlineChange).toHaveBeenLastCalledWith([]);
+    await act(async () => view.root.unmount());
+  });
+
+  it("pinch-zooms with ctrl+wheel on the page region and leaves plain scrolling alone", async () => {
+    const view = renderViewer({ pageCount: 3 });
+    await act(async () => view.render());
+    await flushViewer();
+
+    const region = view.container.querySelector<HTMLElement>(
+      '[role="region"][aria-label="PDF pages"]',
+    )!;
+    const zoomLevel = () =>
+      Number.parseInt(
+        view.container.querySelector('[aria-label="Zoom level"]')
+          ?.textContent ?? "",
+        10,
       );
-    const [pages, outline] = tabs();
-    expect(tabs()).toHaveLength(2);
-    await act(async () => {
-      view.container.querySelector<HTMLElement>('[aria-label="PDF sidebar views"]')?.focus();
+    const fitWidthPressed = () =>
+      view.container
+        .querySelector('[aria-label="Fit page width"]')
+        ?.getAttribute("aria-pressed");
+    expect(zoomLevel()).toBe(100);
+    expect(fitWidthPressed()).toBe("true");
+
+    const plain = new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      deltaY: -50,
     });
+    await act(async () => region.dispatchEvent(plain));
+    await flushAnimationFrame();
+    expect(plain.defaultPrevented).toBe(false);
+    expect(zoomLevel()).toBe(100);
+    expect(fitWidthPressed()).toBe("true");
+
+    const pinches = [0, 1].map(
+      () =>
+        new WheelEvent("wheel", {
+          bubbles: true,
+          cancelable: true,
+          ctrlKey: true,
+          deltaY: -50,
+        }),
+    );
+    await act(async () => {
+      for (const pinch of pinches) region.dispatchEvent(pinch);
+    });
+    await flushAnimationFrame();
+    expect(pinches.every((pinch) => pinch.defaultPrevented)).toBe(true);
+    expect(zoomLevel()).toBeGreaterThan(100);
+    expect(fitWidthPressed()).toBe("false");
+
+    await act(async () => view.root.unmount());
+  });
+
+  it("zooms with the command keyboard shortcuts", async () => {
+    const view = renderViewer({ pageCount: 3 });
+    await act(async () => view.render());
     await flushViewer();
-    expect(document.activeElement).toBe(pages);
-    expect(pages?.tabIndex).toBe(0);
-    expect(outline?.tabIndex).toBe(-1);
-    expect(pages?.getAttribute("aria-selected")).toBe("true");
+
+    const zoomLevel = () =>
+      view.container.querySelector('[aria-label="Zoom level"]')?.textContent;
+    await act(async () => keydown(window, "=", { metaKey: true }));
+    expect(zoomLevel()).toBe("110%");
+    await act(async () => keydown(window, "-", { ctrlKey: true }));
+    await act(async () => keydown(window, "-", { ctrlKey: true }));
+    expect(zoomLevel()).toBe("90%");
+    await act(async () => keydown(window, "0", { metaKey: true }));
+    expect(zoomLevel()).toBe("100%");
     expect(
       view.container
-        .querySelector(`[id="${pages?.getAttribute("aria-controls")}"]`)
-        ?.getAttribute("aria-labelledby"),
-    ).toBe(pages?.id);
-
-    pages?.focus();
-    await act(async () => keydown(pages!, "ArrowRight"));
-    await flushViewer();
-    expect(document.activeElement).toBe(outline);
-    expect(outline?.tabIndex).toBe(0);
-    expect(pages?.tabIndex).toBe(-1);
-    expect(outline?.getAttribute("aria-selected")).toBe("true");
-    expect(
-      view.container
-        .querySelector(`[id="${outline?.getAttribute("aria-controls")}"]`)
-        ?.getAttribute("aria-labelledby"),
-    ).toBe(outline?.id);
-    expect(
-      view.container.querySelector('[aria-label="Mock outline"]'),
-    ).toBeTruthy();
-
-    await act(async () => keydown(outline!, "ArrowRight"));
-    await flushViewer();
-    expect(document.activeElement).toBe(pages);
-
-    await act(async () => keydown(pages!, "ArrowLeft"));
-    await flushViewer();
-    expect(document.activeElement).toBe(outline);
-
-    await act(async () => keydown(outline!, "Home"));
-    await flushViewer();
-    expect(document.activeElement).toBe(pages);
-
-    await act(async () => keydown(pages!, "End"));
-    await flushViewer();
-    expect(document.activeElement).toBe(outline);
+        .querySelector('[aria-label="Fit page width"]')
+        ?.getAttribute("aria-pressed"),
+    ).toBe("true");
 
     await act(async () => view.root.unmount());
   });
@@ -470,8 +537,7 @@ describe("PdfCanvasViewer", () => {
     expect(
       compact.container.querySelector('[aria-label="Dismiss PDF navigation"]'),
     ).toBeTruthy();
-    expect(document.activeElement?.getAttribute("role")).toBe("tab");
-    expect(document.activeElement?.textContent).toBe("Pages");
+    expect(isThumbnailGroup(document.activeElement)).toBe(true);
 
     await act(async () => {
       window.dispatchEvent(
@@ -490,7 +556,7 @@ describe("PdfCanvasViewer", () => {
         new KeyboardEvent("keydown", { cancelable: true, key: "Tab" }),
       );
     });
-    expect(document.activeElement?.textContent).toBe("Pages");
+    expect(isThumbnailGroup(document.activeElement)).toBe(true);
 
     await act(async () => {
       compact.container
@@ -986,7 +1052,6 @@ describe("PdfCanvasViewer", () => {
         pageOffset: 0.25,
         rotation: 0,
         sidebarOpen: false,
-        sidebarView: "outline",
         zoom: 1.4,
       },
       onReaderStateChange,
@@ -1061,7 +1126,7 @@ describe("PdfCanvasViewer", () => {
         page: 1,
         pageOffset: 0.5,
         sidebarOpen: false,
-        sidebarView: "outline",
+        sidebarView: "pages",
         zoom: 1.4,
       }),
     );
@@ -1178,7 +1243,9 @@ describe("PdfCanvasViewer", () => {
     });
     await act(async () => window.dispatchEvent(new Event("resize")));
 
-    view.container.querySelector<HTMLButtonElement>('[role="tab"]')?.focus();
+    view.container
+      .querySelector<HTMLElement>(".pdf-canvas-viewer__sidebar-scroll")
+      ?.focus();
     bodyWidth = 780;
     await act(async () => window.dispatchEvent(new Event("resize")));
     expect(document.activeElement?.getAttribute("aria-label")).toBe(
@@ -1200,7 +1267,7 @@ describe("PdfCanvasViewer", () => {
         ?.click();
     });
     await flushViewer();
-    expect(document.activeElement?.getAttribute("role")).toBe("tab");
+    expect(isThumbnailGroup(document.activeElement)).toBe(true);
 
     bodyWidth = 808;
     await act(async () => window.dispatchEvent(new Event("resize")));
