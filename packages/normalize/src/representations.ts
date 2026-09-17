@@ -101,6 +101,16 @@ function markdownFromHtml(
     filter: (node) => DROP_TAGS.has(node.nodeName),
     replacement: () => "",
   });
+  // Multi-line <code> outside <pre> is a code block (see the reader conversion's same rule).
+  service.addRule("standalone-code-block", {
+    filter: (node) => node.nodeName === "CODE" && node.parentNode?.nodeName !== "PRE" && (node.textContent ?? "").includes("\n"),
+    replacement: (_content, node) => {
+      const element = node as unknown as { getAttribute(name: string): string | null; textContent: string | null };
+      const lang = (element.getAttribute("class") ?? "").split(/\s+/).find((token) => /^(?:lang|language)-/.test(token))?.replace(/^(?:lang|language)-/, "") ?? "";
+      const text = (element.textContent ?? "").replace(/\n$/, "");
+      return `\n\n\`\`\`${lang}\n${text}\n\`\`\`\n\n`;
+    },
+  });
   service.addRule("safe-links", {
     filter: "a",
     replacement: (content, node) => {

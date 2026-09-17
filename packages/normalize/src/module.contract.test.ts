@@ -570,17 +570,12 @@ describe("ContentNormalizationModule", () => {
         }),
       ]),
     );
-    expect(document.losses).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "DUPLICATE_PAGE_TITLE_REMOVED",
-          sourceTag: "h1",
-        }),
-      ]),
-    );
+    // The duplicate is removed before conversion now (article.prune), so the
+    // document simply does not start with the title heading.
+    expect(result.article.materialization.provenance.rulesApplied).toContain("article.prune.duplicate-title@1");
     expect(readerDocumentV2Schema.safeParse(document).success).toBe(true);
     expect(result.article.materialization.provenance.rulesApplied).toContain(
-      "generic.remove-duplicate-page-title",
+      "article.prune.duplicate-title@1",
     );
     expect(readerV2?.content).not.toContain("newsletter signup");
     expect(readerV2?.content).not.toContain("compromised");
@@ -1110,14 +1105,9 @@ describe("ContentNormalizationModule", () => {
     expect(readerV2).toBeDefined();
     const document = JSON.parse(readerV2?.content ?? "{}");
     expect(JSON.stringify(document.children)).not.toContain('"value":"T"');
-    expect(document.losses).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "DUPLICATE_PAGE_TITLE_REMOVED",
-          sourceTag: "h2",
-        }),
-      ]),
-    );
+    // The duplicate is removed before conversion now (article.prune), so the
+    // document simply does not start with the title heading.
+    expect(result.article.materialization.provenance.rulesApplied).toContain("article.prune.duplicate-title@1");
   });
 
   it("returns a bounded sanitized plain-text fallback when malformed HTML exceeds structural limits", () => {

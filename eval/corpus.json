@@ -452,26 +452,9 @@
     "tags": []
   },
   {
-    "slug": "coolshell-rust",
-    "url": "https://coolshell.cn/articles/20845.html",
-    "framework": "wordpress",
-    "tags": [
-      "zh",
-      "code"
-    ]
-  },
-  {
     "slug": "medium-backprop",
     "url": "https://medium.com/@karpathy/yes-you-should-understand-backprop-e2f06eab496b",
     "framework": "medium",
-    "tags": [
-      "images"
-    ]
-  },
-  {
-    "slug": "bair-koala",
-    "url": "https://bair.berkeley.edu/blog/2023/04/03/koala/",
-    "framework": "jekyll",
     "tags": [
       "images"
     ]

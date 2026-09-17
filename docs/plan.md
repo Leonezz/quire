@@ -29,6 +29,7 @@
 - `eval/`：64 篇真实博客快照（`corpus.json` + `corpus/<slug>/page.html.gz`，gzip 后 6 MB），覆盖 Substack、Ghost、WordPress、Medium、Hugo、Jekyll、Quarto、Next.js、Movable Type 等；`pnpm --filter @read/eval fetch` 抓取，`pnpm --filter @read/eval eval` 跑全量并写 `eval/report.md`，`GOLDEN=1` 写缺失 golden、`GOLDEN=all` 重写。每篇一个 `expected.json`（结构摘要 + `reviewed` + `notes`），已全部人工审过一遍。
 - 首轮 58% → 100%（64/64，门槛 85%）。修掉的根因：预解析扫描器把多余闭合标签当超预算；没有唯一 `<article>` 根时根本不跑抽取器；"富结构保留率"拿整页导航去比正文。新增：JSON-LD / URL / 可见署名的日期作者补全；标题选择（站名、后缀、锚点符号、h2 回退）；无 `<pre>` 的多行 `<code>` 识别为代码块；`<br><br>` 分段；页内目录与尾部 related / share / newsletter 块的通用剪除（记入 `rulesApplied`）。
 - 阅读页：低质量横幅（抽取器分歧 / 仅摘要）带"打开原文"；纯文本降级横幅同样带链接。
+- 独立评审（Sonnet 子代理，`eval/quality-review.md`，2026-09-18）：36 通过 / 6 轻微 / 22 严重。按其前十项修复：正文重复标题（改为在 DOM 层删除并把其余 h1 降为 h2）、标题里的锚点符号与整标题链接、尾部相关文章 / 作者卡片 / 推广块与首部元信息行（`article-prune.ts` 展平包装层后按链接密度、推广词、日期署名行识别）、`<font>` + `<br><br>` 的段落、`\[…\]` 行内公式、站名 / UI 文字混进标题、中文日期、正文里的署名、`<pre>` 上的语言类名、无 `<pre>` 代码块的 Markdown 表示。
 - 已知残留（写在各篇 notes 里）：个别站点的元信息行 / 上下篇链接 / 语言切换列表；`<d-footnote>` 内联脚注未支持；这些留给 L3 站点 profile。
 - 未做（推后）：feed 摘要的"获取完整正文"动作属于 M1 来源接入。
 

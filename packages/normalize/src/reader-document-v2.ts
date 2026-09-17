@@ -41,6 +41,7 @@ const ACTIVE_TAGS = new Set([
   "style",
   "svg",
 ]);
+const INLINE_CONTAINER_TAGS = new Set(["font", "span", "b", "i", "em", "strong", "small", "big", "center"]);
 const BLOCK_TAGS = new Set([
   "address",
   "article",
@@ -431,6 +432,12 @@ type TextRunPiece = {
 
 function displayEnvironmentRanges(value: string) {
   const ranges: Array<{ end: number; source: string; start: number }> = [];
+  // \[ … \] inside running text is display math too (a footnote holding a formula).
+  for (const match of value.matchAll(/\\\[([\s\S]*?)\\\]/gu)) {
+    const start = match.index;
+    if (isEscaped(value, start)) continue;
+    ranges.push({ end: start + match[0].length, source: match[1] ?? "", start });
+  }
   for (const match of value.matchAll(DISPLAY_TEX_ENVIRONMENT)) {
     const start = match.index;
     if (isEscaped(value, start)) continue;
@@ -534,12 +541,20 @@ function flowFromParagraphPhrasing(
 /** Two <br> in a row inside one paragraph is how old hand-written pages separate paragraphs. */
 function paragraphsSplitOnDoubleBreaks(children: ReaderV2PhrasingNode[]): ReaderV2FlowNode[] {
   const groups: ReaderV2PhrasingNode[][] = [[]];
+  const isBreakLike = (node: ReaderV2PhrasingNode | undefined) =>
+    node?.type === "break" || (node?.type === "text" && node.value.trim().length === 0);
   for (let index = 0; index < children.length; index += 1) {
     const node = children[index]!;
-    if (node.type === "break" && children[index + 1]?.type === "break") {
-      while (children[index + 1]?.type === "break") index += 1;
-      groups.push([]);
-      continue;
+    // Two breaks with nothing but whitespace between them end the paragraph.
+    if (node.type === "break") {
+      let look = index + 1;
+      while (children[look]?.type === "text" && children[look]!.type === "text" && (children[look] as { value: string }).value.trim().length === 0) look += 1;
+      if (children[look]?.type === "break") {
+        index = look;
+        while (isBreakLike(children[index + 1])) index += 1;
+        groups.push([]);
+        continue;
+      }
     }
     groups[groups.length - 1]!.push(node);
   }
@@ -961,9 +976,12 @@ function imageFromElement(
 
 function languageFromCode(element: Element) {
   const token = classNames(element).find((value: string) =>
-    /^(?:lang|language)-/u.test(value),
+    /^(?:lang|language|highlight-source|hljs-|brush:\s*)/u.test(value),
   );
-  return token?.replace(/^(?:lang|language)-/u, "") || null;
+  const fromClass = token?.replace(/^(?:lang-|language-|highlight-source-|hljs-|brush:\s*)/u, "");
+  const fromData = propertyString(element, "dataLang") ?? propertyString(element, "dataLanguage");
+  const lang = (fromClass || fromData || "").toLowerCase();
+  return lang && lang !== "none" && lang !== "text" && lang !== "plaintext" ? lang : null;
 }
 
 function integerProperty(element: Element, name: string) {
@@ -1367,12 +1385,20 @@ function flowFromElement(
       value: bounded(context, textContent(element).replace(/\n$/u, "")),
     };
   }
+  // Readability leaves <p> inside <font>/<span> on hand-written pages; an inline
+  // container holding blocks is flow, otherwise its paragraphs would fuse.
+  if (
+    INLINE_CONTAINER_TAGS.has(element.tagName) &&
+    element.children.some((child) => isElement(child) && (child.tagName === "p" || BLOCK_TAGS.has(child.tagName)))
+  ) {
+    return flowFromChildren(element.children, path, context);
+  }
   if (element.tagName === "pre") {
     const code = element.children.find(
       (child): child is Element => isElement(child) && child.tagName === "code",
     );
     return {
-      lang: boundedNullable(context, languageFromCode(code ?? element)),
+      lang: boundedNullable(context, (code && languageFromCode(code)) ?? languageFromCode(element)),
       meta: null,
       type: "code",
       value: bounded(context, textContent(code ?? element).replace(/\n$/u, "")),

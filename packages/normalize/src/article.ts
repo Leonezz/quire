@@ -370,6 +370,17 @@ function authorName(value: unknown): string | undefined {
   return undefined;
 }
 
+/** A permalink date with a day is trusted over prose (sidebars carry other dates); a month-only permalink takes the day from prose in that month. */
+function publishedAtFromUrlOrText(source: string, text: string) {
+  const fromUrl = publishedAtFromUrl(source);
+  const fromText = publishedAtFromText(text);
+  if (!fromUrl) return fromText;
+  if (!fromText) return fromUrl;
+  const urlHasDay = /\/(?:19|20)\d{2}[/-](?:0[1-9]|1[0-2])[/-](?:0[1-9]|[12]\d|3[01])(?:\/|$|-)/u.test(new URL(source).pathname) || /\/(?:19|20)\d{2}\/[A-Z][a-z]{2}\/\d{1,2}\//u.test(new URL(source).pathname);
+  if (urlHasDay) return fromUrl;
+  return fromText.slice(0, 7) === fromUrl.slice(0, 7) ? fromText : fromUrl;
+}
+
 /** Blog permalinks often carry the only machine-readable date: /2015/05/21/slug or /2023/04/. */
 function publishedAtFromUrl(source: string): string | undefined {
   const path = new URL(source).pathname;
@@ -386,9 +397,48 @@ function publishedAtFromUrl(source: string): string | undefined {
   return normalizedPublishedAt(`${year}-${String(month).padStart(2, "0")}-${day!.padStart(2, "0")}T00:00:00Z`);
 }
 
+const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+
+/** The first stretch of visible text after the chrome is dropped: where a page states its date and author. */
+function leadingText(document: DocumentLike) {
+  const clone = document.cloneNode(true) as unknown as DocumentLike;
+  clone.querySelectorAll("script, style, noscript, nav, footer, header nav, [role='navigation'], [class*='comment']").forEach((element) => element.remove());
+  const text = (clone.body?.textContent ?? "").replace(/[ \t]+/gu, " ").replace(/\n\s*\n+/gu, "\n").trim();
+  return text.slice(0, 4000);
+}
+
+function monthNumber(name: string) {
+  const index = MONTHS.findIndex((month) => month.startsWith(name.toLowerCase().slice(0, 3)));
+  return index >= 0 ? index + 1 : undefined;
+}
+
+/** Dates written for readers near the top of the page: 2019年9月5日, January 18, 2022, 18 January 2022, 2022-01-18. */
+function publishedAtFromText(text: string): string | undefined {
+  const cjk = /((?:19|20)\d{2})\s*年\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日/u.exec(text);
+  if (cjk) return normalizedPublishedAt(`${cjk[1]}-${cjk[2]!.padStart(2, "0")}-${cjk[3]!.padStart(2, "0")}T00:00:00Z`);
+  const iso = /\b((?:19|20)\d{2})-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])\b/u.exec(text);
+  if (iso) return normalizedPublishedAt(`${iso[1]}-${iso[2]}-${iso[3]}T00:00:00Z`);
+  const mdy = /\b(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+((?:19|20)\d{2})\b/u.exec(text);
+  if (mdy) { const month = monthNumber(mdy[1]!); if (month) return normalizedPublishedAt(`${mdy[3]}-${String(month).padStart(2, "0")}-${mdy[2]!.padStart(2, "0")}T00:00:00Z`); }
+  const dmy = /\b(\d{1,2})(?:st|nd|rd|th)?\s+(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?,?\s+((?:19|20)\d{2})\b/u.exec(text);
+  if (dmy) { const month = monthNumber(dmy[2]!); if (month) return normalizedPublishedAt(`${dmy[3]}-${String(month).padStart(2, "0")}-${dmy[1]!.padStart(2, "0")}T00:00:00Z`); }
+  return undefined;
+}
+
+/** "By Ben Thompson", "作者： 阮一峰", "Written by Joel Spolsky" on their own line near the top. */
+function bylineFromText(text: string): string | undefined {
+  const head = text.slice(0, 2500);
+  const labelled = /(?:^|\n|\d{4}\s*|[·•|]\s*)(?:by|written by|posted by|author|作者)[\s:：]+([^\n|·•—–]{2,60}?)\s*(?:\n|$|\s{2,}|[·•|])/iu.exec(head);
+  if (labelled) return cleanByline(labelled[1]);
+  // "May 15, 2015 · The Rust Core Team": a name right after the date on the same line.
+  const afterDate = /(?:\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\.? \d{1,2},? \d{4}|\d{4}-\d{2}-\d{2})\s*[·•|—–-]\s*([A-Z][^\n·•|]{2,50}?)\s*(?:\n|$|[·•|])/u.exec(head);
+  if (afterDate && !/min read|comments?|share|tweet|\d/iu.test(afterDate[1]!)) return cleanByline(afterDate[1]);
+  return undefined;
+}
+
 /** Visible author markup that pages use when they have no author meta tag. */
 function bylineFromMarkup(document: DocumentLike): string | undefined {
-  for (const selector of ["a[rel~='author']", "[itemprop~='author'] [itemprop~='name']", "[itemprop~='author']", ".author-name", ".byline .author", "[class~='byline'] a"]) {
+  for (const selector of ["a[rel~='author']", "[itemprop~='author'] [itemprop~='name']", "[itemprop~='author']", ".author-name", ".byline .author", "[class~='byline'] a", "[class~='byline']", "[class~='author']", "[class*='post-author']", "[class*='author-name']"]) {
     for (const element of Array.from(document.querySelectorAll(selector))) {
       // Comment threads carry rel=author links for every commenter.
       if (element.closest("[class*='comment'], [id*='comment'], footer, nav")) continue;
@@ -403,7 +453,7 @@ function bylineFromMarkup(document: DocumentLike): string | undefined {
 function cleanByline(value: string | undefined) {
   if (!value) return undefined;
   const cleaned = value
-    .replace(/^(by|author|posted by|written by)[:\s]+/iu, "")
+    .replace(/^(by|author|posted by|written by|作者)[:：\s]+/iu, "")
     .replace(/[,\s]*(view all posts.*|all posts by.*|posted (on|in).*|\d{1,2}\s+\w+\s+\d{4}.*|\w+\s+\d{1,2},\s+\d{4}.*)$/iu, "")
     .trim();
   return cleaned.length >= 2 && cleaned.length <= 120 && !/^(by|author)$/iu.test(cleaned) ? cleaned : undefined;
@@ -436,13 +486,19 @@ function offlineExtractorDocument(
   return document;
 }
 
+/** Heading text without the controls some sites nest inside their h1 (save buttons, tooltips, icons). */
+function headingOwnText(element: Element) {
+  const clone = element.cloneNode(true) as Element;
+  clone.querySelectorAll("button, [role='button'], svg, [aria-hidden='true'], [class*='tooltip'], [class*='devsite-'], input, select").forEach((node) => node.remove());
+  return normalizedOptionalString(clone.textContent, 500);
+}
+
 function preferredArticleTitle(document: DocumentLike) {
   for (const selector of ["article h1", "main h1", "[role='main'] h1", "h1"]) {
-    const title = normalizedOptionalString(
-      document.querySelector(selector)?.textContent,
-      500,
-    );
-    if (title) return title;
+    for (const heading of Array.from(document.querySelectorAll(selector))) {
+      const title = headingOwnText(heading);
+      if (title) return title;
+    }
   }
   return undefined;
 }
@@ -513,8 +569,10 @@ function withoutSiteSuffix(value: string, names: Set<string>, label: string) {
 }
 
 /** First candidate that, once cleaned, is a title of its own rather than the site's name or a number. */
-function chooseArticleTitle(document: DocumentLike, source: string, candidates: readonly (string | undefined)[]) {
+function chooseArticleTitle(document: DocumentLike, source: string, candidates: readonly (string | undefined)[], byline?: string) {
   const names = siteNames(document, source);
+  // "GPS – Bartosz Ciechanowski": the author's name is not part of the title either.
+  if (byline) for (const name of byline.split(/,|&| and /u)) { const v = name.trim().toLowerCase(); if (v.length >= 4) names.add(v); }
   const label = hostLabel(document, source);
   const cleanedCandidates = candidates
     .map((candidate) => (candidate ? stripTitleAnchors(withoutSiteSuffix(stripTitleAnchors(candidate), names, label)) : ""))
@@ -538,6 +596,12 @@ function preferredExtractedTitle(html: string) {
   const document = parseHTML(`<html><body>${html}</body></html>`)
     .document as unknown as DocumentLike;
   return preferredArticleTitle(document);
+}
+
+function sameTitle(a: string | undefined, b: string | undefined) {
+  if (!a || !b) return false;
+  const norm = (value: string) => value.replace(/\s+/gu, " ").trim().toLowerCase();
+  return norm(a) === norm(b);
 }
 
 function metaContent(document: DocumentLike, selectors: readonly string[]) {
@@ -1062,8 +1126,9 @@ export function normalizeArticleCapture(
         "meta[name='author']",
         "meta[property='article:author']",
         "meta[name='byl']",
-      ]) ?? cleanByline(structuredDataMetadata(document).author) ?? bylineFromMarkup(document);
+      ]) ?? cleanByline(structuredDataMetadata(document).author) ?? bylineFromMarkup(document) ?? bylineFromText(leadingText(document));
     const structured = structuredDataMetadata(document);
+    const leadText = leadingText(document);
     const rawPublishedAt =
       normalizedPublishedAt(
         metaContent(document, [
@@ -1073,7 +1138,7 @@ export function normalizeArticleCapture(
         ]) ??
           structured.datePublished ??
           document.querySelector("time[datetime]")?.getAttribute("datetime"),
-      ) ?? publishedAtFromUrl(source);
+      ) ?? publishedAtFromUrlOrText(source, leadText);
     let defuddle: ExtractionCandidate | undefined;
     let readability: ExtractionCandidate | undefined;
     const siteAdapterApplication = applyArticleSiteAdapter({
@@ -1232,18 +1297,26 @@ export function normalizeArticleCapture(
       document,
       source,
       // The article's own h1 first; the page metadata only when the h1 turns
-      // out to be the site header or something else that is not a title.
-      [
-        preferredExtractedTitle(selected.content),
-        preferredTitle,
-        metaContent(document, ["meta[property='og:title']", "meta[name='twitter:title']"]),
-        normalizedOptionalString(document.title, 500),
-        selected.title,
-        // Sites whose h1 is the site name put the post title in the first h2.
-        firstHeadingText(selected.content, "h2"),
-      ],
+      // out to be the site header or something else that is not a title. When
+      // the page's h1 and og:title agree, that pair outranks whatever h1 the
+      // extractor kept (Substack uses h1 for section headings too).
+      (() => {
+        const ogTitle = metaContent(document, ["meta[property='og:title']", "meta[name='twitter:title']"]);
+        const agreed = sameTitle(preferredTitle, ogTitle) ? [preferredTitle] : [];
+        return [
+          ...agreed,
+          preferredExtractedTitle(selected.content),
+          preferredTitle,
+          ogTitle,
+          normalizedOptionalString(document.title, 500),
+          selected.title,
+          // Sites whose h1 is the site name put the post title in the first h2.
+          firstHeadingText(selected.content, "h2"),
+        ];
+      })(),
+      cleanByline(defuddle?.byline ?? readability?.byline) ?? rawByline,
     );
-    const pruned = pruneArticleChrome(selected.content);
+    const pruned = pruneArticleChrome(selected.content, { title, siteNames: siteNames(document, source), byline: cleanByline(selected.byline) ?? rawByline });
     const representationResult = createRepresentations({
       baseUri: source,
       content: pruned.content,
