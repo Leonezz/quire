@@ -28,7 +28,7 @@ function Frame({ pinned = false }: { pinned?: boolean }) {
   return (
     <div className="relative m-6 h-[480px] w-[640px] overflow-hidden rounded-panel bg-content shadow-[0_0_0_1px_var(--separator-soft)]">
       <p className="p-6 text-[13px] text-label-2">Current section: {entries.find((entry) => entry.id === active)?.label}</p>
-      <div className="absolute inset-y-4 right-2 flex items-center">
+      <div className="absolute inset-y-4 right-4 flex items-center">
         <TocRail aria-label="Contents" entries={entries} activeId={active} onSelect={setActive} pinned={pinned} />
       </div>
     </div>
@@ -43,13 +43,20 @@ export const Rail: Story = {
     const buttons = within(nav).getAllByRole("button");
     await expect(buttons).toHaveLength(13);
     await expect(within(nav).getByRole("button", { name: "Attention" })).toHaveAttribute("aria-current", "location");
-    await expect(nav).not.toHaveAttribute("data-expanded");
-    await userEvent.hover(nav);
-    await expect(nav).toHaveAttribute("data-expanded", "true");
-    await userEvent.unhover(nav);
+    // Quiet by default: no labels, no magnification.
+    await expect(nav).not.toHaveAttribute("data-magnified");
+    await expect(within(nav).queryByText("Training")).toBeNull();
+    // Hovering a tick magnifies locally and shows only that heading's label.
+    await userEvent.hover(buttons[10]!);
+    await expect(nav).toHaveAttribute("data-magnified", "true");
+    await expect(within(nav).getByText("Training")).toBeVisible();
+    await expect(within(nav).queryByText("Results")).toBeNull();
+    await userEvent.unhover(buttons[10]!);
+    await expect(within(nav).queryByText("Training")).toBeNull();
+    // Keyboard: focus magnifies the focused entry; arrows move; Enter selects.
     await userEvent.tab();
     await expect(buttons[0]).toHaveFocus();
-    await expect(nav).toHaveAttribute("data-expanded", "true");
+    await expect(within(nav).getByText("Introduction")).toBeVisible();
     await userEvent.keyboard("{ArrowDown}{ArrowDown}{Enter}");
     await expect(canvas.getByText("Current section: Model architecture")).toBeInTheDocument();
     await expect(within(nav).getByRole("button", { name: "Model architecture" })).toHaveAttribute("aria-current", "location");
@@ -58,4 +65,11 @@ export const Rail: Story = {
   },
 };
 
-export const Pinned: Story = { render: () => <Frame pinned /> };
+export const Pinned: Story = {
+  render: () => <Frame pinned />,
+  play: async ({ canvasElement }) => {
+    const nav = within(canvasElement).getByRole("navigation", { name: "Contents" });
+    await expect(nav).toHaveAttribute("data-expanded", "true");
+    await expect(within(nav).getByText("Conclusion")).toBeVisible();
+  },
+};

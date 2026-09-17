@@ -59,6 +59,14 @@ import {
   type PdfSearchResult,
 } from "./pdf-text-search";
 import {
+  nextPinchScale,
+  PINCH_COMMIT_DELAY_MS,
+  scrollPositionAfterZoom,
+  type PinchGesture,
+  type ScrollAnchor,
+  type ScrollPosition,
+} from "./pdf-zoom-gesture";
+import {
   MAX_PDF_ZOOM,
   MIN_PDF_ZOOM,
   normalizedReaderRotation,
@@ -96,9 +104,6 @@ export type PdfCanvasViewerHandle = Readonly<{
 // `onOutlineChange`. The view id stays in the persisted state for compatibility.
 const PDF_SIDEBAR_VIEW: PdfReaderSidebarView = "pages";
 const SIDEBAR_HEADING_ID = "pdf-navigation-sidebar-heading";
-// Chromium reports a trackpad pinch as wheel events with ctrlKey set; the
-// factor keeps one notch of deltaY close to one zoom-button step.
-const PINCH_ZOOM_SENSITIVITY = 0.01;
 
 export type PdfTextLayerStatus = "absent" | "available" | "unknown" | boolean;
 
@@ -326,8 +331,15 @@ export const PdfCanvasViewer = forwardRef<
   });
   const zoomRef = useRef(startingState.zoom);
   const fitWidthRef = useRef(startingState.fitWidth);
-  const pinchDeltaRef = useRef(0);
+  // A pinch only CSS-scales the pages container; `pinchGesture` is the rendered
+  // snapshot of `pinchGestureRef`, updated at most once per animation frame.
+  const [pinchGesture, setPinchGesture] = useState<PinchGesture>();
+  const pinchGestureRef = useRef<PinchGesture | undefined>(undefined);
   const pinchFrameRef = useRef<number | undefined>(undefined);
+  const pinchTimerRef = useRef<number | undefined>(undefined);
+  const pagesRef = useRef<HTMLDivElement | null>(null);
+  // Scroll offsets to apply once the pages have re-laid out at a committed zoom.
+  const pendingScrollRef = useRef<ScrollPosition | undefined>(undefined);
   const onOutlineChangeRef = useRef(onOutlineChange);
 
   const knownPageCount = loadedPageCount || Math.max(0, pageCountHint);
@@ -877,40 +889,52 @@ export const PdfCanvasViewer = forwardRef<
     window.setTimeout(() => searchInputRef.current?.focus(), 0);
   }, []);
 
-  // Zooming re-lays out every page, so the reading position is queued as a
-  // pending navigation and restored once the new page sizes have rendered.
+  // Zooming re-lays out every page. The scroll offsets that keep the document
+  // point under `anchor` (default: the viewport centre) in place are computed
+  // arithmetically here and applied in a layout effect after the re-layout.
   // The refs let the wheel and keyboard handlers stay stable across renders.
-  const anchorReadingPosition = useCallback(() => {
-    pendingNavigationRef.current = { ...readerPositionRef.current };
-  }, []);
-  const applyZoom = useCallback(
-    (compute: (zoom: number) => number) => {
-      const next = clampZoom(compute(zoomRef.current));
-      if (next === zoomRef.current && !fitWidthRef.current) return;
+  const commitZoom = useCallback(
+    (next: number, nextFitWidth: boolean, anchor?: ScrollAnchor) => {
+      const previous = zoomRef.current;
+      if (next === previous && nextFitWidth === fitWidthRef.current) return;
+      const root = scrollRef.current;
+      if (root) {
+        const pages = pagesRef.current;
+        pendingScrollRef.current = scrollPositionAfterZoom(
+          { left: root.scrollLeft, top: root.scrollTop },
+          anchor ?? { x: root.clientWidth / 2, y: root.clientHeight / 2 },
+          next / previous,
+          pages?.offsetLeft ?? 0,
+          pages?.offsetTop ?? 0,
+        );
+      }
       zoomRef.current = next;
-      fitWidthRef.current = false;
-      anchorReadingPosition();
-      setFitWidth(false);
+      fitWidthRef.current = nextFitWidth;
+      pinchGestureRef.current = undefined;
+      setPinchGesture(undefined);
+      setFitWidth(nextFitWidth);
       setZoom(next);
     },
-    [anchorReadingPosition],
+    [],
   );
   const zoomOut = useCallback(
-    () => applyZoom((value) => value - ZOOM_STEP),
-    [applyZoom],
+    () => commitZoom(clampZoom(zoomRef.current - ZOOM_STEP), false),
+    [commitZoom],
   );
   const zoomIn = useCallback(
-    () => applyZoom((value) => value + ZOOM_STEP),
-    [applyZoom],
+    () => commitZoom(clampZoom(zoomRef.current + ZOOM_STEP), false),
+    [commitZoom],
   );
-  const fitToWidth = useCallback(() => {
-    if (fitWidthRef.current && zoomRef.current === 1) return;
-    zoomRef.current = 1;
-    fitWidthRef.current = true;
-    anchorReadingPosition();
-    setFitWidth(true);
-    setZoom(1);
-  }, [anchorReadingPosition]);
+  const fitToWidth = useCallback(() => commitZoom(1, true), [commitZoom]);
+
+  useLayoutEffect(() => {
+    const pending = pendingScrollRef.current;
+    const root = scrollRef.current;
+    if (!pending || !root) return;
+    pendingScrollRef.current = undefined;
+    root.scrollLeft = pending.left;
+    root.scrollTop = pending.top;
+  }, [fitWidth, zoom]);
 
   useEffect(() => {
     const trapFocusInDrawer = (event: KeyboardEvent) => {
@@ -979,29 +1003,74 @@ export const PdfCanvasViewer = forwardRef<
   useEffect(() => {
     const root = scrollRef.current;
     if (!root) return;
-    // Bursts of pinch events are coalesced into one zoom change per frame.
-    const flushPinch = () => {
+    const cancelPinchScheduling = () => {
+      if (pinchFrameRef.current !== undefined)
+        window.cancelAnimationFrame(pinchFrameRef.current);
+      if (pinchTimerRef.current !== undefined)
+        window.clearTimeout(pinchTimerRef.current);
       pinchFrameRef.current = undefined;
-      const delta = pinchDeltaRef.current;
-      pinchDeltaRef.current = 0;
-      if (!delta) return;
-      applyZoom((value) => value * Math.exp(-delta * PINCH_ZOOM_SENSITIVITY));
+      pinchTimerRef.current = undefined;
+    };
+    // The rendered transform follows the ref at most once per frame.
+    const renderPinchFrame = () => {
+      pinchFrameRef.current = undefined;
+      setPinchGesture(pinchGestureRef.current);
+    };
+    // The gesture is over once no pinch event has arrived for a short while;
+    // only then does the real zoom (and pdf.js re-render) happen, once.
+    const commitPinch = () => {
+      pinchTimerRef.current = undefined;
+      const gesture = pinchGestureRef.current;
+      if (!gesture) return;
+      commitZoom(
+        clampZoom(zoomRef.current * gesture.scale),
+        false,
+        gesture.anchor,
+      );
     };
     const handleWheel = (event: WheelEvent) => {
       if (!event.ctrlKey && !event.metaKey) return;
       event.preventDefault();
-      pinchDeltaRef.current += event.deltaY;
-      pinchFrameRef.current ??= window.requestAnimationFrame(flushPinch);
+      const rootRect = root.getBoundingClientRect();
+      const anchor = {
+        x: event.clientX - rootRect.left,
+        y: event.clientY - rootRect.top,
+      };
+      const pages = pagesRef.current;
+      const current = pinchGestureRef.current;
+      pinchGestureRef.current = {
+        anchor,
+        // The origin is fixed at the gesture start: the transformed container's
+        // geometry would otherwise feed back into itself on later events.
+        originX:
+          current?.originX ??
+          anchor.x + root.scrollLeft - (pages?.offsetLeft ?? 0),
+        originY:
+          current?.originY ??
+          anchor.y + root.scrollTop - (pages?.offsetTop ?? 0),
+        scale: nextPinchScale(
+          current?.scale ?? 1,
+          event.deltaY,
+          zoomRef.current,
+          MIN_PDF_ZOOM,
+          MAX_PDF_ZOOM,
+        ),
+      };
+      pinchFrameRef.current ??= window.requestAnimationFrame(renderPinchFrame);
+      if (pinchTimerRef.current !== undefined)
+        window.clearTimeout(pinchTimerRef.current);
+      pinchTimerRef.current = window.setTimeout(
+        commitPinch,
+        PINCH_COMMIT_DELAY_MS,
+      );
     };
     root.addEventListener("wheel", handleWheel, { passive: false });
     return () => {
       root.removeEventListener("wheel", handleWheel);
-      if (pinchFrameRef.current !== undefined)
-        window.cancelAnimationFrame(pinchFrameRef.current);
-      pinchFrameRef.current = undefined;
-      pinchDeltaRef.current = 0;
+      cancelPinchScheduling();
+      pinchGestureRef.current = undefined;
     };
-  }, [applyZoom, renderedPageCount]);
+  }, [commitZoom, renderedPageCount]);
 
   useEffect(() => {
     const request = ++searchRequestRef.current;
@@ -1279,7 +1348,7 @@ export const PdfCanvasViewer = forwardRef<
             aria-label="Zoom level"
             className="pdf-canvas-viewer__zoom-level"
           >
-            {Math.round(zoom * 100)}%
+            {Math.round(zoom * (pinchGesture?.scale ?? 1) * 100)}%
           </output>
           <button
             aria-label="Zoom in"
@@ -1514,7 +1583,19 @@ export const PdfCanvasViewer = forwardRef<
             role="region"
             tabIndex={0}
           >
-            <div className="pdf-canvas-viewer__pages">
+            <div
+              className="pdf-canvas-viewer__pages"
+              ref={pagesRef}
+              style={
+                pinchGesture
+                  ? {
+                      transform: `scale(${pinchGesture.scale})`,
+                      transformOrigin: `${pinchGesture.originX}px ${pinchGesture.originY}px`,
+                      willChange: "transform",
+                    }
+                  : undefined
+              }
+            >
               {renderedPageCount ? (
                 Array.from({ length: renderedPageCount }, (_, index) => {
                   const page = index + 1;

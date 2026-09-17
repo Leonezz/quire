@@ -184,6 +184,19 @@ vi.mock("react-pdf", () => ({
 
 import { PdfCanvasViewer, type PdfCanvasViewerHandle } from "./PdfCanvasViewer";
 import { canonicalPdfRect, displayedPdfRect } from "./pdf-page-geometry";
+import { PINCH_COMMIT_DELAY_MS } from "./pdf-zoom-gesture";
+
+// Pinch tests drive the per-frame transform and the settle timeout by hand.
+function useFakeGestureTimers() {
+  vi.useFakeTimers({
+    toFake: [
+      "setTimeout",
+      "clearTimeout",
+      "requestAnimationFrame",
+      "cancelAnimationFrame",
+    ],
+  });
+}
 
 (
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
@@ -395,6 +408,15 @@ describe("PdfCanvasViewer", () => {
     expect(zoomLevel()).toBe(100);
     expect(fitWidthPressed()).toBe("true");
 
+    const pages = view.container.querySelector<HTMLElement>(
+      ".pdf-canvas-viewer__pages",
+    )!;
+    const renderedWidth = () =>
+      view.container
+        .querySelector(".react-pdf__Page")
+        ?.getAttribute("data-render-width");
+    const widthBeforePinch = renderedWidth();
+    useFakeGestureTimers();
     const pinches = [0, 1].map(
       () =>
         new WheelEvent("wheel", {
@@ -407,10 +429,84 @@ describe("PdfCanvasViewer", () => {
     await act(async () => {
       for (const pinch of pinches) region.dispatchEvent(pinch);
     });
-    await flushAnimationFrame();
+    await act(async () => {
+      vi.advanceTimersByTime(16);
+    });
     expect(pinches.every((pinch) => pinch.defaultPrevented)).toBe(true);
+    // While the fingers are down only a CSS transform and the provisional
+    // label move; the real zoom (and pdf.js render width) stays untouched.
+    expect(zoomLevel()).toBeGreaterThan(100);
+    expect(pages.style.transform).toMatch(/^scale\(/);
+    expect(pages.style.willChange).toBe("transform");
+    expect(fitWidthPressed()).toBe("true");
+    expect(renderedWidth()).toBe(widthBeforePinch);
+
+    await act(async () => {
+      vi.advanceTimersByTime(PINCH_COMMIT_DELAY_MS + 10);
+    });
     expect(zoomLevel()).toBeGreaterThan(100);
     expect(fitWidthPressed()).toBe("false");
+    expect(pages.style.transform).toBe("");
+    expect(renderedWidth()).not.toBe(widthBeforePinch);
+
+    await act(async () => view.root.unmount());
+  });
+
+  it("keeps the document point under the cursor stable across a zoom commit", async () => {
+    const view = renderViewer({ pageCount: 3 });
+    await act(async () => view.render());
+    await flushViewer();
+
+    const root = view.container.querySelector<HTMLElement>(
+      ".pdf-canvas-viewer__page-scroll",
+    )!;
+    const pages = view.container.querySelector<HTMLElement>(
+      ".pdf-canvas-viewer__pages",
+    )!;
+    const zoomLevel = () =>
+      view.container.querySelector('[aria-label="Zoom level"]')?.textContent;
+    Object.defineProperties(root, {
+      clientHeight: { configurable: true, value: 500 },
+      clientWidth: { configurable: true, value: 800 },
+      scrollLeft: { configurable: true, value: 0, writable: true },
+      scrollTop: { configurable: true, value: 300, writable: true },
+    });
+
+    useFakeGestureTimers();
+    await act(async () => {
+      root.dispatchEvent(
+        new WheelEvent("wheel", {
+          bubbles: true,
+          cancelable: true,
+          clientX: 200,
+          clientY: 100,
+          ctrlKey: true,
+          deltaY: -50,
+        }),
+      );
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(16);
+    });
+    // exp(50 * 0.01) ≈ 1.6487, scaled around the cursor's document point.
+    expect(zoomLevel()).toBe("165%");
+    expect(pages.style.transformOrigin).toBe("200px 400px");
+    expect(root.scrollTop).toBe(300);
+
+    await act(async () => {
+      vi.advanceTimersByTime(PINCH_COMMIT_DELAY_MS + 10);
+    });
+    expect(zoomLevel()).toBe("165%");
+    expect(root.scrollTop).toBeCloseTo((300 + 100) * 1.65 - 100);
+    expect(root.scrollLeft).toBeCloseTo((0 + 200) * 1.65 - 200);
+
+    // Keyboard zoom commits at once and anchors on the viewport centre.
+    const topBeforeKeyboard = root.scrollTop;
+    await act(async () => keydown(window, "=", { metaKey: true }));
+    expect(zoomLevel()).toBe("175%");
+    expect(root.scrollTop).toBeCloseTo(
+      (topBeforeKeyboard + 250) * (1.75 / 1.65) - 250,
+    );
 
     await act(async () => view.root.unmount());
   });

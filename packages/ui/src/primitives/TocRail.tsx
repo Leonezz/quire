@@ -12,41 +12,38 @@ export interface TocRailProps {
   entries: readonly TocEntry[];
   activeId?: string | undefined;
   onSelect: (id: string) => void;
-  /** Keeps the labels open without hover (the `t` toggle); hover and keyboard focus open them anyway. */
+  /** Opens the full label list (the `t` toggle). Without it the rail is a quiet column of ticks. */
   pinned?: boolean | undefined;
   "aria-label": string;
   className?: string | undefined;
 }
 
-const TICK_BY_LEVEL: Record<number, number> = { 1: 18, 2: 14, 3: 10 };
-const ACTIVE_TICK = 30;
-/** Ticks next to the active one grow a little, like a fisheye, so the eye finds the position. */
-const NEIGHBOUR_BONUS = [0, 6, 3, 1];
+const TICK_BY_LEVEL: Record<number, number> = { 1: 14, 2: 10, 3: 7 };
+/** How much the tick under the pointer (or keyboard focus) grows, and its neighbours by distance. */
+const MAGNIFY = [16, 10, 5, 2];
+const ROW = 12;
 
-function tickWidth(entry: TocEntry, index: number, activeIndex: number): number {
-  if (index === activeIndex) return ACTIVE_TICK;
-  const base = TICK_BY_LEVEL[Math.min(entry.level, 3)] ?? 8;
-  const distance = Math.abs(index - activeIndex);
-  return base + (activeIndex >= 0 ? NEIGHBOUR_BONUS[distance] ?? 0 : 0);
+function baseTick(entry: TocEntry) {
+  return TICK_BY_LEVEL[Math.min(entry.level, 3)] ?? 6;
 }
 
 /**
- * Table of contents as a rail of ticks: one tick per heading, the current one dark and long.
- * Hovering, focusing or pinning opens the labels beside the ticks. Arrow keys move between entries.
+ * Table of contents as a rail of short ticks: one per heading, the current one dark.
+ * Under the pointer the ticks nearby grow and that heading's label appears beside the rail;
+ * keyboard focus does the same for the focused entry. Pinning shows every label.
  */
 export function TocRail({ entries, activeId, onSelect, pinned = false, className, ...props }: TocRailProps) {
-  const [hovered, setHovered] = useState(false);
-  const [focused, setFocused] = useState(false);
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const [focusIndex, setFocusIndex] = useState<number | null>(null);
   const listRef = useRef<HTMLOListElement>(null);
-  const expanded = pinned || hovered || focused;
   const activeIndex = entries.findIndex((entry) => entry.id === activeId);
+  const magnifyIndex = hoverIndex ?? focusIndex;
+  const magnified = !pinned && magnifyIndex !== null;
 
-  // When the labels open, keep the current section in view.
   useEffect(() => {
-    if (!expanded || activeIndex < 0) return;
-    const item = listRef.current?.children[activeIndex] as HTMLElement | undefined;
-    item?.scrollIntoView({ block: "nearest" });
-  }, [expanded, activeIndex]);
+    if (!pinned || activeIndex < 0) return;
+    (listRef.current?.children[activeIndex] as HTMLElement | undefined)?.scrollIntoView({ block: "nearest" });
+  }, [pinned, activeIndex]);
 
   const onKeyDown = (event: KeyboardEvent<HTMLOListElement>) => {
     const buttons = Array.from(listRef.current?.querySelectorAll<HTMLButtonElement>("button") ?? []);
@@ -61,53 +58,61 @@ export function TocRail({ entries, activeId, onSelect, pinned = false, className
   return (
     <nav
       aria-label={props["aria-label"]}
-      data-expanded={expanded || undefined}
-      className={cx("group/toc pointer-events-auto flex max-h-full flex-col justify-center", className)}
-      onPointerEnter={() => setHovered(true)}
-      onPointerLeave={() => setHovered(false)}
-      onFocus={() => setFocused(true)}
-      onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocused(false); }}
+      data-expanded={pinned || undefined}
+      data-magnified={magnified || undefined}
+      className={cx("group/toc pointer-events-auto relative flex max-h-full flex-col justify-center", className)}
     >
       <ol
         ref={listRef}
         onKeyDown={onKeyDown}
+        onPointerLeave={() => setHoverIndex(null)}
+        onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocusIndex(null); }}
         className={cx(
-          "m-0 flex list-none flex-col p-0 transition-[padding,background-color,box-shadow] duration-150",
-          expanded ? "glass-strong max-h-full gap-0 overflow-y-auto rounded-card py-2 pl-2.5 pr-3" : "gap-0 overflow-hidden py-1 pr-1",
+          "m-0 flex list-none flex-col p-0 transition-[background-color,box-shadow,padding] duration-150",
+          pinned ? "glass-strong max-h-full overflow-y-auto rounded-card py-2 pl-2.5 pr-3" : "overflow-visible py-1 pl-6 pr-1",
         )}
-        style={expanded ? undefined : { maxHeight: "100%" }}
       >
         {entries.map((entry, index) => {
           const active = index === activeIndex;
+          const distance = magnifyIndex === null ? Number.POSITIVE_INFINITY : Math.abs(index - magnifyIndex);
+          const grow = magnified ? MAGNIFY[distance] ?? 0 : 0;
+          const width = pinned ? (active ? 14 : 8) : baseTick(entry) + grow;
+          const showLabel = pinned || (magnified && distance === 0);
           return (
-            <li key={entry.id} className={cx("flex items-center justify-end", expanded ? "h-6" : "h-3")}>
+            <li key={entry.id} onPointerEnter={() => { if (!pinned) setHoverIndex(index); }} className={cx("relative flex items-center justify-end", pinned ? "h-6" : "")} style={pinned ? undefined : { height: `${ROW}px` }}>
               <button
                 type="button"
                 aria-label={entry.label}
                 aria-current={active ? "location" : undefined}
                 onClick={() => onSelect(entry.id)}
+                onFocus={() => setFocusIndex(index)}
                 className={cx(
-                  "flex h-full w-full cursor-default items-center justify-end gap-2.5 rounded-[6px] border-0 bg-transparent px-1 text-right outline-none",
-                  "data-[focus-visible]:ring-[3px] focus-visible:ring-[3px] focus-visible:ring-accent-ring",
-                  expanded && "hover:bg-fill",
+                  "flex h-full w-full cursor-default items-center justify-end gap-2.5 rounded-[6px] border-0 bg-transparent px-1 text-right outline-none focus-visible:ring-[3px] focus-visible:ring-accent-ring",
+                  pinned && "hover:bg-fill",
                 )}
               >
+                {pinned ? (
+                  <span
+                    className={cx("max-w-[220px] truncate text-[12.5px] leading-4", active ? "font-semibold text-label" : entry.level >= 3 ? "text-label-3" : "text-label-2")}
+                    style={{ paddingLeft: `${(Math.min(entry.level, 3) - 1) * 10}px` }}
+                  >
+                    {entry.label}
+                  </span>
+                ) : null}
+                <i
+                  aria-hidden="true"
+                  className={cx("block h-[2px] shrink-0 rounded-full transition-[width,background-color] duration-100", active ? "bg-label" : grow > 0 ? "bg-label-2" : "bg-label-4")}
+                  style={{ width: `${width}px` }}
+                />
+              </button>
+              {!pinned && showLabel ? (
                 <span
-                  className={cx(
-                    "truncate text-[12.5px] leading-4 transition-opacity duration-150",
-                    expanded ? "max-w-[220px] opacity-100" : "hidden",
-                    active ? "font-semibold text-label" : entry.level >= 3 ? "text-label-3" : "text-label-2",
-                  )}
-                  style={expanded ? { paddingLeft: `${(Math.min(entry.level, 3) - 1) * 10}px` } : undefined}
+                  role="presentation"
+                  className="glass-strong pointer-events-none absolute right-full top-1/2 mr-3 max-w-[260px] -translate-y-1/2 truncate whitespace-nowrap rounded-[9px] px-2.5 py-1 text-[12.5px] font-medium leading-4 text-label"
                 >
                   {entry.label}
                 </span>
-                <i
-                  aria-hidden="true"
-                  className={cx("block h-[2px] shrink-0 rounded-full transition-[width,background-color] duration-150", active ? "bg-label" : "bg-label-4")}
-                  style={{ width: `${expanded ? (active ? 14 : 8) : tickWidth(entry, index, activeIndex)}px` }}
-                />
-              </button>
+              ) : null}
             </li>
           );
         })}
