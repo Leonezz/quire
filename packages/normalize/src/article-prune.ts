@@ -315,7 +315,9 @@ function isMetaOnly(text: string, byline: string | undefined) {
 
 /** Meta lines before the first real paragraph: "30 May 2007 — 3 min read — Comments", share rows, link-only crumbs. */
 function isChromeClass(element: Element) {
-  return CHROME_CLASS.test(`${element.getAttribute("class") ?? ""} ${element.id}`);
+  if (!CHROME_CLASS.test(`${element.getAttribute("class") ?? ""} ${element.id}`)) return false;
+  // A "sidebar" or "aside" that carries headings, code or figures is content the author placed there.
+  return element.querySelector("h1, h2, h3, pre, table, figure, blockquote") === null;
 }
 
 function trimPromoHead(document: Document, byline: string | undefined, rules: string[]) {

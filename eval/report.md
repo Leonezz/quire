@@ -64,7 +64,7 @@
 | ✅ simonw-llms-2024 | django | - | extractor.semantic-boundary.v1 | 6529 | reviewed | 9 lossy conversions | - |
 | ✅ simonw-wordcamp | django | - | extractor.semantic-boundary.v1 | 9745 | reviewed | 98 lossy conversions | - |
 | ✅ sivers-ff | custom | - | extractor.semantic-boundary.v1 | 502 | reviewed | 2 lossy conversions | - |
-| ✅ stratechery-endbeginning | wordpress | Site Kit by Google 1.187.0 | extractor.semantic-boundary.v1 | 1664 | reviewed | no byline; 66 lossy conversions | - |
+| ✅ stratechery-endbeginning | wordpress | Site Kit by Google 1.187.0 | extractor.semantic-boundary.v1 | 1664 | reviewed | no byline; 65 lossy conversions | - |
 | ✅ vickiboykis-gguf | hugo | - | extractor.semantic-boundary.v1 | 4344 | reviewed | no byline; 24 lossy conversions | - |
 | ✅ waitbutwhy-ai | wordpress | Site Kit by Google 1.187.0 | extractor.semantic-boundary.v1 | 7811 | reviewed | 19 lossy conversions | - |
 | ✅ webdev-vitals | custom | - | extractor.semantic-boundary.v1 | 1667 | reviewed | no byline; 16 lossy conversions | - |
