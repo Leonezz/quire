@@ -116,7 +116,31 @@ const SIDEBAR_HEADING_ID = "pdf-navigation-sidebar-heading";
 
 export type PdfTextLayerStatus = "absent" | "available" | "unknown" | boolean;
 
+/** A host annotation drawn over the page its locator points at. */
+export type PdfRegionOverlay = Readonly<{
+  id: string;
+  /** A `pdf-region:v1:…` or `pdf-regions:v1:…` locator in canonical page space. */
+  locator: string;
+  /** Any CSS colour; tinted for highlight/comment, drawn as a rule for underline. */
+  color: string;
+  kind?: "highlight" | "underline" | "comment";
+}>;
+
+type PdfRegionOverlayKind = NonNullable<PdfRegionOverlay["kind"]>;
+
+/** One drawable rectangle of an overlay, keyed to the page it belongs to. */
+type ResolvedRegionOverlay = Readonly<{
+  color: string;
+  id: string;
+  kind: PdfRegionOverlayKind;
+  region: PdfRegion;
+}>;
+
+const NO_REGION_OVERLAYS: readonly PdfRegionOverlay[] = [];
+
 export type PdfCanvasViewerProps = Readonly<{
+  /** The overlay whose boxes get an emphasized outline. */
+  activeRegionId?: string;
   /** A page to reveal after the PDF has loaded. */
   initialPage?: number;
   /** Reader state restored once for this exact representation. */
@@ -130,8 +154,12 @@ export type PdfCanvasViewerProps = Readonly<{
   onPageChange?: (page: number) => void;
   /** Emits the full resumable reader state. */
   onReaderStateChange?: (state: PdfReaderState) => void;
+  /** Called with the overlay id when one of its boxes is clicked. */
+  onRegionActivate?: (id: string) => void;
   /** A hint used before PDF.js has read the document metadata. */
   pageCount?: number;
+  /** Host annotations to draw on their pages; see `PdfRegionOverlay`. */
+  regions?: readonly PdfRegionOverlay[];
   /** A short label for the toolbar and accessible document name. */
   title?: string;
   /** A URL, data URL, or host protocol URL accepted by PDF.js. */
@@ -203,6 +231,29 @@ function defaultSidebarOpenForViewport() {
   return !compactPdfViewport();
 }
 
+/**
+ * Expands overlays into per-rectangle entries. The locator format is
+ * versioned and owned by the host, so a locator this reader cannot parse is
+ * left out rather than reported: the host knows which versions it wrote.
+ */
+function resolvedRegionOverlays(
+  overlays: readonly PdfRegionOverlay[],
+): readonly ResolvedRegionOverlay[] {
+  return overlays.flatMap((overlay) =>
+    parsePdfRegionsLocator(overlay.locator).map((region) => ({
+      color: overlay.color,
+      id: overlay.id,
+      kind: overlay.kind ?? "highlight",
+      region,
+    })),
+  );
+}
+
+/** A page-relative percentage that stays readable in inline styles. */
+function pagePercent(value: number) {
+  return `${Number((value * 100).toFixed(4))}%`;
+}
+
 function textLayerIsEnabled(value: PdfTextLayerStatus | undefined) {
   return value !== false && value !== "absent";
 }
@@ -238,18 +289,22 @@ export const PdfCanvasViewer = forwardRef<
   PdfCanvasViewerProps
 >(function PdfCanvasViewer(
   {
+    activeRegionId,
     initialPage = 1,
     initialState,
     onOutlineChange,
     onPageChange,
     onReaderStateChange,
+    onRegionActivate,
     pageCount: pageCountHint = 0,
+    regions = NO_REGION_OVERLAYS,
     textLayer,
     title = "PDF document",
     url,
   },
   ref,
 ) {
+  const regionOverlays = useMemo(() => resolvedRegionOverlays(regions), [regions]);
   const startingStateRef = useRef(
     readerStateFromProps(
       initialPage,
@@ -1703,6 +1758,9 @@ export const PdfCanvasViewer = forwardRef<
                   const searchRegions = activeSearchRegions.filter(
                     (region) => region.page === page,
                   );
+                  const pageOverlays = regionOverlays.filter(
+                    (overlay) => overlay.region.page === page,
+                  );
                   return (
                     <article
                       aria-label={`PDF page ${page}`}
@@ -1781,6 +1839,37 @@ export const PdfCanvasViewer = forwardRef<
                               }}
                             />
                           ))}
+                        </div>
+                      ) : null}
+                      {pageOverlays.length ? (
+                        <div className="pdf-canvas-viewer__annotation-regions">
+                          {pageOverlays.map((overlay, overlayIndex) => {
+                            const rect = displayedPdfRect(
+                              overlay.region,
+                              displayRotation,
+                            );
+                            const isActive = overlay.id === activeRegionId;
+                            return (
+                              <button
+                                aria-current={isActive ? "true" : undefined}
+                                aria-label={`${overlay.kind} annotation`}
+                                className={`pdf-canvas-viewer__annotation-region is-${overlay.kind}${isActive ? " is-active" : ""}`}
+                                data-annotation-id={overlay.id}
+                                key={`${overlay.id}:${overlayIndex}`}
+                                onClick={() => onRegionActivate?.(overlay.id)}
+                                style={
+                                  {
+                                    "--pdf-annotation-color": overlay.color,
+                                    height: pagePercent(rect.height),
+                                    left: pagePercent(rect.x),
+                                    top: pagePercent(rect.y),
+                                    width: pagePercent(rect.width),
+                                  } as CSSProperties
+                                }
+                                type="button"
+                              />
+                            );
+                          })}
                         </div>
                       ) : null}
                       {activeSearchResult?.page === page ? (

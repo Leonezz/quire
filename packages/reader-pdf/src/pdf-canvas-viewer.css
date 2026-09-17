@@ -527,6 +527,47 @@
   position: absolute;
 }
 
+/* Host annotations (highlights, underlines, comments) drawn over a page. The
+   layer itself lets pointer events through; each box catches its own click.
+   Search hits sit one layer above so an active match stays visible. */
+.pdf-canvas-viewer__annotation-regions {
+  inset: 0;
+  pointer-events: none;
+  position: absolute;
+  z-index: 6;
+}
+
+.pdf-canvas-viewer__annotation-region {
+  appearance: none;
+  background: color-mix(in srgb, var(--pdf-annotation-color) 28%, transparent);
+  border: 0;
+  border-radius: 2px;
+  cursor: pointer;
+  margin: 0;
+  mix-blend-mode: multiply;
+  padding: 0;
+  pointer-events: auto;
+  position: absolute;
+}
+
+.pdf-canvas-viewer__annotation-region.is-underline {
+  background: transparent;
+  border-bottom: 2px solid var(--pdf-annotation-color);
+  border-radius: 0;
+  mix-blend-mode: normal;
+}
+
+.pdf-canvas-viewer__annotation-region.is-active {
+  outline: 2px solid var(--pdf-annotation-color);
+  outline-offset: 1px;
+  z-index: 1;
+}
+
+.pdf-canvas-viewer__annotation-region:focus-visible {
+  outline: 2px solid var(--pdf-reader-ring);
+  outline-offset: 1px;
+}
+
 .pdf-canvas-viewer__page-shell .react-pdf__Page {
   margin: 0;
 }

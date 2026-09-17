@@ -2,8 +2,14 @@ export { PdfCanvasViewer } from "./PdfCanvasViewer";
 export type {
   PdfCanvasViewerHandle,
   PdfCanvasViewerProps,
+  PdfRegionOverlay,
   PdfTextLayerStatus,
 } from "./PdfCanvasViewer";
+export {
+  parsePdfRegionsLocator,
+  pdfRegionLocatorForSelection,
+  pdfSelectionText,
+} from "./pdf-page-geometry";
 export type { PdfSelection, PdfSelectionRect } from "./pdf-page-geometry";
 export {
   pdfReadingProgress,

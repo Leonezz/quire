@@ -203,7 +203,14 @@ vi.mock("react-pdf", () => ({
 }));
 
 import { PdfCanvasViewer, type PdfCanvasViewerHandle } from "./PdfCanvasViewer";
-import { canonicalPdfRect, displayedPdfRect } from "./pdf-page-geometry";
+import {
+  canonicalPdfRect,
+  displayedPdfRect,
+  parsePdfRegionsLocator,
+  pdfRegionLocatorForSelection,
+  pdfSelectionText,
+  type PdfSelection,
+} from "./pdf-page-geometry";
 import { PINCH_COMMIT_DELAY_MS } from "./pdf-zoom-gesture";
 
 // Pinch tests drive the per-frame transform and the settle timeout by hand.
@@ -1587,5 +1594,160 @@ describe("PdfCanvasViewer", () => {
     selection.removeAllRanges();
 
     await act(async () => view.root.unmount());
+  });
+
+  it("draws host regions on their page shells and keeps them under rotation", async () => {
+    const view = renderViewer({
+      activeRegionId: "u1",
+      pageCount: 3,
+      regions: [
+        { color: "#ffd400", id: "h1", locator: "pdf-regions:v1:1:0.1,0.2,0.3,0.1" },
+        {
+          color: "rebeccapurple",
+          id: "u1",
+          kind: "underline",
+          locator: "pdf-region:v1:2:0.2,0.3,0.4,0.05",
+        },
+      ],
+    });
+    await act(async () => view.render());
+    await flushViewer();
+
+    const boxesOn = (page: number) =>
+      Array.from(
+        view.container.querySelectorAll<HTMLElement>(
+          `[data-pdf-page-number="${page}"] .pdf-canvas-viewer__annotation-region`,
+        ),
+      );
+    expect(
+      view.container.querySelectorAll(".pdf-canvas-viewer__annotation-region"),
+    ).toHaveLength(2);
+
+    const [highlight] = boxesOn(1);
+    expect(highlight?.dataset.annotationId).toBe("h1");
+    expect(highlight?.classList.contains("is-highlight")).toBe(true);
+    expect(highlight?.classList.contains("is-active")).toBe(false);
+    expect(highlight?.style.left).toBe("10%");
+    expect(highlight?.style.top).toBe("20%");
+    expect(highlight?.style.width).toBe("30%");
+    expect(highlight?.style.height).toBe("10%");
+    expect(highlight?.style.getPropertyValue("--pdf-annotation-color")).toBe(
+      "#ffd400",
+    );
+
+    const [underline] = boxesOn(2);
+    expect(underline?.dataset.annotationId).toBe("u1");
+    expect(underline?.classList.contains("is-underline")).toBe(true);
+    expect(underline?.classList.contains("is-active")).toBe(true);
+    expect(underline?.getAttribute("aria-current")).toBe("true");
+    expect(boxesOn(3)).toHaveLength(0);
+
+    // Locators stay canonical; the drawn box follows the reader rotation.
+    await act(async () => {
+      view.container
+        .querySelector<HTMLButtonElement>('[aria-label="Rotate clockwise"]')
+        ?.click();
+    });
+    const [rotated] = boxesOn(1);
+    expect(rotated?.style.left).toBe("70%");
+    expect(rotated?.style.top).toBe("10%");
+    expect(rotated?.style.width).toBe("10%");
+    expect(rotated?.style.height).toBe("30%");
+
+    await act(async () => view.root.unmount());
+  });
+
+  it("reports the region id when one of its boxes is clicked", async () => {
+    const onRegionActivate = vi.fn();
+    const view = renderViewer({
+      onRegionActivate,
+      pageCount: 3,
+      regions: [
+        {
+          color: "#0af",
+          id: "c1",
+          kind: "comment",
+          locator: "pdf-regions:v1:1:0.1,0.1,0.2,0.05;0.1,0.16,0.4,0.05",
+        },
+      ],
+    });
+    await act(async () => view.render());
+    await flushViewer();
+
+    const boxes = Array.from(
+      view.container.querySelectorAll<HTMLButtonElement>(
+        '[data-annotation-id="c1"]',
+      ),
+    );
+    expect(boxes).toHaveLength(2);
+    await act(async () => boxes[1]?.click());
+    expect(onRegionActivate).toHaveBeenCalledTimes(1);
+    expect(onRegionActivate).toHaveBeenCalledWith("c1");
+
+    await act(async () => view.root.unmount());
+  });
+
+  it("skips regions whose locator does not parse without failing the render", async () => {
+    const view = renderViewer({
+      pageCount: 3,
+      regions: [
+        { color: "#f00", id: "future", locator: "pdf-regions:v9:1:0,0,1,1" },
+        { color: "#f00", id: "garbage", locator: "not a locator" },
+        { color: "#0f0", id: "ok", locator: "pdf-region:v1:1:0.5,0.5,0.2,0.2" },
+      ],
+    });
+    await act(async () => view.render());
+    await flushViewer();
+
+    const boxes = Array.from(
+      view.container.querySelectorAll<HTMLElement>(
+        ".pdf-canvas-viewer__annotation-region",
+      ),
+    );
+    expect(boxes.map((box) => box.dataset.annotationId)).toEqual(["ok"]);
+
+    await act(async () => view.root.unmount());
+  });
+
+  it("encodes a selection as a pdf-regions locator that parses back", () => {
+    const selection: PdfSelection = {
+      height: 0.3,
+      kind: "selection",
+      pageNumber: 4,
+      rects: [
+        { height: 0.05, width: 0.33333, x: 0.1234, y: 0.2 },
+        // Collapses to nothing at locator precision, so it is left out.
+        { height: 0.05, width: 0.00001, x: 0.1, y: 0.3 },
+      ],
+      text: "  alpha \n\n beta  ",
+      width: 0.5,
+      x: 0.1,
+      y: 0.2,
+    };
+
+    const locator = pdfRegionLocatorForSelection(selection);
+    expect(locator).toBe("pdf-regions:v1:4:0.1234,0.2000,0.3333,0.0500");
+    expect(parsePdfRegionsLocator(locator!)).toEqual([
+      { height: 0.05, page: 4, width: 0.3333, x: 0.1234, y: 0.2 },
+    ]);
+    expect(pdfSelectionText(selection)).toBe("alpha beta");
+
+    // More rectangles than a locator carries: fall back to the bounds.
+    const tooMany: PdfSelection = {
+      ...selection,
+      rects: Array.from({ length: 129 }, (_, index) => ({
+        height: 0.001,
+        width: 0.2,
+        x: 0.1,
+        y: 0.2 + index * 0.002,
+      })),
+    };
+    expect(pdfRegionLocatorForSelection(tooMany)).toBe(
+      "pdf-regions:v1:4:0.1000,0.2000,0.5000,0.3000",
+    );
+
+    const blocked: PdfSelection = { kind: "blocked", reason: "one page" };
+    expect(pdfRegionLocatorForSelection(blocked)).toBeUndefined();
+    expect(pdfSelectionText(blocked)).toBeUndefined();
   });
 });

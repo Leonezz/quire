@@ -23,8 +23,49 @@ export type PdfSelection =
       reason: string;
     }>;
 
+/** The most rectangles one `pdf-regions:v1:` locator carries. */
+export const MAX_PDF_LOCATOR_RECTS = 128;
+const PDF_LOCATOR_DECIMALS = 4;
+
 export function clampUnit(value: number) {
   return Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0));
+}
+
+function locatorCoordinates(rect: PdfSelectionRect) {
+  return [rect.x, rect.y, rect.width, rect.height].map((value) =>
+    clampUnit(value).toFixed(PDF_LOCATOR_DECIMALS),
+  );
+}
+
+/**
+ * Encodes a one-page selection (as returned by `readSelection()`) as the
+ * `pdf-regions:v1:<page>:<x,y,w,h>[;…]` locator `parsePdfRegionsLocator`
+ * reads. Rectangles are in canonical page space, rounded to 4 decimals; a
+ * rectangle that collapses to nothing at that precision is dropped, and a
+ * selection with more rectangles than a locator carries falls back to its
+ * enclosing bounds. Returns `undefined` for a blocked or empty selection.
+ */
+export function pdfRegionLocatorForSelection(
+  selection: PdfSelection,
+): string | undefined {
+  if (selection.kind !== "selection") return undefined;
+  const sourceRects: readonly PdfSelectionRect[] =
+    selection.rects.length && selection.rects.length <= MAX_PDF_LOCATOR_RECTS
+      ? selection.rects
+      : [selection];
+  const coordinates = sourceRects
+    .map(locatorCoordinates)
+    .filter(([, , width, height]) => Number(width) > 0 && Number(height) > 0)
+    .map((values) => values.join(","));
+  if (!coordinates.length) return undefined;
+  return `pdf-regions:v1:${selection.pageNumber}:${coordinates.join(";")}`;
+}
+
+/** The selected text with whitespace collapsed; `undefined` when blocked or empty. */
+export function pdfSelectionText(selection: PdfSelection): string | undefined {
+  if (selection.kind !== "selection") return undefined;
+  const text = selection.text.replace(/\s+/g, " ").trim();
+  return text || undefined;
 }
 
 export function normalizedRotation(value: number) {
@@ -140,7 +181,7 @@ export function parsePdfRegionsLocator(locator: string): readonly PdfRegion[] {
   const page = Number(match[1]);
   if (!Number.isSafeInteger(page) || page < 1) return [];
   const rects = match[2]!.split(";").map((value) => value.split(",").map(Number));
-  if (!rects.length || rects.length > 128) return [];
+  if (!rects.length || rects.length > MAX_PDF_LOCATOR_RECTS) return [];
   const regions = rects.flatMap(([x, y, width, height]) => {
     if (
       ![x, y, width, height].every(Number.isFinite) ||

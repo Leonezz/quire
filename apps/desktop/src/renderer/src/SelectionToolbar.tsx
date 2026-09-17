@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { Copy, MessageSquarePlus } from "lucide-react";
-import { renderedTextQuoteSelection } from "@read/reader";
 import { Button } from "@read/ui";
 import type { AnnotationColor } from "../../shared/contracts";
 import { ANNOTATION_COLORS } from "./annotations";
@@ -13,9 +12,11 @@ type Placement = { top: number; left: number; capture: SelectionCapture };
  * Floats above a text selection inside the article: pick a colour to highlight,
  * add a note, or copy a citation. Nothing is stored until a button is pressed.
  */
-export function SelectionToolbar({ root, viewport, onHighlight, onNote, onCopy }: {
+export function SelectionToolbar({ root, viewport, capture, onHighlight, onNote, onCopy }: {
   root: HTMLElement | null;
   viewport: HTMLElement | null;
+  /** Turns the live selection into a locator + quote, or undefined when it cannot be anchored (cross-page, outside the text). */
+  capture: (selection: Selection) => SelectionCapture | undefined;
   onHighlight: (capture: SelectionCapture, color: AnnotationColor) => void;
   onNote: (capture: SelectionCapture) => void;
   onCopy: (capture: SelectionCapture) => void;
@@ -32,21 +33,21 @@ export function SelectionToolbar({ root, viewport, onHighlight, onNote, onCopy }
         if (!selection || selection.isCollapsed || selection.rangeCount === 0) { setPlacement(null); return; }
         const range = selection.getRangeAt(0);
         if (!root.contains(range.commonAncestorContainer)) { setPlacement(null); return; }
-        const captured = renderedTextQuoteSelection(root, selection);
-        if (captured.kind !== "capture") { setPlacement(null); return; }
+        const captured = capture(selection);
+        if (!captured) { setPlacement(null); return; }
         const rect = range.getBoundingClientRect();
         const box = viewport.getBoundingClientRect();
         setPlacement({
           top: rect.top - box.top + viewport.scrollTop - 44,
           left: Math.max(8, rect.left - box.left + viewport.scrollLeft + rect.width / 2),
-          capture: captured.capture,
+          capture: captured,
         });
       });
     };
     document.addEventListener("selectionchange", update);
     viewport.addEventListener("scroll", update, { passive: true });
     return () => { cancelAnimationFrame(frame); document.removeEventListener("selectionchange", update); viewport.removeEventListener("scroll", update); };
-  }, [root, viewport]);
+  }, [root, viewport, capture]);
 
   if (!placement) return null;
   const done = () => { document.getSelection()?.removeAllRanges(); setPlacement(null); };
