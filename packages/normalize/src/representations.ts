@@ -115,7 +115,11 @@ function markdownFromHtml(
     filter: "a",
     replacement: (content, node) => {
       const href = safeUrl(node.getAttribute("href") ?? "", baseUri, "link");
-      return href ? `[${content}](${href.replaceAll("(", "%28").replaceAll(")", "%29")})` : content;
+      // A link around a card (div/figure) yields block separators inside its text; a link label is one line.
+      const label = content.replace(/\s*\n\s*/g, " ").replace(/[ \t]+/g, " ").trim();
+      if (!href) return label;
+      if (!label) return "";
+      return `[${label}](${href.replaceAll("(", "%28").replaceAll(")", "%29")})`;
     },
   });
   service.addRule("safe-images", {

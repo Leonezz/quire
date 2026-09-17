@@ -22,10 +22,10 @@ export interface PruneOptions {
 
 const TOC_HEADING = /^(table of )?contents?$|^(目录|目次)$|^in this (article|post)$|^on this page$/iu;
 const TRAILING_CHROME_HEADING =
-  /^(related( (posts?|articles?|content|reading|stories))?:?|share( this)?( (post|article))?:?|newsletter|subscribe( to .*)?|comments?|comment on this (article|post)|discussion( and review)?|leave a (comment|reply)|(read|you might) (next|also like)|you may also like|more (from|like this|by) .*|more (from|like this)|recommended.*|further reading|sponsored.*|tags?|footer|about the author|written by.*|explore more.*|also in .*|next (article|post|up)|year in review|all (articles|content|posts))$/iu;
+  /^(related( (posts?|articles?|content|reading|stories))?:?|share( this)?( (post|article))?:?|newsletter|subscribe( to .*)?|comments?|comment on this (article|post)|discussion( and review)?|leave a (comment|reply)|(read|you might) (next|also like)|you may also like|more (from|like this|by) .*|more (from|like this)|recommended.*|further reading|sponsored.*|tags?|footer|about the author|written by.*|explore more.*|also in .*|next (article|post|up)|year in review|all (articles|content|posts)|discuss( on| this)?.*|read my book|my book|buy (my|the) book|support (me|this|my work).*|sponsors?)$/iu;
 const PROMO_TEXT = /^(written by|about the author|share( this)?|subscribe|related|explore more|more from|more by|next article|also in|read next|you may also like|sign up|get (the newsletter|highlights|the latest)|join \d|view all|here'?s another|if you (liked|enjoyed)|thanks for reading|enjoyed this|liked this|follow (me|us))|delivered to your inbox|newsletter|^©|^copyright\b|all rights reserved/iu;
 const DATE_LINE = /^(?:\S+,\s*)?(?:(?:19|20)\d{2}[-/.年]\s*\d{1,2}[-/.月]\s*\d{1,2}\s*日?|\d{1,2}(?:st|nd|rd|th)?\s+[A-Z][a-z]+\.?,?\s+(?:19|20)\d{2}|[A-Z][a-z]+\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+(?:19|20)\d{2})(?:\s*[·•|—–-].{0,40})?$/u;
-const CHROME_CLASS = /\b(tags?|categories|post-tags|post-meta|entry-meta|share|social|author-box|author-card|bio|related|promo|newsletter|subscribe|cta|breadcrumbs?|kicker|eyebrow)\b/iu;
+const CHROME_CLASS = /\b(tags?|categories|post-tags|post-meta|entry-meta|share|social|author-box|author-card|bio|related|promo|newsletter|subscribe|cta|breadcrumbs?|kicker|eyebrow)\b|aside|recirc|teaser|sidebar|widget|read-next|more-stories|recommend/iu;
 const META_LINE = /(\b\d+ min(ute)? read\b|\bcomments?\b|\bshare\b|\bposted (on|in|by)\b|\bpublished\b|\bupdated\b|\bestimated reading time\b|\btweet\b)/iu;
 const PERMALINK_CLASS = /anchor|permalink|headerlink|heading-link|hash-link|zola-anchor|header-link|section-link/iu;
 const PERMALINK_TEXT = /^[\s#¶§🔗∞︎⚓]*$/u;
@@ -351,10 +351,30 @@ function trimPromoHead(document: Document, byline: string | undefined, rules: st
   if (removed > 0) rules.push("article.prune.leading-meta@1");
 }
 
+/** `<a name>` without an href is a target, not a link; later steps treat a bare anchor as a broken link and split around it. */
+function anchorsToTargets(document: Document, rules: string[]) {
+  let changed = false;
+  for (const anchor of Array.from(document.querySelectorAll("a:not([href])"))) {
+    const span = document.createElement("span");
+    const id = anchor.getAttribute("id") ?? anchor.getAttribute("name");
+    if (id) span.setAttribute("id", id);
+    while (anchor.firstChild) span.append(anchor.firstChild);
+    anchor.replaceWith(span);
+    changed = true;
+  }
+  if (changed) rules.push("article.prune.anchor-targets@1");
+}
+
 /** Obsolete presentational wrappers hide paragraph structure from every later step. */
 function unwrapFontTags(document: Document, rules: string[]) {
   const fonts = Array.from(document.querySelectorAll("font, center"));
-  for (const font of fonts) font.replaceWith(...Array.from(font.childNodes));
+  for (const font of fonts) {
+    // Moved one node at a time: linkedom's replaceWith drops the children of an attribute-less <font> inside a link.
+    const parent = font.parentNode;
+    if (!parent) continue;
+    while (font.firstChild) parent.insertBefore(font.firstChild, font);
+    font.remove();
+  }
   if (fonts.length) rules.push("article.prune.unwrap-font@1");
 }
 
@@ -397,6 +417,9 @@ function trimPromoTail(document: Document, rules: string[]) {
     element.remove();
     removed += 1;
   }
+  // A heading whose section was just removed has nothing left to head.
+  const last = body.lastElementChild;
+  if (removed > 0 && last && /^h[1-6]$/iu.test(last.tagName)) { last.remove(); }
   if (removed > 0) rules.push("article.prune.trailing-cards@1");
 }
 
@@ -406,6 +429,7 @@ export function pruneArticleChrome(html: string, options: PruneOptions = {}): Pr
   const rules: string[] = [];
   const doc = document as unknown as Document;
   unwrapFontTags(doc, rules);
+  anchorsToTargets(doc, rules);
   unwrapLayoutTables(doc, rules);
   cleanHeadings(doc, rules);
   normalizeTitleHeadings(doc, options.title, options.siteNames, rules);

@@ -466,6 +466,14 @@ function normalizedDirection(value: string | null | undefined) {
 
 function documentFromHtml(html: string, source: string) {
   const parsed = parseHTML(html).document as unknown as DocumentLike;
+  // Presentational <font>/<center> confuse the extractors' phrasing checks
+  // (Readability ends a paragraph at an anchor that holds a <font>), so they go first.
+  for (const wrapper of Array.from(parsed.querySelectorAll("font, center"))) {
+    const parent = wrapper.parentNode;
+    if (!parent) continue;
+    while (wrapper.firstChild) parent.insertBefore(wrapper.firstChild, wrapper);
+    wrapper.remove();
+  }
   for (const existing of parsed.querySelectorAll("base")) existing.remove();
   const base = parsed.createElement("base");
   base.setAttribute("href", source);
