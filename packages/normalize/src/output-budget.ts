@@ -301,24 +301,28 @@ function applyConservativeEndTag(
       break;
     }
   }
-  // Once a parser would have to repair an unmatched close while elements are
-  // still open, its tree-construction state can diverge from this lightweight
-  // stack model. Fail closed instead of letting later implied-end-tag rules
-  // underestimate the DOM that Linkedom or Turndown will allocate.
-  if (targetIndex < 0)
-    return (
-      openElements.length === 0 ||
-      VOID_ELEMENT_NAMES.has(endTagName) ||
-      ADOPTION_AGENCY_ELEMENT_NAMES.has(endTagName) ||
-      IGNORABLE_UNMATCHED_END_TAG_NAMES.has(endTagName)
-    );
+  // An end tag with nothing to close is a parse error that HTML parsers ignore;
+  // real pages carry stray </div> and </p> all the time. This scanner is only a
+  // pre-parse estimate: the DOM built afterwards is measured again by
+  // assertDocumentBudget, so an approximate stack here cannot let an oversized
+  // document through.
+  if (targetIndex < 0) return true;
   while (
     openElements.length - 1 > targetIndex &&
     openElements.at(-1)?.namespace === "html" &&
     canCloseCurrentBeforeEndTag(openElements.at(-1)!.name, endTagName)
   )
     openElements.pop();
-  if (openElements.at(-1)?.name !== endTagName) return false;
+  if (openElements.at(-1)?.name !== endTagName) {
+    // A formatting element closed across an element it cannot close triggers
+    // the adoption agency algorithm, which clones formatting elements and can
+    // grow the DOM past this estimate: that one case still fails closed.
+    if (ADOPTION_AGENCY_ELEMENT_NAMES.has(endTagName)) return false;
+    // Anything else is closed the way the tree builder generates implied end
+    // tags before honouring the close.
+    openElements.length = targetIndex;
+    return true;
+  }
   openElements.pop();
   return true;
 }

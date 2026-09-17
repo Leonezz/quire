@@ -133,7 +133,9 @@ export function ReaderView({ material, onBack, onOpenLink }: { material: Materia
               <a href={material.finalUrl} onClick={(event) => { event.preventDefault(); onOpenLink(material.finalUrl); }}>Open original ↗</a>
             </div>
             {material.quality.safety === "degraded_plaintext" ? (
-              <div className="mb-6 grid gap-2 rounded-card bg-content-2 p-4 text-[13px] text-label-2"><strong className="text-[16px] text-label">Could not extract an article from this page.</strong><span>What the page returned is shown below as plain text. Open the original for the full page.</span></div>
+              <div className="mb-6 grid gap-2 rounded-card bg-content-2 p-4 text-[13px] text-label-2"><strong className="text-[16px] text-label">Could not extract an article from this page.</strong><span>What the page returned is shown below as plain text. <a href={material.finalUrl} onClick={(event) => { event.preventDefault(); onOpenLink(material.finalUrl); }}>Open the original</a> for the full page.</span></div>
+            ) : quality.low ? (
+              <div className="mb-6 grid gap-1.5 rounded-card bg-orange-soft p-4 text-[13px] text-label-2"><strong className="text-[14px] text-label">{material.quality.completeness === "summary" ? "Only a summary was available." : "The extraction may be incomplete."}</strong><span>{material.quality.completeness === "summary" ? "The full text is fetched when the source allows it. " : `The extractors disagreed about this page (${material.problems.length} notes). `}<a href={material.finalUrl} onClick={(event) => { event.preventDefault(); onOpenLink(material.finalUrl); }}>Open the original ↗</a></span></div>
             ) : null}
             <ReaderDocumentSurface
               schema={material.reader?.schema ?? "none"}

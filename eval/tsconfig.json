@@ -1,0 +1,5 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": { "noEmit": true, "noUncheckedIndexedAccess": false, "exactOptionalPropertyTypes": false, "lib": ["ES2023", "DOM", "DOM.Iterable"], "types": ["node"] },
+  "include": ["src", "vitest.config.ts", "../packages/normalize/src/env.d.ts"]
+}

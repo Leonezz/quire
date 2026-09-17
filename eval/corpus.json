@@ -1,0 +1,527 @@
+[
+  {
+    "slug": "karpathy-rnn",
+    "url": "https://karpathy.github.io/2015/05/21/rnn-effectiveness/",
+    "framework": "jekyll",
+    "tags": [
+      "code",
+      "images"
+    ]
+  },
+  {
+    "slug": "karpathy-recipe",
+    "url": "https://karpathy.github.io/2019/04/25/recipe/",
+    "framework": "jekyll",
+    "tags": []
+  },
+  {
+    "slug": "colah-lstm",
+    "url": "https://colah.github.io/posts/2015-08-Understanding-LSTMs/",
+    "framework": "jekyll",
+    "tags": [
+      "images",
+      "math"
+    ]
+  },
+  {
+    "slug": "lilian-agent",
+    "url": "https://lilianweng.github.io/posts/2023-06-23-agent/",
+    "framework": "hugo",
+    "tags": [
+      "images"
+    ]
+  },
+  {
+    "slug": "lilian-attention",
+    "url": "https://lilianweng.github.io/posts/2018-06-24-attention/",
+    "framework": "hugo",
+    "tags": [
+      "math",
+      "tables"
+    ]
+  },
+  {
+    "slug": "jalammar-transformer",
+    "url": "https://jalammar.github.io/illustrated-transformer/",
+    "framework": "jekyll",
+    "tags": [
+      "images"
+    ]
+  },
+  {
+    "slug": "eugeneyan-llm-patterns",
+    "url": "https://eugeneyan.com/writing/llm-patterns/",
+    "framework": "jekyll",
+    "tags": [
+      "images"
+    ]
+  },
+  {
+    "slug": "huyenchip-llm-eng",
+    "url": "https://huyenchip.com/2023/04/11/llm-engineering.html",
+    "framework": "jekyll",
+    "tags": [
+      "images"
+    ]
+  },
+  {
+    "slug": "simonw-llms-2024",
+    "url": "https://simonwillison.net/2024/Dec/31/llms-in-2024/",
+    "framework": "django",
+    "tags": [
+      "blockquotes"
+    ]
+  },
+  {
+    "slug": "simonw-wordcamp",
+    "url": "https://simonwillison.net/2023/Aug/27/wordcamp-llms/",
+    "framework": "django",
+    "tags": []
+  },
+  {
+    "slug": "paulgraham-greatwork",
+    "url": "https://www.paulgraham.com/greatwork.html",
+    "framework": "custom",
+    "tags": []
+  },
+  {
+    "slug": "danluu-files",
+    "url": "https://danluu.com/deconstruct-files/",
+    "framework": "custom",
+    "tags": []
+  },
+  {
+    "slug": "jvns-firecracker",
+    "url": "https://jvns.ca/blog/2021/01/23/firecracker--start-a-vm-in-less-than-a-second/",
+    "framework": "hugo",
+    "tags": [
+      "code"
+    ]
+  },
+  {
+    "slug": "ciechanowski-gps",
+    "url": "https://ciechanow.ski/gps/",
+    "framework": "custom",
+    "tags": [
+      "interactive"
+    ]
+  },
+  {
+    "slug": "gwern-scaling",
+    "url": "https://gwern.net/scaling-hypothesis",
+    "framework": "custom",
+    "tags": [
+      "footnotes",
+      "long"
+    ]
+  },
+  {
+    "slug": "vickiboykis-gguf",
+    "url": "https://vickiboykis.com/2024/02/28/gguf-the-long-way-around/",
+    "framework": "hugo",
+    "tags": [
+      "code",
+      "images"
+    ]
+  },
+  {
+    "slug": "hamel-evals",
+    "url": "https://hamel.dev/blog/posts/evals/",
+    "framework": "quarto",
+    "tags": [
+      "images"
+    ]
+  },
+  {
+    "slug": "overreacted-useeffect",
+    "url": "https://overreacted.io/a-complete-guide-to-useeffect/",
+    "framework": "next",
+    "tags": [
+      "code",
+      "long"
+    ]
+  },
+  {
+    "slug": "joshwcomeau-rerender",
+    "url": "https://www.joshwcomeau.com/react/why-react-re-renders/",
+    "framework": "next",
+    "tags": [
+      "code"
+    ]
+  },
+  {
+    "slug": "kentcdodds-context",
+    "url": "https://kentcdodds.com/blog/how-to-use-react-context-effectively",
+    "framework": "remix",
+    "tags": [
+      "code"
+    ]
+  },
+  {
+    "slug": "codinghorror-nocode",
+    "url": "https://blog.codinghorror.com/the-best-code-is-no-code-at-all/",
+    "framework": "ghost",
+    "tags": []
+  },
+  {
+    "slug": "joelonsoftware-test",
+    "url": "https://www.joelonsoftware.com/2000/08/09/the-joel-test-12-steps-to-better-code/",
+    "framework": "wordpress",
+    "tags": [
+      "lists"
+    ]
+  },
+  {
+    "slug": "distill-featurevis",
+    "url": "https://distill.pub/2017/feature-visualization/",
+    "framework": "distill",
+    "tags": [
+      "images",
+      "math",
+      "footnotes"
+    ]
+  },
+  {
+    "slug": "anthropic-mapping",
+    "url": "https://www.anthropic.com/research/mapping-mind-language-model",
+    "framework": "next",
+    "tags": [
+      "images"
+    ]
+  },
+  {
+    "slug": "hf-rlhf",
+    "url": "https://huggingface.co/blog/rlhf",
+    "framework": "custom",
+    "tags": [
+      "images",
+      "math"
+    ]
+  },
+  {
+    "slug": "karpathy-software2",
+    "url": "https://medium.com/@karpathy/software-2-0-a64152b37c35",
+    "framework": "medium",
+    "tags": [
+      "images"
+    ]
+  },
+  {
+    "slug": "acx-sleeper",
+    "url": "https://www.astralcodexten.com/p/ai-sleeper-agents",
+    "framework": "substack",
+    "tags": [
+      "images"
+    ]
+  },
+  {
+    "slug": "raschka-understanding-llms",
+    "url": "https://magazine.sebastianraschka.com/p/understanding-large-language-models",
+    "framework": "substack",
+    "tags": [
+      "images",
+      "lists"
+    ]
+  },
+  {
+    "slug": "latentspace-ai-engineer",
+    "url": "https://www.latent.space/p/ai-engineer",
+    "framework": "substack",
+    "tags": [
+      "images"
+    ]
+  },
+  {
+    "slug": "interconnects-o1",
+    "url": "https://www.interconnects.ai/p/openais-o1-using-search-was-a-psyop",
+    "framework": "substack",
+    "tags": []
+  },
+  {
+    "slug": "gradient-icl",
+    "url": "https://thegradient.pub/in-context-learning-in-context/",
+    "framework": "ghost",
+    "tags": [
+      "math",
+      "images"
+    ]
+  },
+  {
+    "slug": "pragmaticengineer-product",
+    "url": "https://blog.pragmaticengineer.com/the-product-minded-engineer/",
+    "framework": "ghost",
+    "tags": []
+  },
+  {
+    "slug": "ruder-optim",
+    "url": "https://www.ruder.io/optimizing-gradient-descent/",
+    "framework": "ghost",
+    "tags": [
+      "math"
+    ]
+  },
+  {
+    "slug": "ruanyifeng-weekly",
+    "url": "https://www.ruanyifeng.com/blog/2024/01/weekly-issue-287.html",
+    "framework": "movabletype",
+    "tags": [
+      "zh",
+      "images"
+    ]
+  },
+  {
+    "slug": "lesswrong-lethalities",
+    "url": "https://www.lesswrong.com/posts/uMQ3cqWDPHhjtiesc/agi-ruin-a-list-of-lethalities",
+    "framework": "custom",
+    "tags": [
+      "long",
+      "lists"
+    ]
+  },
+  {
+    "slug": "cloudflare-pingora",
+    "url": "https://blog.cloudflare.com/how-we-built-pingora-the-proxy-that-connects-cloudflare-to-the-internet/",
+    "framework": "custom",
+    "tags": [
+      "images"
+    ]
+  },
+  {
+    "slug": "githubblog-copilotx",
+    "url": "https://github.blog/2023-03-22-github-copilot-x-the-ai-powered-developer-experience/",
+    "framework": "wordpress",
+    "tags": [
+      "images"
+    ]
+  },
+  {
+    "slug": "pytorch-genai2",
+    "url": "https://pytorch.org/blog/accelerating-generative-ai-2/",
+    "framework": "jekyll",
+    "tags": [
+      "code",
+      "images"
+    ]
+  },
+  {
+    "slug": "harvard-annotated-transformer",
+    "url": "https://nlp.seas.harvard.edu/annotated-transformer/",
+    "framework": "jupyter",
+    "tags": [
+      "code",
+      "math"
+    ]
+  },
+  {
+    "slug": "jaykmody-gpt",
+    "url": "https://jaykmody.com/blog/gpt-from-scratch/",
+    "framework": "custom",
+    "tags": [
+      "code",
+      "math"
+    ]
+  },
+  {
+    "slug": "raschka-selfattention",
+    "url": "https://sebastianraschka.com/blog/2023/self-attention-from-scratch.html",
+    "framework": "jekyll",
+    "tags": [
+      "code",
+      "math"
+    ]
+  },
+  {
+    "slug": "brendangregg-cpu",
+    "url": "https://www.brendangregg.com/blog/2017-05-09/cpu-utilization-is-wrong.html",
+    "framework": "custom",
+    "tags": [
+      "images"
+    ]
+  },
+  {
+    "slug": "matklad-architecture",
+    "url": "https://matklad.github.io/2021/02/06/ARCHITECTURE.md.html",
+    "framework": "jekyll",
+    "tags": []
+  },
+  {
+    "slug": "fasterthanlime-golang",
+    "url": "https://fasterthanli.me/articles/i-want-off-mr-golangs-wild-ride",
+    "framework": "custom",
+    "tags": [
+      "code"
+    ]
+  },
+  {
+    "slug": "godev-pipelines",
+    "url": "https://go.dev/blog/pipelines",
+    "framework": "custom",
+    "tags": [
+      "code"
+    ]
+  },
+  {
+    "slug": "webdev-vitals",
+    "url": "https://web.dev/articles/vitals",
+    "framework": "custom",
+    "tags": [
+      "images",
+      "tables"
+    ]
+  },
+  {
+    "slug": "csstricks-flexbox",
+    "url": "https://css-tricks.com/snippets/css/a-guide-to-flexbox/",
+    "framework": "wordpress",
+    "tags": [
+      "code",
+      "images"
+    ]
+  },
+  {
+    "slug": "hillelwayne-engineers",
+    "url": "https://www.hillelwayne.com/post/are-we-really-engineers/",
+    "framework": "hugo",
+    "tags": [
+      "footnotes"
+    ]
+  },
+  {
+    "slug": "mtlynch-google",
+    "url": "https://mtlynch.io/why-i-quit-google/",
+    "framework": "hugo",
+    "tags": [
+      "images"
+    ]
+  },
+  {
+    "slug": "quanta-understand",
+    "url": "https://www.quantamagazine.org/what-does-it-mean-for-ai-to-understand-20211216/",
+    "framework": "wordpress",
+    "tags": [
+      "images"
+    ]
+  },
+  {
+    "slug": "waitbutwhy-ai",
+    "url": "https://waitbutwhy.com/2015/01/artificial-intelligence-revolution-1.html",
+    "framework": "wordpress",
+    "tags": [
+      "images",
+      "long"
+    ]
+  },
+  {
+    "slug": "sivers-ff",
+    "url": "https://sive.rs/ff",
+    "framework": "custom",
+    "tags": []
+  },
+  {
+    "slug": "jxnl-rag",
+    "url": "https://jxnl.co/writing/2024/05/22/systematically-improving-your-rag/",
+    "framework": "mkdocs",
+    "tags": []
+  },
+  {
+    "slug": "samaltman-ia",
+    "url": "https://ia.samaltman.com/",
+    "framework": "custom",
+    "tags": []
+  },
+  {
+    "slug": "stratechery-endbeginning",
+    "url": "https://stratechery.com/2020/the-end-of-the-beginning/",
+    "framework": "wordpress",
+    "tags": [
+      "images"
+    ]
+  },
+  {
+    "slug": "openai-4o",
+    "url": "https://openai.com/index/hello-gpt-4o/",
+    "framework": "next",
+    "tags": [
+      "images"
+    ]
+  },
+  {
+    "slug": "mitchellh-large",
+    "url": "https://mitchellh.com/writing/building-large-technical-projects",
+    "framework": "custom",
+    "tags": []
+  },
+  {
+    "slug": "coolshell-rust",
+    "url": "https://coolshell.cn/articles/20845.html",
+    "framework": "wordpress",
+    "tags": [
+      "zh",
+      "code"
+    ]
+  },
+  {
+    "slug": "medium-backprop",
+    "url": "https://medium.com/@karpathy/yes-you-should-understand-backprop-e2f06eab496b",
+    "framework": "medium",
+    "tags": [
+      "images"
+    ]
+  },
+  {
+    "slug": "bair-koala",
+    "url": "https://bair.berkeley.edu/blog/2023/04/03/koala/",
+    "framework": "jekyll",
+    "tags": [
+      "images"
+    ]
+  },
+  {
+    "slug": "rustblog-1.0",
+    "url": "https://blog.rust-lang.org/2015/05/15/Rust-1.0/",
+    "framework": "custom",
+    "tags": []
+  },
+  {
+    "slug": "acoup-gondor1",
+    "url": "https://acoup.blog/2019/05/10/collections-the-siege-of-gondor/",
+    "framework": "wordpress",
+    "tags": [
+      "images",
+      "long"
+    ]
+  },
+  {
+    "slug": "oneusefulthing-centaurs",
+    "url": "https://www.oneusefulthing.org/p/centaurs-and-cyborgs-on-the-jagged",
+    "framework": "substack",
+    "tags": [
+      "images"
+    ]
+  },
+  {
+    "slug": "ruanyifeng-curl",
+    "url": "https://www.ruanyifeng.com/blog/2019/09/curl-reference.html",
+    "framework": "movabletype",
+    "tags": [
+      "zh",
+      "code"
+    ]
+  },
+  {
+    "slug": "regehr-ub",
+    "url": "https://blog.regehr.org/archives/213",
+    "framework": "wordpress",
+    "tags": [
+      "code"
+    ]
+  },
+  {
+    "slug": "nullprogram-sm",
+    "url": "https://nullprogram.com/blog/2020/12/31/",
+    "framework": "custom",
+    "tags": [
+      "code"
+    ]
+  }
+]

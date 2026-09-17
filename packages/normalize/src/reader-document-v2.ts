@@ -526,10 +526,32 @@ function flowFromParagraphPhrasing(
     pending.push(...textRunSlice(pieces, cursor, value.length));
   }
 
-  if (!foundDisplayMath)
-    return [{ children: compactPhrasing(children, true), type: "paragraph" }];
+  if (!foundDisplayMath) return paragraphsSplitOnDoubleBreaks(compactPhrasing(children, true));
   flush();
   return result;
+}
+
+/** Two <br> in a row inside one paragraph is how old hand-written pages separate paragraphs. */
+function paragraphsSplitOnDoubleBreaks(children: ReaderV2PhrasingNode[]): ReaderV2FlowNode[] {
+  const groups: ReaderV2PhrasingNode[][] = [[]];
+  for (let index = 0; index < children.length; index += 1) {
+    const node = children[index]!;
+    if (node.type === "break" && children[index + 1]?.type === "break") {
+      while (children[index + 1]?.type === "break") index += 1;
+      groups.push([]);
+      continue;
+    }
+    groups[groups.length - 1]!.push(node);
+  }
+  const paragraphs = groups
+    .map((group) => {
+      while (group[0]?.type === "break") group.shift();
+      while (group.at(-1)?.type === "break") group.pop();
+      return group;
+    })
+    .filter((group) => group.some((node) => node.type !== "text" || node.value.trim().length > 0))
+    .map((group): ReaderV2FlowNode => ({ children: group, type: "paragraph" }));
+  return paragraphs.length ? paragraphs : [{ children, type: "paragraph" }];
 }
 
 function normalizedHeadingIdentity(value: string) {
@@ -1335,6 +1357,16 @@ function flowFromElement(
       type: "list",
     };
   }
+  // Some sites (fasterthanli.me, a few highlighters) emit multi-line <code>
+  // without a <pre>; a newline inside code that is not in running text is a block.
+  if (element.tagName === "code" && isStandaloneBlockCode(element)) {
+    return {
+      lang: boundedNullable(context, languageFromCode(element)),
+      meta: null,
+      type: "code",
+      value: bounded(context, textContent(element).replace(/\n$/u, "")),
+    };
+  }
   if (element.tagName === "pre") {
     const code = element.children.find(
       (child): child is Element => isElement(child) && child.tagName === "code",
@@ -1368,6 +1400,12 @@ function flowFromElement(
     return flowFromChildren(element.children, path, context);
   }
   return undefined;
+}
+
+// Only elements that reach the flow path are checked: inline code inside a
+// paragraph or a link goes through the phrasing path and never gets here.
+function isStandaloneBlockCode(element: Element) {
+  return textContent(element).trim().includes("\n");
 }
 
 function flowFromChildren(

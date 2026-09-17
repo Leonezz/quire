@@ -991,7 +991,7 @@ describe("ContentNormalizationModule", () => {
     );
   });
 
-  it("fails closed when a unique main landmark still contains multiple articles", () => {
+  it("extracts through the whole page when a main landmark still contains multiple articles", () => {
     const html = `<!doctype html><html><body><main>
       <article><h1>First article</h1><p>${"Independent first article content. ".repeat(20)}</p></article>
       <article><h1>Second article</h1><p>${"Independent second article content. ".repeat(20)}</p></article>
@@ -999,16 +999,13 @@ describe("ContentNormalizationModule", () => {
 
     const result = normalizeArticleCapture(articleCapture(html));
 
-    expect(result.ok, JSON.stringify(result)).toBe(false);
-    if (result.ok) return;
-    expect(result.problems).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "SOURCE_ARTICLE_CONTENT_LOW_QUALITY",
-          severity: "fatal",
-        }),
-      ]),
-    );
+    // No unique boundary is not a failure: the generic extractors run on the
+    // page and the reader shows what they found, with provenance saying so.
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    expect(result.article.materialization.provenance.selectedCandidate.sourcePath).toMatch(/^article\.extractor\.(defuddle|readability)$/);
+    const plain = result.article.materialization.representations.find((r) => r.schema === "selection.text.v1")?.content ?? "";
+    expect(plain).toContain("Independent first article content.");
   });
 
   it("uses a bounded semantic root to preserve table and code structure without substantive outer siblings", () => {
@@ -1148,36 +1145,20 @@ describe("ContentNormalizationModule", () => {
     ).toBeLessThanOrEqual(2_048);
   });
 
-  it("fails closed instead of accepting an ambiguous raw body as a full article", () => {
+  it("extracts an article from a page without any semantic boundary and drops the chrome", () => {
     const html = `<!doctype html><html><head><title>Ambiguous research page</title></head><body><header>Research digest account settings</header><nav>Home Archive Topics Subscribe Sign in</nav><div class="content"><h1>Loose research note</h1><p>${"A short observation records a potentially useful result without establishing a unique article boundary. ".repeat(20)}</p></div><aside>Site statistics: 42 weekly visitors</aside><footer>Privacy Terms Contact</footer></body></html>`;
 
     const result = normalizeArticleCapture(articleCapture(html));
 
-    if (result.ok) {
-      expect(
-        result.article.materialization.provenance.selectedCandidate.sourcePath,
-      ).not.toBe("article.extractor.body");
-    }
-    expect(result.ok, JSON.stringify(result)).toBe(false);
-    if (result.ok) return;
-    expect(result.problems).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "SOURCE_ARTICLE_CONTENT_LOW_QUALITY",
-          recoverBy: "plain-text-fallback",
-          severity: "fatal",
-        }),
-      ]),
-    );
-    expect(result.fallbackText).toContain("Loose research note");
-    expect(result.fallbackText).toContain(
-      "potentially useful result without establishing a unique article boundary",
-    );
-    expect(
-      Buffer.byteLength(result.fallbackText ?? "", "utf8"),
-    ).toBeLessThanOrEqual(64 * 1024);
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    expect(result.article.title).toBe("Loose research note");
+    expect(result.article.materialization.provenance.selectedCandidate.sourcePath).toMatch(/^article\.extractor\.(defuddle|readability)$/);
+    const plain = result.article.materialization.representations.find((r) => r.schema === "selection.text.v1")?.content ?? "";
+    expect(plain).toContain("potentially useful result without establishing a unique article boundary");
+    expect(plain).not.toContain("Home Archive Topics");
+    expect(plain).not.toContain("42 weekly visitors");
   });
-
   it("rejects a low-quality body-only capture with a safe readable fallback", () => {
     const html = `<!doctype html><html><head><title>Research inbox</title><style>body { display: none }</style></head><body>
       <nav>Sign in Subscribe</nav><script>stealCredentials()</script></body></html>`;
@@ -3428,5 +3409,22 @@ describe("ContentNormalizationModule", () => {
       "feed.generator.uri",
       "feed.generator.version",
     ]);
+  });
+});
+
+describe("block code without <pre>", () => {
+  it("turns a multi-line standalone <code> into a code block and keeps inline code inline", () => {
+    const html = `<!doctype html><html><body><main><article><h1>Wild ride</h1><p>${"Text about Go and its choices. ".repeat(20)}</p><div class="code-block"><code class="scroll-wrapper language-go">func main() {\n\tfmt.Println("hi")\n}\n</code></div><p>Use <code>fmt.Println</code> for output.</p></article></main></body></html>`;
+    const result = normalizeArticleCapture(articleCapture(html));
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    const v2 = result.article.materialization.representations.find((r) => r.schema === "reader.document.v2")?.content ?? "";
+    const root = JSON.parse(v2) as { children: { type: string; value?: string; lang?: string | null }[] };
+    const walk = (nodes: unknown[]): { type: string; value?: string; lang?: string | null }[] => nodes.flatMap((node) => { const n = node as { type: string; children?: unknown[] }; return [n as { type: string }, ...walk(n.children ?? [])]; });
+    const nodes = walk(root.children);
+    const block = nodes.find((node) => node.type === "code");
+    expect(block?.value).toBe('func main() {\n\tfmt.Println("hi")\n}');
+    expect(block?.lang).toBe("go");
+    expect(nodes.filter((node) => node.type === "inlineCode").map((node) => node.value)).toEqual(["fmt.Println"]);
   });
 });

@@ -1,0 +1,21 @@
+{
+  "name": "@read/eval",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Rendering evaluation set: real pages snapshotted once, normalized on every run, compared with reviewed goldens.",
+  "scripts": {
+    "fetch": "node scripts/fetch.mjs",
+    "eval": "vitest run",
+    "golden": "GOLDEN=1 vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@read/normalize": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3",
+    "vitest": "4.1.11",
+    "@types/node": "^22"
+  }
+}

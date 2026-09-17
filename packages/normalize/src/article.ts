@@ -16,6 +16,7 @@ import {
   applyArticleSiteAdapter,
   articleSiteAdapterRule,
 } from "./article-site-adapters";
+import { pruneArticleChrome } from "./article-prune";
 import { createRepresentations, sha256Identity } from "./representations";
 
 const DEFUDDLE_MIN_TEXT_CHARACTERS = 600;
@@ -334,6 +335,80 @@ function normalizedPublishedAt(value: string | null | undefined) {
   return Number.isFinite(date.valueOf()) ? date.toISOString() : undefined;
 }
 
+type StructuredDataMetadata = { author?: string; datePublished?: string };
+
+/** JSON-LD is the one place most CMSs (WordPress, Ghost, Substack, Medium) state the date and author reliably. */
+function structuredDataMetadata(document: DocumentLike): StructuredDataMetadata {
+  const ARTICLE_TYPES = /Article|BlogPosting|NewsArticle|TechArticle|ScholarlyArticle|Report|WebPage/;
+  const found: StructuredDataMetadata = {};
+  const visit = (value: unknown, depth: number) => {
+    if (!value || typeof value !== "object" || depth > 4) return;
+    if (Array.isArray(value)) { value.forEach((item) => visit(item, depth + 1)); return; }
+    const record = value as Record<string, unknown>;
+    if (Array.isArray(record["@graph"])) visit(record["@graph"], depth + 1);
+    const type = Array.isArray(record["@type"]) ? record["@type"].join(" ") : String(record["@type"] ?? "");
+    if (!ARTICLE_TYPES.test(type)) return;
+    if (!found.datePublished && typeof record.datePublished === "string") found.datePublished = record.datePublished;
+    if (!found.author) found.author = authorName(record.author);
+  };
+  for (const script of document.querySelectorAll("script[type='application/ld+json']")) {
+    const text = script.textContent?.trim();
+    if (!text || text.length > 200_000) continue;
+    try { visit(JSON.parse(text), 0); } catch { /* malformed JSON-LD is common and carries no article data */ }
+    if (found.datePublished && found.author) break;
+  }
+  return found;
+}
+
+function authorName(value: unknown): string | undefined {
+  if (typeof value === "string") return normalizedOptionalString(value, 200);
+  if (Array.isArray(value)) {
+    const names = value.map(authorName).filter((name): name is string => !!name);
+    return names.length ? names.slice(0, 5).join(", ") : undefined;
+  }
+  if (value && typeof value === "object") return normalizedOptionalString((value as { name?: unknown }).name as string | undefined, 200);
+  return undefined;
+}
+
+/** Blog permalinks often carry the only machine-readable date: /2015/05/21/slug or /2023/04/. */
+function publishedAtFromUrl(source: string): string | undefined {
+  const path = new URL(source).pathname;
+  const numeric = /\/((?:19|20)\d{2})[/-](0[1-9]|1[0-2])(?:[/-](0[1-9]|[12]\d|3[01]))?(?:\/|$|-)/u.exec(path);
+  if (numeric) {
+    const [, year, month, day] = numeric;
+    return normalizedPublishedAt(`${year}-${month}-${day ?? "01"}T00:00:00Z`);
+  }
+  // simonwillison.net style: /2024/Dec/31/slug
+  const named = /\/((?:19|20)\d{2})\/(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\/(\d{1,2})\//u.exec(path);
+  if (!named) return undefined;
+  const [, year, monthName, day] = named;
+  const month = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"].indexOf(monthName!) + 1;
+  return normalizedPublishedAt(`${year}-${String(month).padStart(2, "0")}-${day!.padStart(2, "0")}T00:00:00Z`);
+}
+
+/** Visible author markup that pages use when they have no author meta tag. */
+function bylineFromMarkup(document: DocumentLike): string | undefined {
+  for (const selector of ["a[rel~='author']", "[itemprop~='author'] [itemprop~='name']", "[itemprop~='author']", ".author-name", ".byline .author", "[class~='byline'] a"]) {
+    for (const element of Array.from(document.querySelectorAll(selector))) {
+      // Comment threads carry rel=author links for every commenter.
+      if (element.closest("[class*='comment'], [id*='comment'], footer, nav")) continue;
+      const text = cleanByline(normalizedOptionalString(element.textContent, 160));
+      if (text) return text;
+    }
+  }
+  return undefined;
+}
+
+/** "Bret Devereaux, View all posts by Bret" → "Bret Devereaux"; "Sameer Ajmani 13 March 2014" → "Sameer Ajmani". */
+function cleanByline(value: string | undefined) {
+  if (!value) return undefined;
+  const cleaned = value
+    .replace(/^(by|author|posted by|written by)[:\s]+/iu, "")
+    .replace(/[,\s]*(view all posts.*|all posts by.*|posted (on|in).*|\d{1,2}\s+\w+\s+\d{4}.*|\w+\s+\d{1,2},\s+\d{4}.*)$/iu, "")
+    .trim();
+  return cleaned.length >= 2 && cleaned.length <= 120 && !/^(by|author)$/iu.test(cleaned) ? cleaned : undefined;
+}
+
 function normalizedDirection(value: string | null | undefined) {
   const normalized = value?.trim().toLowerCase();
   return normalized === "ltr" || normalized === "rtl" ? normalized : undefined;
@@ -370,6 +445,93 @@ function preferredArticleTitle(document: DocumentLike) {
     if (title) return title;
   }
   return undefined;
+}
+
+const TITLE_SEPARATOR = /\s+(?:\||–|—|-|·|»|::)\s+/u;
+
+const SITE_WORDS = /\b(blog|log|weblog|magazine|journal|news|newsletter|home)\b|\.(com|net|io|org|dev|me|co|ai)\b/iu;
+
+function lettersOnly(value: string) {
+  return value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+/** Names the page uses for itself: og:site_name, the home link, an h1 that links to the site root, the hostname. */
+function siteNames(document: DocumentLike, source: string) {
+  const names = new Set<string>();
+  const add = (value: string | null | undefined) => { const v = value?.replace(/\s+/gu, " ").trim().toLowerCase(); if (v && v.length >= 2) names.add(v); };
+  add(metaContent(document, ["meta[property='og:site_name']", "meta[name='application-name']"]));
+  for (const selector of ["[class*='site-title']", "[class*='site-name']", "[class*='logo'] a", "#logo", ".brand", "a[rel~='home']"]) {
+    add(normalizedOptionalString(document.querySelector(selector)?.textContent, 120));
+  }
+  const origin = new URL(source).origin;
+  for (const link of Array.from(document.querySelectorAll("a[href]")).slice(0, 200)) {
+    const href = link.getAttribute("href") ?? "";
+    let target: URL | undefined;
+    try { target = new URL(href, source); } catch { continue; }
+    if (target.origin !== origin) continue;
+    const segments = target.pathname.split("/").filter(Boolean);
+    // The home link, or an h1 that links one level deep ("/blog/"): a section or site title, not an article's.
+    if (segments.length === 0 || (segments.length === 1 && link.closest("h1"))) add(normalizedOptionalString(link.textContent, 120));
+  }
+  const host = new URL(source).hostname.replace(/^www\./u, "");
+  add(host);
+  add(host.split(".")[0]);
+  return names;
+}
+
+function hostLabel(document: DocumentLike, source: string) {
+  void document;
+  return lettersOnly(new URL(source).hostname.replace(/^www\./u, "").split(".")[0] ?? "");
+}
+
+function stripTitleAnchors(value: string) {
+  return value.replace(/[\s¶#🔗]+$/u, "").replace(/^[\s¶#🔗]+/u, "").trim();
+}
+
+function isSiteLike(value: string, names: Set<string>, label: string) {
+  const lower = value.toLowerCase();
+  if (names.has(lower) || /^\d+$/u.test(value) || value.length < 3) return true;
+  // "Brendan Gregg's Blog" on brendangregg.com, "null program" on nullprogram.com.
+  const letters = lettersOnly(value);
+  return label.length >= 6 && letters.length <= label.length + 8 && letters.includes(label);
+}
+
+/** A short side of a split title that is the site: a known name, "Lil'Log" / "Gwern.net"-like words, or the host label. */
+function isSiteSide(part: string, names: Set<string>, label: string) {
+  if (names.has(part.toLowerCase())) return true;
+  const words = part.split(/\s+/u).length;
+  return words <= 4 && (SITE_WORDS.test(part) || (label.length >= 4 && lettersOnly(part).includes(label)));
+}
+
+/** Drops a "| Site" / "– Site" side of a title when that side is the page's own name. */
+function withoutSiteSuffix(value: string, names: Set<string>, label: string) {
+  const parts = value.split(TITLE_SEPARATOR).map((part) => part.trim()).filter(Boolean);
+  if (parts.length < 2) return value;
+  const kept = parts.filter((part) => !isSiteSide(part, names, label));
+  if (kept.length === parts.length || kept.length === 0) return value;
+  return kept.join(" – ");
+}
+
+/** First candidate that, once cleaned, is a title of its own rather than the site's name or a number. */
+function chooseArticleTitle(document: DocumentLike, source: string, candidates: readonly (string | undefined)[]) {
+  const names = siteNames(document, source);
+  const label = hostLabel(document, source);
+  const cleanedCandidates = candidates
+    .map((candidate) => (candidate ? stripTitleAnchors(withoutSiteSuffix(stripTitleAnchors(candidate), names, label)) : ""))
+    .filter(Boolean);
+  const chosen = cleanedCandidates.find((cleaned) => !isSiteLike(cleaned, names, label));
+  if (chosen) {
+    // An h1 padded with UI text ("Web Vitals Stay organized with collections…") still starts
+    // with the real title, which the page metadata states on its own.
+    const shorter = cleanedCandidates.find((other) => other !== chosen && other.length >= 8 && chosen.startsWith(other));
+    return (shorter ?? chosen).slice(0, 500);
+  }
+  return candidates.find((candidate) => !!candidate)?.slice(0, 500) ?? new URL(source).hostname;
+}
+
+function firstHeadingText(html: string, tag: "h2" | "h3") {
+  const document = parseHTML(`<html><body>${html}</body></html>`).document as unknown as DocumentLike;
+  return normalizedOptionalString(document.querySelector(tag)?.textContent, 500);
 }
 
 function preferredExtractedTitle(html: string) {
@@ -685,6 +847,27 @@ function uniqueSemanticArticleRoot(document: DocumentLike) {
   return containedArticles.length === 1 ? containedArticles[0] : undefined;
 }
 
+function extractorDocumentFor(
+  document: DocumentLike,
+  root: Element,
+  source: string,
+) {
+  return root === document.body
+    ? offlineExtractorDocument(document, source)
+    : boundedExtractorDocument(document, root, source);
+}
+
+/** Element-wise maximum of the candidates' rich-structure counts. */
+function unionRichUnits(candidates: readonly (ExtractionCandidate | undefined)[]) {
+  return candidates
+    .filter((candidate): candidate is ExtractionCandidate => candidate !== undefined)
+    .map((candidate) => contentStats(candidate.content).richUnits)
+    .reduce<number[]>(
+      (union, units) => units.map((count, index) => Math.max(count, union[index] ?? 0)),
+      [],
+    );
+}
+
 function boundedExtractorDocument(
   sourceDocument: DocumentLike,
   root: Element,
@@ -874,18 +1057,23 @@ export function normalizeArticleCapture(
       plainTextFallbackFromDocument(document, input.budget.maxOutputBytes) ??
       failureFallbackText;
     const preferredTitle = preferredArticleTitle(document);
-    const rawByline = metaContent(document, [
-      "meta[name='author']",
-      "meta[property='article:author']",
-      "meta[name='byl']",
-    ]);
-    const rawPublishedAt = normalizedPublishedAt(
+    const rawByline =
       metaContent(document, [
-        "meta[property='article:published_time']",
-        "meta[name='date']",
-        "meta[itemprop='datePublished']",
-      ]) ?? document.querySelector("time[datetime]")?.getAttribute("datetime"),
-    );
+        "meta[name='author']",
+        "meta[property='article:author']",
+        "meta[name='byl']",
+      ]) ?? cleanByline(structuredDataMetadata(document).author) ?? bylineFromMarkup(document);
+    const structured = structuredDataMetadata(document);
+    const rawPublishedAt =
+      normalizedPublishedAt(
+        metaContent(document, [
+          "meta[property='article:published_time']",
+          "meta[name='date']",
+          "meta[itemprop='datePublished']",
+        ]) ??
+          structured.datePublished ??
+          document.querySelector("time[datetime]")?.getAttribute("datetime"),
+      ) ?? publishedAtFromUrl(source);
     let defuddle: ExtractionCandidate | undefined;
     let readability: ExtractionCandidate | undefined;
     const siteAdapterApplication = applyArticleSiteAdapter({
@@ -896,10 +1084,13 @@ export function normalizeArticleCapture(
     const semanticRootExtraction = semanticRoot
       ? semanticRootCandidate(semanticRoot)
       : undefined;
-    if (semanticRoot) {
+    // Without a unique semantic root the extractors see the whole page: most
+    // personal blogs have no <article> and would otherwise never be extracted.
+    const extractorRoot = semanticRoot ?? document.body ?? undefined;
+    if (extractorRoot) {
       try {
         defuddle = defuddleCandidate(
-          boundedExtractorDocument(document, semanticRoot, source),
+          extractorDocumentFor(document, extractorRoot, source),
           source,
         );
       } catch {
@@ -914,7 +1105,7 @@ export function normalizeArticleCapture(
       }
       try {
         readability = readabilityCandidate(
-          boundedExtractorDocument(document, semanticRoot, source),
+          extractorDocumentFor(document, extractorRoot, source),
           input.budget.maxNodes,
         );
       } catch {
@@ -938,7 +1129,7 @@ export function normalizeArticleCapture(
     );
     const siteAdapterExtraction = siteAdapterApplication
       ? siteAdapterCandidate(siteAdapterApplication.content, {
-          byline: defuddle?.byline ?? readability?.byline ?? rawByline,
+          byline: cleanByline(defuddle?.byline ?? readability?.byline) ?? rawByline,
           dir: readability?.dir ?? rawDir,
           lang: defuddle?.lang ?? readability?.lang ?? rawLang,
           publishedAt:
@@ -951,11 +1142,16 @@ export function normalizeArticleCapture(
         })
       : undefined;
 
+    // Retention is measured against the article region, never the whole page:
+    // navigation and sidebars hold headings, lists and images that a correct
+    // extraction must drop. Without a semantic region, "what the best
+    // extractor kept" is the reference, which still rejects an extractor that
+    // lost code blocks or tables the other one preserved.
     const sourceRichUnits = siteAdapterExtraction
       ? contentStats(siteAdapterExtraction.content).richUnits
       : semanticRootExtraction
         ? contentStats(semanticRootExtraction.content).richUnits
-        : contentStatsFromDocument(document).richUnits;
+        : unionRichUnits([defuddle, readability]);
     const defuddleIsHealthy =
       defuddle !== undefined &&
       defuddlePassesQualityGate({
@@ -986,13 +1182,19 @@ export function normalizeArticleCapture(
         ),
       );
     }
+    // When the two extractors disagree about which structure matters, neither
+    // passes the union gate; the longer extraction is still a readable article
+    // and is reported with both quality warnings attached rather than refused.
+    const longerCandidate = [defuddle, readability]
+      .filter((candidate): candidate is ExtractionCandidate => candidate !== undefined)
+      .sort((a, b) => contentStats(b.content).textCharacters - contentStats(a.content).textCharacters)[0];
     const selected = siteAdapterExtraction
       ? siteAdapterExtraction
       : defuddleIsHealthy
         ? defuddle!
         : readabilityIsHealthy
           ? readability!
-          : semanticRootExtraction;
+          : semanticRootExtraction ?? longerCandidate;
     if (!selected) {
       return articleFailure(
         [
@@ -1026,15 +1228,25 @@ export function normalizeArticleCapture(
         failureFallbackText,
       );
     }
-    const title =
-      preferredExtractedTitle(selected.content) ||
-      preferredTitle ||
-      selected.title ||
-      normalizedOptionalString(document.title, 500) ||
-      new URL(source).hostname;
+    const title = chooseArticleTitle(
+      document,
+      source,
+      // The article's own h1 first; the page metadata only when the h1 turns
+      // out to be the site header or something else that is not a title.
+      [
+        preferredExtractedTitle(selected.content),
+        preferredTitle,
+        metaContent(document, ["meta[property='og:title']", "meta[name='twitter:title']"]),
+        normalizedOptionalString(document.title, 500),
+        selected.title,
+        // Sites whose h1 is the site name put the post title in the first h2.
+        firstHeadingText(selected.content, "h2"),
+      ],
+    );
+    const pruned = pruneArticleChrome(selected.content);
     const representationResult = createRepresentations({
       baseUri: source,
-      content: selected.content,
+      content: pruned.content,
       maxDepth: input.budget.maxDepth,
       maxNodes: input.budget.maxNodes,
       maxOutputBytes: input.budget.maxOutputBytes,
@@ -1047,6 +1259,7 @@ export function normalizeArticleCapture(
       "article.normalization@3",
       ...decoding.rulesApplied,
       ...candidateRules(selected.sourcePath),
+      ...pruned.rulesApplied,
       ...(selected.sourcePath === "article.extractor.site-adapter" &&
       siteAdapterApplication
         ? [articleSiteAdapterRule(siteAdapterApplication)]
@@ -1097,8 +1310,8 @@ export function normalizeArticleCapture(
       sourceIdentity,
     };
     const article = {
-      ...((selected.byline ?? rawByline)
-        ? { byline: selected.byline ?? rawByline }
+      ...((cleanByline(selected.byline) ?? rawByline)
+        ? { byline: cleanByline(selected.byline) ?? rawByline }
         : {}),
       ...((selected.dir ?? rawDir) ? { dir: selected.dir ?? rawDir } : {}),
       ...((selected.lang ?? rawLang) ? { lang: selected.lang ?? rawLang } : {}),
