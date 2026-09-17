@@ -37,9 +37,13 @@ export function SelectionToolbar({ root, viewport, capture, onHighlight, onNote,
         if (!captured) { setPlacement(null); return; }
         const rect = range.getBoundingClientRect();
         const box = viewport.getBoundingClientRect();
+        // Positioned inside the reader frame (not the scrolled content), so viewport-relative
+        // coordinates are what the absolute box needs; scrolling re-runs this handler.
+        const top = rect.top - box.top - 44;
+        if (top < -40 || rect.top > box.bottom) { setPlacement(null); return; }
         setPlacement({
-          top: rect.top - box.top + viewport.scrollTop - 44,
-          left: Math.max(8, rect.left - box.left + viewport.scrollLeft + rect.width / 2),
+          top: Math.max(4, top),
+          left: Math.min(box.width - 140, Math.max(140, rect.left - box.left + rect.width / 2)),
           capture: captured,
         });
       });

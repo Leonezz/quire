@@ -33,12 +33,16 @@
 - 已知残留（写在各篇 notes 里）：个别站点的元信息行 / 上下篇链接 / 语言切换列表；`<d-footnote>` 内联脚注未支持；这些留给 L3 站点 profile。
 - 未做（推后）：feed 摘要的"获取完整正文"动作属于 M1 来源接入。
 
-### 第 3 刀：沉淀最小闭环（§2.3）
+### 第 3 刀：沉淀最小闭环（§2.3）— 已完成 2026-09-18
+- 划线 + 批注：文章用 text-quote 锚定并以 CSS Custom Highlight 绘制；PDF 用 pdf-regions 锚定并在页面上画区域。选中即出浮动条（四色 / 加批注 / 复制引用）；Notes 面板列出、跳转、内联编辑、删除、复制单条引用或全部导出 Markdown。存储在 `userData/annotations/<material>.json`；浏览器预览用 localStorage。
+- 原设计要点：
 - 划线 + 一句批注，锚定到 text-quote（HTML）或页 + 区域（PDF）；Notes 面板列出并可跳转。
 - 一键复制引用（引文 + 标题 + 作者 + 链接 + 位置）；标注导出 Markdown。
 - 验收：关闭再开标注仍在原位；复制的引用可粘到 Obsidian 直接用。
 
-### 第 4 刀：安全与离线收尾（R7）
+### 第 4 刀：安全与离线收尾（R7）— 已完成 2026-09-18
+- 图片由主进程抓取一次、落盘 `userData/images`，以 data URL 交给阅读器（CSP 不放行远程主机）；纸色主题；净化 fixture 见 normalize 测试。
+- 原设计要点：
 - 图片本地缓存（内容寻址），无网时图片仍显示；净化 HTML 的 fixture 补齐。
 - 纸色主题。
 - 到此 M0 完成，打 tag。
@@ -51,6 +55,10 @@
 
 ### 第 6 刀：M2 Agent
 - ⌘J 面板三种位置上下文，CodexBridge + MCP 工具，移植 artifact skills；先做"阅读中解释 / 核查 / 找相关"。
+
+## 评测集导入 app
+- Developer 菜单 → Import Evaluation Corpus（⌘⇧I，仅开发检出可见）把 `eval/corpus` 全部快照按当前抽取器入库；2026-09-18 实测 64 篇导入、0 失败。浏览器预览也直接列出导出后的语料（`EXPORT=1`）。
+- 第二轮独立评审（`eval/quality-review-2.md`）：46 通过 / 4 轻微 / 14 严重（首轮 36 / 6 / 22）；随后又修了 Paul Graham 脚注、卡片链接的 Markdown、尾部 discuss / read-my-book 段。剩余主要是站点级残留（Quanta、Stratechery 的相关文章卡片），留给 L3 profile。
 
 ## 工作方式
 - 先写引擎测试再接 UI；渲染层验证走浏览器预览（`localhost:5173`，`api.ts` 的 preview 模式），主进程改动才重启桌面 app。
