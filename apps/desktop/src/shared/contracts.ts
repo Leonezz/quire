@@ -47,14 +47,26 @@ export interface OpenFileInput {
 
 export type ThemeSource = "system" | "light" | "dark";
 
+export interface CorpusImportResult {
+  imported: number;
+  skipped: number;
+  failed: { slug: string; message: string }[];
+}
+
 export interface ReadApi {
   version: string;
   platform: string;
+  /** Fires after the main process changed the library on its own (an import); the renderer reloads the list. */
+  onLibraryChanged: (listener: () => void) => () => void;
+  /** Development only: materialize every snapshot of the evaluation corpus into the library. */
+  importCorpus: () => Promise<CorpusImportResult>;
   /** Sync the window's native appearance (vibrancy, menus) with the reading theme. */
   setTheme: (theme: ThemeSource) => Promise<void>;
   openUrl: (url: string) => Promise<OpenUrlResult>;
   openFile: (input: OpenFileInput) => Promise<OpenUrlResult>;
   getMaterial: (id: string) => Promise<MaterialRecord | undefined>;
+  /** A remote image as a data: URL from the local cache (fetched once); undefined when it cannot be cached. */
+  resolveImage: (url: string) => Promise<string | undefined>;
   /** Raw bytes of a stored PDF; undefined when the material has none. */
   getMaterialBytes: (id: string) => Promise<Uint8Array | undefined>;
   listMaterials: () => Promise<MaterialSummary[]>;

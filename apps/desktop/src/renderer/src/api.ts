@@ -37,9 +37,13 @@ const browserPreview: ReadApi = {
   platform: "browser",
   // The preview paints its own ground (see styles.css), so there is no native appearance to sync.
   setTheme: async () => undefined,
+  onLibraryChanged: () => () => undefined,
+  importCorpus: async () => { throw new Error("The evaluation corpus is imported by the desktop app (Developer menu); the browser preview lists it directly."); },
   openUrl: async () => unavailable,
   openFile: async () => unavailable,
   getMaterial: async (id) => samples.find((material) => material.id === id) ?? (await corpusMaterial(id)),
+  // No engine in the preview: images stay placeholders (the page CSP blocks remote hosts anyway).
+  resolveImage: async () => undefined,
   getMaterialBytes: async (id) => {
     if (id !== samplePdfMaterial.id) return undefined;
     const response = await fetch("/dev/sample.pdf");

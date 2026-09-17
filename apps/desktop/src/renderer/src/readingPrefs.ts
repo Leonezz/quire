@@ -6,7 +6,7 @@ export type ReadingPrefs = {
   size: 16 | 17 | 18 | 19 | 20 | 22;
   measure: "narrow" | "normal" | "wide";
   lineHeight: "tight" | "comfortable" | "loose";
-  theme: "system" | "light" | "dark";
+  theme: "system" | "light" | "dark" | "sepia";
   justify: boolean;
   focus: boolean;
 };
@@ -49,5 +49,6 @@ export function prefsStyle(prefs: ReadingPrefs): Record<string, string> {
 export function applyTheme(theme: ReadingPrefs["theme"]) {
   const root = document.documentElement;
   if (theme === "system") delete root.dataset.theme; else root.dataset.theme = theme;
-  void read.setTheme(theme);
+  // Paper is a light appearance for the window chrome.
+  void read.setTheme(theme === "sepia" ? "light" : theme);
 }

@@ -5,6 +5,7 @@ import { ReaderDocumentSurface, useDocumentReadingPosition } from "@read/reader"
 import { FindBar } from "./FindBar";
 import { ReadingSettings } from "./ReadingSettings";
 import { applyTheme, loadPrefs, prefsStyle, savePrefs, type ReadingPrefs } from "./readingPrefs";
+import { read } from "./api";
 import type { MaterialRecord } from "../../shared/contracts";
 
 type OutlineEntry = { id: string; label: string; level: number };
@@ -142,6 +143,8 @@ export function ReaderView({ material, onBack, onOpenLink }: { material: Materia
               payload={material.reader?.payload ?? ""}
               fallback={fallback}
               onOpenLink={onOpenLink}
+              resolveImageSource={(url) => read.resolveImage(url)}
+              resolveRemoteImageSource={(url) => read.resolveImage(url)}
               showFallbackNotice={false}
             />
           </article>

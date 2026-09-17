@@ -28,6 +28,7 @@ export function App() {
 
   const refreshLibrary = useCallback(async () => setLibrary(await read.listMaterials()), []);
   useEffect(() => { void refreshLibrary(); }, [refreshLibrary]);
+  useEffect(() => read.onLibraryChanged(() => { void refreshLibrary(); }), [refreshLibrary]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if ((event.metaKey || event.ctrlKey) && event.key === "n") { event.preventDefault(); setAddOpen(true); } };
     window.addEventListener("keydown", onKey);

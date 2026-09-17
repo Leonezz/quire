@@ -1,8 +1,9 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { gunzipSync } from "node:zlib";
 import { join } from "node:path";
 import { createMarkdownRepresentations, normalizeArticleCapture, type ContentMaterialization, type NormalizationProblem } from "@read/normalize";
-import type { MaterialRecord, MaterialSummary, OpenFileInput, OpenUrlResult } from "../../shared/contracts";
+import type { CorpusImportResult, MaterialRecord, MaterialSummary, OpenFileInput, OpenUrlResult } from "../../shared/contracts";
 import { FetchError, assertPublicHttpUrl, fetchPage } from "./fetch";
 import { PdfError, inspectPdf } from "./pdf";
 
@@ -131,6 +132,27 @@ export class MaterialStore {
   private async save(record: MaterialRecord) {
     await mkdir(this.dir, { recursive: true });
     await writeFile(join(this.dir, `${record.id}.json`), JSON.stringify(record), "utf8");
+  }
+
+  /** Materializes every eval snapshot (corpus/<slug>/page.html.gz + meta.json) that is not in the library yet. */
+  async importSnapshots(corpusDir: string): Promise<CorpusImportResult> {
+    const result: CorpusImportResult = { imported: 0, skipped: 0, failed: [] };
+    let slugs: string[];
+    try { slugs = (await readdir(corpusDir, { withFileTypes: true })).filter((entry) => entry.isDirectory()).map((entry) => entry.name); }
+    catch (error) { throw new Error(`Corpus directory not readable: ${corpusDir} (${(error as Error).message})`); }
+    for (const slug of slugs.sort()) {
+      try {
+        const meta = JSON.parse(await readFile(join(corpusDir, slug, "meta.json"), "utf8")) as { url: string; finalUrl: string; fetchedAt: string };
+        if (await this.get(idFor(meta.finalUrl))) { result.skipped += 1; continue; }
+        const bytes = new Uint8Array(gunzipSync(await readFile(join(corpusDir, slug, "page.html.gz"))));
+        const record = await this.materializeAny(bytes, "text/html", meta.finalUrl, meta.url);
+        await this.save({ ...record, fetchedAt: meta.fetchedAt });
+        result.imported += 1;
+      } catch (error) {
+        result.failed.push({ slug, message: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    return result;
   }
 
   private pdfPath(id: string) { return join(this.dir, `${id}.pdf`); }

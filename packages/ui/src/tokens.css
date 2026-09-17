@@ -85,6 +85,31 @@
     --shadow-window: 0 30px 80px rgba(0,0,0,.6), 0 0 0 .5px rgba(255,255,255,.1);
   }
 }
+/* Paper: a warm reading surface; chrome stays light so the theme is about the page, not the app. */
+:root[data-theme="sepia"], [data-theme="sepia"] {
+  --label:            #2b2118;
+  --label-2:          rgba(60, 44, 30, .80);
+  --label-3:          rgba(60, 44, 30, .70);
+  --label-4:          rgba(60, 44, 30, .22);
+  --separator:        rgba(60, 44, 30, .14);
+  --separator-soft:   rgba(60, 44, 30, .08);
+  --ground:           linear-gradient(160deg, #efe6d6 0%, #e9dfcc 55%, #e4d9c4 100%);
+  --ground-flat:      #eae0cd;
+  --glass:            rgba(250, 244, 232, .62);
+  --glass-strong:     rgba(251, 246, 236, .82);
+  --glass-edge:       rgba(255, 252, 245, .66);
+  --content:          #f8f1e3;
+  --content-2:        #f1e8d6;
+  --fill:             rgba(60, 44, 30, .07);
+  --fill-2:           rgba(60, 44, 30, .12);
+  --accent:           #8a5a1e;
+  --accent-2:         #a6743a;
+  --accent-text:      #7a4d14;
+  --accent-soft:      rgba(138, 90, 30, .11);
+  --accent-ring:      rgba(138, 90, 30, .32);
+  --mark:             #e9c34a;
+  --mark-soft:        rgba(233, 195, 74, .42);
+}
 :root[data-theme="dark"], [data-theme="dark"] {
   --label: #f2f3f7; --label-2: rgba(226,229,236,.78); --label-3: rgba(226,229,236,.68); --label-4: rgba(226,229,236,.20);
   --separator: rgba(226,229,236,.14); --separator-soft: rgba(226,229,236,.08);

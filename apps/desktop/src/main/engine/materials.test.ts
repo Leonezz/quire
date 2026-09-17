@@ -91,3 +91,25 @@ describe("MaterialStore PDFs", () => {
     expect(result).toMatchObject({ ok: false, code: "PDF_INVALID" });
   });
 });
+
+describe("MaterialStore corpus import", () => {
+  it("imports gzipped snapshots once and reports per-slug failures", async () => {
+    const { gzipSync } = await import("node:zlib");
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    const corpus = join(root, "corpus");
+    const html = `<!doctype html><html><head><title>Cache keys</title></head><body><article><h1>Cache keys</h1>${"<p>Two harnesses cache the tokenised prompt keyed on the question text alone, so a changed system prompt silently reuses the old one.</p>".repeat(12)}</article></body></html>`;
+    await mkdir(join(corpus, "good"), { recursive: true });
+    await writeFile(join(corpus, "good", "page.html.gz"), gzipSync(Buffer.from(html)));
+    await writeFile(join(corpus, "good", "meta.json"), JSON.stringify({ url: "https://example.test/cache", finalUrl: "https://example.test/cache", fetchedAt: "2026-09-17T00:00:00.000Z" }));
+    await mkdir(join(corpus, "broken"), { recursive: true });
+    await writeFile(join(corpus, "broken", "meta.json"), "{ not json");
+    const store = new MaterialStore(root);
+    const first = await store.importSnapshots(corpus);
+    expect(first).toMatchObject({ imported: 1, skipped: 0 });
+    expect(first.failed.map((f) => f.slug)).toEqual(["broken"]);
+    expect((await store.list()).map((m) => m.title)).toEqual(["Cache keys"]);
+    expect((await store.list())[0]?.fetchedAt).toBe("2026-09-17T00:00:00.000Z");
+    const second = await store.importSnapshots(corpus);
+    expect(second).toMatchObject({ imported: 0, skipped: 1 });
+  });
+});
