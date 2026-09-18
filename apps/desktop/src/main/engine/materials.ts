@@ -1,11 +1,13 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { gunzipSync } from "node:zlib";
 import { join } from "node:path";
 import { createMarkdownRepresentations, normalizeArticleCapture, type ContentMaterialization, type NormalizationProblem } from "@read/normalize";
-import type { CorpusImportResult, MaterialRecord, MaterialSummary, OpenFileInput, OpenUrlResult } from "../../shared/contracts";
+import type { CorpusImportResult, MaterialMeta, MaterialRecord, MaterialSummary, OpenFileInput, OpenUrlResult } from "../../shared/contracts";
+import { captureTextOf } from "./capture-text";
 import { FetchError, assertPublicHttpUrl, fetchPage, type Fetcher } from "./fetch";
 import { PdfError, inspectPdf } from "./pdf";
+import type { MetaStore } from "./meta";
 import { readingMinutes } from "./reading-time";
 
 const BUDGET = { maxBytes: 8 * 1024 * 1024, maxDepth: 100, maxNodes: 100_000, maxOutputBytes: 8 * 1024 * 1024 };
@@ -19,6 +21,16 @@ function idFor(url: string): string {
   return createHash("sha256").update(url).digest("hex").slice(0, 16);
 }
 
+/** The record as written to disk: what was extracted. Tags and overrides are laid over it on read. */
+export type StoredRecord = Omit<MaterialRecord, "tags" | "overrides">;
+
+export interface MaterialStoreOptions {
+  /** The reader's overrides; without it every material reads as extracted, with no tags. */
+  meta?: Pick<MetaStore, "get" | "all" | "remove">;
+  /** Read at every fetch: keep the raw page next to the record so the agent can rebuild it. */
+  keepCapture?: () => boolean;
+}
+
 function pick(materialization: ContentMaterialization) {
   const by = (schema: string) => materialization.representations.find((r) => r.schema === schema)?.content;
   const v2 = by("reader.document.v2");
@@ -28,7 +40,7 @@ function pick(materialization: ContentMaterialization) {
 }
 
 /** Reader representations, markdown and quality for Markdown content; shared by files, feeds and agent artifacts. */
-function markdownParts(content: string, baseUri: string): Pick<MaterialRecord, "reader" | "markdown" | "readingMinutes" | "quality" | "problems"> {
+function markdownParts(content: string, baseUri: string): Pick<StoredRecord, "reader" | "markdown" | "readingMinutes" | "quality" | "problems"> {
   const { representations } = createMarkdownRepresentations({ baseUri, content, maxDepth: BUDGET.maxDepth, maxNodes: BUDGET.maxNodes, maxOutputBytes: BUDGET.maxOutputBytes, outputBudgetErrorCode: "MARKDOWN_TOO_LARGE" });
   const by = (schema: string) => representations.find((r) => r.schema === schema)?.content;
   const v2 = by("reader.document.v2"); const v1 = by("reader.document.v1");
@@ -46,12 +58,42 @@ export interface FeedMaterialInput {
   byline?: string;
   publishedAt?: string;
   lang?: string;
-  content: { reader?: MaterialRecord["reader"]; markdown?: string; plain?: string };
+  content: { reader?: StoredRecord["reader"]; markdown?: string; plain?: string };
+}
+
+const ID = /^[a-f0-9]{16}$/;
+
+function isHtml(mediaType: string): boolean {
+  return mediaType === "text/html" || mediaType === "application/xhtml+xml";
+}
+
+/** The effective record: overrides replace what was extracted, and the raw overrides ride along. */
+function withMeta(record: StoredRecord, meta: MaterialMeta | undefined): MaterialRecord {
+  const { title: _title, byline: _byline, publishedAt: _publishedAt, ...rest } = record;
+  const title = meta?.title ?? record.title;
+  const byline = meta?.byline ?? record.byline;
+  const publishedAt = meta?.publishedAt ?? record.publishedAt;
+  return {
+    ...rest, title, tags: meta?.tags ?? [],
+    ...(byline ? { byline } : {}), ...(publishedAt ? { publishedAt } : {}),
+    ...(meta && Object.keys(meta).length > 0 ? { overrides: meta } : {}),
+  };
+}
+
+function summaryOf(record: MaterialRecord): MaterialSummary {
+  const { id, url, title, byline, publishedAt, fetchedAt, readingMinutes, origin, mediaType, quality, lineage, tags, rebuiltAs } = record;
+  return { id, url, title, fetchedAt, readingMinutes, origin, mediaType, quality, tags, ...(byline ? { byline } : {}), ...(publishedAt ? { publishedAt } : {}), ...(lineage ? { lineage } : {}), ...(rebuiltAs ? { rebuiltAs } : {}) };
 }
 
 /** Materials on disk: one JSON per material, an index for lists. Sources, items and events live in SQLite (db.ts). */
 export class MaterialStore {
-  constructor(private readonly root: string, private readonly fetch: Fetcher = fetchPage) {}
+  private readonly meta: MaterialStoreOptions["meta"];
+  private readonly keepCapture: () => boolean;
+
+  constructor(private readonly root: string, private readonly fetch: Fetcher = fetchPage, options: MaterialStoreOptions = {}) {
+    this.meta = options.meta;
+    this.keepCapture = options.keepCapture ?? (() => true);
+  }
 
   private get dir() { return join(this.root, "materials"); }
 
@@ -62,7 +104,7 @@ export class MaterialStore {
       const page = await this.fetch(url);
       const record = await this.materializeAny(page.bytes, page.mediaType, page.finalUrl, raw, origin);
       await this.save(record);
-      return { ok: true, material: record };
+      return { ok: true, material: this.decorate(record) };
     } catch (error) {
       if (error instanceof FetchError || error instanceof PdfError) return { ok: false, code: error.code, message: error.message };
       return { ok: false, code: "NORMALIZE_FAILED", message: error instanceof Error ? error.message : "Could not read this page." };
@@ -78,16 +120,23 @@ export class MaterialStore {
       const locator = `https://file.local/${encodeURIComponent(name)}`;
       const record = await this.materializeAny(input.bytes, mediaType, locator, `file:///${encodeURIComponent(name)}`, "file", sha256(input.bytes).slice(7, 23));
       await this.save(record);
-      return { ok: true, material: record };
+      return { ok: true, material: this.decorate(record) };
     } catch (error) {
       if (error instanceof FetchError || error instanceof PdfError) return { ok: false, code: error.code, message: error.message };
       return { ok: false, code: "NORMALIZE_FAILED", message: error instanceof Error ? error.message : "Could not read this file." };
     }
   }
 
-  /** PDFs keep their bytes on disk next to the record; everything else is materialized synchronously. */
-  private async materializeAny(bytes: Uint8Array, mediaType: string, finalUrl: string, requestedUrl: string, origin: MaterialRecord["origin"] = "web", id = idFor(finalUrl)): Promise<MaterialRecord> {
-    if (mediaType !== "application/pdf" && !(mediaType === "application/octet-stream" && looksLikePdf(bytes))) return this.materialize(bytes, mediaType, finalUrl, requestedUrl, origin, id);
+  /** PDFs keep their bytes on disk next to the record; pages keep their capture when the setting says so; everything else is materialized synchronously. */
+  private async materializeAny(bytes: Uint8Array, mediaType: string, finalUrl: string, requestedUrl: string, origin: StoredRecord["origin"] = "web", id = idFor(finalUrl)): Promise<StoredRecord> {
+    if (mediaType !== "application/pdf" && !(mediaType === "application/octet-stream" && looksLikePdf(bytes))) {
+      const record = this.materialize(bytes, mediaType, finalUrl, requestedUrl, origin, id);
+      if (!isHtml(mediaType)) return record;
+      if (!this.keepCapture()) { await rm(this.htmlPath(id), { force: true }); return record; }
+      await mkdir(this.dir, { recursive: true });
+      await writeFile(this.htmlPath(id), bytes);
+      return { ...record, capture: { byteLength: bytes.byteLength, mediaType } };
+    }
     const inspection = await inspectPdf(bytes);
     await mkdir(this.dir, { recursive: true });
     await writeFile(this.pdfPath(id), bytes);
@@ -104,10 +153,10 @@ export class MaterialStore {
     };
   }
 
-  private materialize(bytes: Uint8Array, mediaType: string, finalUrl: string, requestedUrl: string, origin: MaterialRecord["origin"] = "web", id = idFor(finalUrl)): MaterialRecord {
+  private materialize(bytes: Uint8Array, mediaType: string, finalUrl: string, requestedUrl: string, origin: StoredRecord["origin"] = "web", id = idFor(finalUrl)): StoredRecord {
     const fetchedAt = new Date().toISOString();
     const base = { id, url: requestedUrl, finalUrl, mediaType, fetchedAt, origin };
-    if (mediaType === "text/html" || mediaType === "application/xhtml+xml") {
+    if (isHtml(mediaType)) {
       const outcome = normalizeArticleCapture({ budget: BUDGET, capture: { baseLocator: finalUrl, bytes, contentIdentity: sha256(bytes), mediaType } });
       if (!outcome.ok) {
         const plain = outcome.fallbackText ?? "";
@@ -147,20 +196,35 @@ export class MaterialStore {
     if (!title) throw new Error("An artifact needs a title.");
     if (!input.markdown.trim()) throw new Error("An artifact needs content.");
     const lineage = [...new Set(input.lineage)];
-    const present = await Promise.all(lineage.map((id) => this.get(id)));
+    const present = await Promise.all(lineage.map((id) => this.read(id)));
     const unknown = lineage.filter((_, index) => present[index] === undefined);
     if (unknown.length > 0) throw new Error(`Unknown material ids in lineage: ${unknown.join(", ")}. Cite only materials that are in the library.`);
     const fetchedAt = new Date().toISOString();
     const id = createHash("sha256").update(`${title}\n${fetchedAt}`).digest("hex").slice(0, 16);
     const url = `quire://artifact/${id}`;
-    const record: MaterialRecord = { id, url, finalUrl: url, mediaType: "text/markdown", fetchedAt, origin: "agent", lineage, title, ...markdownParts(input.markdown, url) };
+    const record: StoredRecord = { id, url, finalUrl: url, mediaType: "text/markdown", fetchedAt, origin: "agent", lineage, title, ...markdownParts(input.markdown, url) };
     await this.save(record);
-    return record;
+    return this.decorate(record);
   }
 
-  private async save(record: MaterialRecord) {
+  /** The agent rebuilt this material into a cleaner artifact; the Library offers the artifact in its place. */
+  async setRebuiltAs(id: string, artifactId: string): Promise<MaterialRecord> {
+    const record = await this.read(id);
+    if (!record) throw new Error(`Material ${id} is not in the library.`);
+    const artifact = await this.read(artifactId);
+    if (!artifact || artifact.origin !== "agent") throw new Error(`Artifact ${artifactId} is not in the library.`);
+    const next = { ...record, rebuiltAs: artifactId };
+    await this.save(next);
+    return this.decorate(next);
+  }
+
+  private async save(record: StoredRecord) {
     await mkdir(this.dir, { recursive: true });
     await writeFile(join(this.dir, `${record.id}.json`), JSON.stringify(record), "utf8");
+  }
+
+  private decorate(record: StoredRecord): MaterialRecord {
+    return withMeta(record, this.meta?.get(record.id));
   }
 
   /**
@@ -169,7 +233,7 @@ export class MaterialStore {
    */
   async saveFromFeed(input: FeedMaterialInput): Promise<MaterialRecord> {
     const plain = input.content.plain ?? input.content.markdown ?? "";
-    const record: MaterialRecord = {
+    const record: StoredRecord = {
       id: idFor(input.url), url: input.url, finalUrl: input.url, title: input.title, fetchedAt: new Date().toISOString(),
       origin: "feed", mediaType: "text/html", readingMinutes: readingMinutes(plain),
       ...(input.byline ? { byline: input.byline } : {}),
@@ -182,7 +246,7 @@ export class MaterialStore {
       problems: [{ code: "FEED_CONTENT_FALLBACK", recoverBy: "reopen", scope: "capture", severity: "warning" }],
     };
     await this.save(record);
-    return record;
+    return this.decorate(record);
   }
 
   /** Materializes every eval snapshot (corpus/<slug>/page.html.gz + meta.json) that is not in the library yet. */
@@ -194,7 +258,7 @@ export class MaterialStore {
     for (const slug of slugs.sort()) {
       try {
         const meta = JSON.parse(await readFile(join(corpusDir, slug, "meta.json"), "utf8")) as { url: string; finalUrl: string; fetchedAt: string };
-        if (await this.get(idFor(meta.finalUrl))) { result.skipped += 1; continue; }
+        if (await this.read(idFor(meta.finalUrl))) { result.skipped += 1; continue; }
         const bytes = new Uint8Array(gunzipSync(await readFile(join(corpusDir, slug, "page.html.gz"))));
         const record = await this.materializeAny(bytes, "text/html", meta.finalUrl, meta.url);
         await this.save({ ...record, fetchedAt: meta.fetchedAt });
@@ -207,34 +271,82 @@ export class MaterialStore {
   }
 
   private pdfPath(id: string) { return join(this.dir, `${id}.pdf`); }
+  private htmlPath(id: string) { return join(this.dir, `${id}.html`); }
 
-  /** Bytes of a stored PDF. Undefined when the id is unknown or the material is not a PDF. */
-  async bytes(id: string): Promise<Uint8Array | undefined> {
-    if (!/^[a-f0-9]{16}$/.test(id)) return undefined;
-    try { return new Uint8Array(await readFile(this.pdfPath(id))); }
+  private async readOptional(path: string): Promise<Uint8Array | undefined> {
+    try { return new Uint8Array(await readFile(path)); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
   }
 
+  /** Bytes of a stored PDF. Undefined when the id is unknown or the material is not a PDF. */
+  async bytes(id: string): Promise<Uint8Array | undefined> {
+    if (!ID.test(id)) return undefined;
+    return this.readOptional(this.pdfPath(id));
+  }
+
+  /** The captured page as readable text with its block structure; undefined when nothing was captured. */
+  async captureText(id: string): Promise<string | undefined> {
+    if (!ID.test(id)) return undefined;
+    const bytes = await this.readOptional(this.htmlPath(id));
+    return bytes ? captureTextOf(new TextDecoder("utf-8", { fatal: false }).decode(bytes)) : undefined;
+  }
+
+  /** Removes the records and the bytes next to them, and the overrides; returns how many records existed. */
+  async delete(ids: readonly string[]): Promise<number> {
+    const invalid = ids.find((id) => !ID.test(id));
+    if (invalid !== undefined) throw new Error(`Not a material id: ${invalid}`);
+    let deleted = 0;
+    for (const id of ids) {
+      if (await this.read(id)) deleted += 1;
+      await Promise.all([this.pdfPath(id), this.htmlPath(id), join(this.dir, `${id}.json`)].map((path) => rm(path, { force: true })));
+      this.meta?.remove(id);
+    }
+    return deleted;
+  }
+
+  private async read(id: string): Promise<StoredRecord | undefined> {
+    if (!ID.test(id)) return undefined;
+    const bytes = await this.readOptional(join(this.dir, `${id}.json`));
+    return bytes ? (JSON.parse(new TextDecoder().decode(bytes)) as StoredRecord) : undefined;
+  }
+
   async get(id: string): Promise<MaterialRecord | undefined> {
-    if (!/^[a-f0-9]{16}$/.test(id)) return undefined;
-    try { return JSON.parse(await readFile(join(this.dir, `${id}.json`), "utf8")) as MaterialRecord; }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
+    const record = await this.read(id);
+    return record ? this.decorate(record) : undefined;
+  }
+
+  /** Every word of the query must appear in the title, byline, tags or the first 200k characters of the text. */
+  async search(query: string): Promise<MaterialSummary[]> {
+    const words = query.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 8);
+    if (words.length === 0) return [];
+    await mkdir(this.dir, { recursive: true });
+    const files = (await readdir(this.dir)).filter((name) => name.endsWith(".json"));
+    const metas = this.meta?.all() ?? new Map<string, MaterialMeta>();
+    const hits: MaterialSummary[] = [];
+    for (const name of files) {
+      const stored = JSON.parse(await readFile(join(this.dir, name), "utf8")) as StoredRecord;
+      const record = withMeta(stored, metas.get(stored.id));
+      const haystack = `${record.title}\n${record.byline ?? ""}\n${(record.tags ?? []).join(" ")}\n${(record.plain ?? record.markdown ?? "").slice(0, 200_000)}`.toLowerCase();
+      if (words.every((word) => haystack.includes(word))) hits.push(summaryOf(record));
+    }
+    return hits.sort((a, b) => b.fetchedAt.localeCompare(a.fetchedAt));
   }
 
   async list(): Promise<MaterialSummary[]> {
     await mkdir(this.dir, { recursive: true });
     const files = (await readdir(this.dir)).filter((name) => name.endsWith(".json"));
-    const records = await Promise.all(files.map(async (name) => JSON.parse(await readFile(join(this.dir, name), "utf8")) as MaterialRecord));
+    const records = await Promise.all(files.map(async (name) => JSON.parse(await readFile(join(this.dir, name), "utf8")) as StoredRecord));
+    const metas = this.meta?.all() ?? new Map<string, MaterialMeta>();
     return records
-      .sort((a, b) => b.fetchedAt.localeCompare(a.fetchedAt))
-      .map(({ id, url, title, byline, publishedAt, fetchedAt, readingMinutes, origin, mediaType, quality, lineage }) => ({ id, url, title, fetchedAt, readingMinutes, origin, mediaType, quality, ...(byline ? { byline } : {}), ...(publishedAt ? { publishedAt } : {}), ...(lineage ? { lineage } : {}) }));
+      .map((record) => summaryOf(withMeta(record, metas.get(record.id))))
+      .sort((a, b) => b.fetchedAt.localeCompare(a.fetchedAt));
   }
 }
 
 const MAX_PREFETCH_IMAGES = 80;
 
 /** Image sources referenced by the reader document, in reading order, for caching at save time. */
-export function imageUrlsOf(record: Pick<MaterialRecord, "reader">): string[] {
+export function imageUrlsOf(record: Pick<StoredRecord, "reader">): string[] {
   if (!record.reader) return [];
   let root: unknown;
   try { root = JSON.parse(record.reader.payload); } catch { return []; }

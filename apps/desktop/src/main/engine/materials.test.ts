@@ -1,8 +1,10 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { openDatabase } from "./db";
 import { MaterialStore, imageUrlsOf } from "./materials";
+import { MetaStore } from "./meta";
 
 let root = "";
 beforeEach(async () => { root = await mkdtemp(join(tmpdir(), "read-materials-")); });
@@ -50,6 +52,72 @@ describe("MaterialStore", () => {
     expect(await store.openUrl("https://user:pw@example.com/x")).toMatchObject({ ok: false, code: "URL_CREDENTIALS" });
     expect(await store.openUrl("not a url")).toMatchObject({ ok: false, code: "URL_INVALID" });
     expect(await store.list()).toEqual([]);
+  });
+});
+
+const article = (title: string) => `<!doctype html><html><head><title>${title}</title></head><body><nav>Home</nav><article><h1>${title}</h1>${"<p>Two harnesses cache the tokenised prompt keyed on the question text alone, so a changed system prompt silently reuses the old one. The fix is a cache key that includes the full rendered prompt hash.</p>".repeat(12)}</article></body></html>`;
+const pageFetcher = (title: string) => async (url: URL) => ({ bytes: new TextEncoder().encode(article(title)), mediaType: "text/html", finalUrl: url.toString() });
+
+describe("MaterialStore capture", () => {
+  it("keeps the raw page next to the record when the setting is on and renders it as structured text", async () => {
+    const store = new MaterialStore(root, pageFetcher("Cache keys"), { keepCapture: () => true });
+    const result = await store.openUrl("https://example.test/cache");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const { id } = result.material;
+    expect(result.material.capture).toEqual({ byteLength: new TextEncoder().encode(article("Cache keys")).byteLength, mediaType: "text/html" });
+    expect((await stat(join(root, "materials", `${id}.html`))).size).toBe(result.material.capture!.byteLength);
+    const text = await store.captureText(id);
+    expect(text).toMatch(/^Home\n\n# Cache keys\n\nTwo harnesses cache/);
+    expect(await store.captureText("0000000000000000")).toBeUndefined();
+    expect(await store.captureText("../x")).toBeUndefined();
+  });
+
+  it("writes no capture when the setting is off, and drops a stale one on re-fetch", async () => {
+    let keep = true;
+    const store = new MaterialStore(root, pageFetcher("Cache keys"), { keepCapture: () => keep });
+    const first = await store.openUrl("https://example.test/cache");
+    if (!first.ok) throw new Error(first.message);
+    keep = false;
+    const second = await store.openUrl("https://example.test/cache");
+    if (!second.ok) throw new Error(second.message);
+    expect(second.material.capture).toBeUndefined();
+    expect(await store.captureText(second.material.id)).toBeUndefined();
+    const markdown = await store.openFile({ name: "notes.md", mediaType: "", bytes: new TextEncoder().encode("# Notes\n\nText.") });
+    expect(markdown.ok && markdown.material.capture).toBeUndefined();
+  });
+});
+
+describe("MaterialStore overrides", () => {
+  it("lays the metadata over the record and the list, with tags and rebuiltAs", async () => {
+    const db = openDatabase(":memory:");
+    const meta = new MetaStore(db);
+    const store = new MaterialStore(root, pageFetcher("Cache keys"), { meta });
+    const opened = await store.openUrl("https://example.test/cache");
+    if (!opened.ok) throw new Error(opened.message);
+    const { id } = opened.material;
+    expect(opened.material.tags).toEqual([]);
+    expect(opened.material).not.toHaveProperty("overrides");
+    meta.update(id, { title: "Cache keys, annotated", byline: "Ada", publishedAt: "2026-09-01T00:00:00.000Z", tags: ["systems"], note: "keep" });
+    const record = (await store.get(id))!;
+    expect(record).toMatchObject({ title: "Cache keys, annotated", byline: "Ada", publishedAt: "2026-09-01T00:00:00.000Z", tags: ["systems"], overrides: { title: "Cache keys, annotated", byline: "Ada", publishedAt: "2026-09-01T00:00:00.000Z", tags: ["systems"], note: "keep" } });
+    expect(JSON.parse(await readFile(join(root, "materials", `${id}.json`), "utf8"))).toMatchObject({ title: "Cache keys" });
+    expect((await store.list())[0]).toMatchObject({ id, title: "Cache keys, annotated", byline: "Ada", tags: ["systems"] });
+    expect((await store.list())[0]).not.toHaveProperty("rebuiltAs");
+
+    const artifact = await store.saveArtifact({ title: "Cache keys (rebuilt)", markdown: "# Cache keys\n\nClean.", lineage: [id] });
+    expect(artifact.tags).toEqual([]);
+    expect((await store.setRebuiltAs(id, artifact.id)).rebuiltAs).toBe(artifact.id);
+    expect((await store.list()).find((m) => m.id === id)?.rebuiltAs).toBe(artifact.id);
+    expect((await store.get(id))?.title).toBe("Cache keys, annotated");
+    await expect(store.setRebuiltAs(id, "0000000000000000")).rejects.toThrow(/Artifact 0000000000000000 is not in the library/);
+    await expect(store.setRebuiltAs(id, id)).rejects.toThrow(/is not in the library/);
+    await expect(store.setRebuiltAs("0000000000000000", artifact.id)).rejects.toThrow(/Material 0000000000000000 is not in the library/);
+
+    await store.delete([id]);
+    expect(meta.get(id)).toBeUndefined();
+    expect((await store.list()).map((m) => m.id)).toEqual([artifact.id]);
+    db.close();
   });
 });
 
@@ -123,5 +191,17 @@ describe("imageUrlsOf", () => {
     ] });
     expect(imageUrlsOf({ reader: { schema: "reader.document.v2", payload } })).toEqual(["https://x.test/a.png", "https://x.test/b.png"]);
     expect(imageUrlsOf({})).toEqual([]);
+  });
+});
+
+describe("MaterialStore.search", () => {
+  it("matches every word across title, byline and body", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "quire-search-"));
+    const store = new MaterialStore(dir);
+    const result = await store.openFile({ name: "notes.md", mediaType: "text/markdown", bytes: new TextEncoder().encode("# Cache keys\n\nThe prompt template leaks the test set.") });
+    expect(result.ok).toBe(true);
+    expect((await store.search("prompt leaks")).map((m) => m.title)).toEqual(["Cache keys"]);
+    expect((await store.search("cache nothing")).length).toBe(0);
+    expect(await store.search("   ")).toEqual([]);
   });
 });

@@ -1,4 +1,4 @@
-import type { ItemRecord, OpenUrlResult } from "../../shared/contracts";
+import type { ItemRecord, MaterialRecord, OpenUrlResult } from "../../shared/contracts";
 import { arxivHtmlUrl, arxivIdOf, arxivPdfUrl } from "./arxiv";
 import type { EventStore } from "./events";
 import type { ItemStore } from "./items";
@@ -37,6 +37,18 @@ async function materializeFeedItem(item: ItemRecord, deps: ReadItemDeps): Promis
   return { ok: true, material };
 }
 
+type Materialized = { ok: true; material: MaterialRecord; fresh: boolean } | { ok: false; code: string; message: string };
+
+/** The item's material: the one it already became when it still exists, otherwise a fresh materialization. */
+async function materialOf(item: ItemRecord, deps: ReadItemDeps): Promise<Materialized> {
+  if (item.materialId) {
+    const existing = await deps.store.get(item.materialId);
+    if (existing) return { ok: true, material: existing, fresh: false };
+  }
+  const result = item.sourceKind === "arxiv" ? await materializeArxiv(item, deps.store) : await materializeFeedItem(item, deps);
+  return result.ok ? { ...result, fresh: true } : result;
+}
+
 /**
  * Read now. An item already read returns its material; otherwise the link is materialized
  * (arXiv: HTML rendering first, then the PDF; feeds: the page, then the feed's own copy).
@@ -44,17 +56,22 @@ async function materializeFeedItem(item: ItemRecord, deps: ReadItemDeps): Promis
 export async function readItem(id: string, deps: ReadItemDeps): Promise<OpenUrlResult> {
   const item = deps.items.get(id);
   if (!item) return { ok: false, code: "ITEM_NOT_FOUND", message: "This item is no longer in the library." };
-  if (item.materialId) {
-    const existing = await deps.store.get(item.materialId);
-    if (existing) {
-      deps.events.record("opened", id);
-      return { ok: true, material: existing };
-    }
-  }
-  const result = item.sourceKind === "arxiv" ? await materializeArxiv(item, deps.store) : await materializeFeedItem(item, deps);
+  const result = await materialOf(item, deps);
   if (!result.ok) return result;
   deps.items.markOpened(id, result.material.id);
   deps.events.record("opened", id);
-  deps.onMaterialized?.();
-  return result;
+  if (result.fresh) deps.onMaterialized?.();
+  return { ok: true, material: result.material };
+}
+
+/** Keep for later without reading: the same materialization as Read, but the item is kept, not opened, and the event names the material. */
+export async function keepItem(id: string, deps: ReadItemDeps): Promise<OpenUrlResult> {
+  const item = deps.items.get(id);
+  if (!item) return { ok: false, code: "ITEM_NOT_FOUND", message: "This item is no longer in the library." };
+  const result = await materialOf(item, deps);
+  if (!result.ok) return result;
+  deps.items.markKept(id, result.material.id);
+  deps.events.record("kept", result.material.id);
+  if (result.fresh) deps.onMaterialized?.();
+  return { ok: true, material: result.material };
 }

@@ -53,5 +53,21 @@ const api: ReadApi = {
     ipcRenderer.on("agent:event", handler);
     return () => ipcRenderer.removeListener("agent:event", handler);
   },
+  // M3: metadata, library management, settings, agent sessions.
+  queryLibrary: (filter) => ipcRenderer.invoke("library:query", filter),
+  updateMaterialMeta: (id, patch) => ipcRenderer.invoke("material:updateMeta", id, patch),
+  listTags: () => ipcRenderer.invoke("material:tags"),
+  deleteMaterials: (ids) => ipcRenderer.invoke("material:delete", ids),
+  keepItem: (id) => ipcRenderer.invoke("item:keep", id),
+  getSettings: () => ipcRenderer.invoke("settings:get"),
+  updateSettings: (patch) => ipcRenderer.invoke("settings:update", patch),
+  listAgentSessions: () => ipcRenderer.invoke("agent:sessions:list"),
+  getAgentSession: (id) => ipcRenderer.invoke("agent:sessions:get", id),
+  deleteAgentSession: (id) => ipcRenderer.invoke("agent:sessions:delete", id),
+  onAgentSessionsChanged: (listener) => {
+    const handler = () => listener();
+    ipcRenderer.on("agent:sessions:changed", handler);
+    return () => ipcRenderer.removeListener("agent:sessions:changed", handler);
+  },
 };
 contextBridge.exposeInMainWorld("read", api);

@@ -29,10 +29,14 @@ export interface DynamicTool { name: string; description: string; inputSchema: R
 export interface ToolCall { tool: string; arguments: unknown; callId: string }
 export interface ToolReply { success: boolean; text: string; summary?: string }
 export interface ToolProgress { tool: string; status: "running" | "done" | "failed"; summary?: string }
+export type ReasoningEffort = "low" | "medium" | "high";
 export interface TurnOptions {
   cwd: string;
   threadId?: string;
   prompt: string;
+  /** Codex's `model` (thread/start, thread/resume, turn/start) and `effort` (turn/start); absent means Codex's own default. */
+  model?: string;
+  effort?: ReasoningEffort;
   dynamicTools: readonly DynamicTool[];
   onToolCall: (call: ToolCall) => Promise<ToolReply>;
   onStarted?: (turn: { threadId: string; turnId: string }) => void;
@@ -47,6 +51,8 @@ export interface CodexClientOptions {
   spawn?: Spawn;
   env?: NodeJS.ProcessEnv;
   exists?: (path: string) => boolean;
+  /** The binary the settings name; read at every resolution, empty means auto-detect. */
+  configuredPath?: () => string;
   sleep?: (ms: number) => Promise<void>;
   /** stderr lines, declined approvals and other non-fatal facts; never silent, never a throw. */
   onDiagnostic?: (message: string) => void;
@@ -60,6 +66,8 @@ interface Binding {
   threadId: string;
   turnId?: string;
   closed: boolean;
+  /** Stop was pressed before turn/start answered; sent as soon as the id is known. */
+  interruptRequested?: boolean;
   earlyEvents: Json[];
   onToolCall: (message: Json) => void;
   onNotification: (message: Json) => void;
@@ -78,8 +86,13 @@ function str(value: unknown): string | undefined { return typeof value === "stri
 
 const defaultSpawn: Spawn = (command, args, options) => nodeSpawn(command, args, { env: options.env, stdio: ["pipe", "pipe", "pipe"] });
 
-/** CODEX_PATH first, then the usual install locations, then PATH. Missing everywhere is an actionable error, not a later ENOENT. */
-export function resolveCodexBinary(env: NodeJS.ProcessEnv, exists: (path: string) => boolean): string {
+/** The settings' path first, then CODEX_PATH, then the usual install locations, then PATH. Missing everywhere is an actionable error, not a later ENOENT. */
+export function resolveCodexBinary(env: NodeJS.ProcessEnv, exists: (path: string) => boolean, configuredPath?: string): string {
+  const fromSettings = str(configuredPath);
+  if (fromSettings) {
+    if (exists(fromSettings)) return fromSettings;
+    throw new CodexError("AGENT_UNAVAILABLE", `The Codex path in Settings (${fromSettings}) does not exist. Fix it or clear it to auto-detect.`);
+  }
   const configured = str(env.CODEX_PATH);
   if (configured) {
     if (exists(configured)) return configured;
@@ -96,6 +109,7 @@ export class CodexClient {
   private readonly spawn: Spawn;
   private readonly env: NodeJS.ProcessEnv;
   private readonly exists: (path: string) => boolean;
+  private readonly configuredPath: () => string;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly diagnostic: (message: string) => void;
   private readonly turnTimeoutMs: number;
@@ -111,6 +125,7 @@ export class CodexClient {
     this.spawn = options.spawn ?? defaultSpawn;
     this.env = options.env ?? process.env;
     this.exists = options.exists ?? existsSync;
+    this.configuredPath = options.configuredPath ?? (() => "");
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.diagnostic = options.onDiagnostic ?? (() => {});
     this.turnTimeoutMs = options.turnTimeoutMs ?? DEFAULT_TURN_TIMEOUT_MS;
@@ -120,7 +135,7 @@ export class CodexClient {
   get busy(): boolean { return this.activeTurn !== undefined; }
 
   /** The binary's path, or the AGENT_UNAVAILABLE error explaining what to install. */
-  binary(): string { return resolveCodexBinary(this.env, this.exists); }
+  binary(): string { return resolveCodexBinary(this.env, this.exists, this.configuredPath()); }
 
   private childEnv(): NodeJS.ProcessEnv {
     return { ...this.env, CODEX_HOME: str(this.env.CODEX_HOME) ?? join(str(this.env.HOME) ?? homedir(), ".codex"), NO_COLOR: "1" };
@@ -251,7 +266,7 @@ export class CodexClient {
   }
 
   private async threadFor(options: TurnOptions): Promise<string> {
-    const common = { approvalPolicy: "never", approvalsReviewer: "user", cwd: options.cwd, sandboxPolicy: { type: "readOnly" }, dynamicTools: options.dynamicTools.map((tool) => ({ type: "function", ...tool })) };
+    const common = { approvalPolicy: "never", approvalsReviewer: "user", cwd: options.cwd, sandboxPolicy: { type: "readOnly" }, dynamicTools: options.dynamicTools.map((tool) => ({ type: "function", ...tool })), ...(options.model ? { model: options.model } : {}) };
     if (options.threadId) {
       try {
         const resumed = await this.request("thread/resume", { threadId: options.threadId, ...common });
@@ -313,13 +328,14 @@ export class CodexClient {
         if (method === "turn/completed" && turn) this.finishTurn(binding, turn, finalText, cleanup, resolve, reject);
       };
       this.activeTurn = binding;
-      this.request("turn/start", { threadId, cwd: options.cwd, approvalPolicy: "never", approvalsReviewer: "user", sandboxPolicy: { type: "readOnly" }, input: [{ type: "text", text: options.prompt }] })
+      this.request("turn/start", { threadId, cwd: options.cwd, approvalPolicy: "never", approvalsReviewer: "user", sandboxPolicy: { type: "readOnly" }, input: [{ type: "text", text: options.prompt }], ...(options.model ? { model: options.model } : {}), ...(options.effort ? { effort: options.effort } : {}) })
         .then((result) => {
           if (binding.closed) return;
           const turnId = isObject(result) && isObject(result.turn) ? str(result.turn.id) : undefined;
           if (!turnId) throw new CodexError("TURN_FAILED", "codex app-server started a turn without an id.");
           binding.turnId = turnId;
           options.onStarted?.({ threadId, turnId });
+          if (binding.interruptRequested) this.request("turn/interrupt", { threadId, turnId }, 10_000).catch((error: Error) => this.diagnostic(`deferred interrupt failed: ${error.message}`));
           timeout = setTimeout(() => {
             this.request("turn/interrupt", { threadId, turnId }, 10_000).catch((error: Error) => this.diagnostic(`interrupt after timeout failed: ${error.message}`));
             fail(new CodexError("TURN_TIMEOUT", `The agent did not finish within ${Math.round(this.turnTimeoutMs / 60_000)} minutes and was stopped.`));
@@ -342,11 +358,14 @@ export class CodexClient {
   /** Asks the server to stop the running turn; the turn then settles as TURN_INTERRUPTED. */
   async interrupt(): Promise<void> {
     const turn = this.activeTurn;
-    if (!turn?.turnId) return;
+    if (!turn) return;
+    if (!turn.turnId) { turn.interruptRequested = true; return; }
     await this.request("turn/interrupt", { threadId: turn.threadId, turnId: turn.turnId }, 10_000);
   }
 
+  /** Stops the server (a changed binary path takes effect at the next request); the version is read again too. */
   stop(): void {
+    this.cachedVersion = undefined;
     const child = this.process;
     if (!child) return;
     this.process = undefined;

@@ -101,6 +101,9 @@ describe("syncDue", () => {
     expect(isDue(sources.get(fresh.id)!, clock())).toBe(false);
     expect(isDue(sources.get(stale.id)!, clock())).toBe(true);
     expect(isDue(sources.get(paused.id)!, clock())).toBe(false);
+    // The Settings cadence overrides the source's own interval.
+    expect(isDue(sources.get(fresh.id)!, clock(), 10)).toBe(true);
+    expect(isDue(sources.get(stale.id)!, clock(), 120)).toBe(false);
 
     let changed = 0;
     const outcome = await syncDue({ fetch, sources, items, now, onChanged: () => { changed += 1; } });
@@ -111,6 +114,11 @@ describe("syncDue", () => {
     const again = await syncDue({ fetch, sources, items, now, onChanged: () => { changed += 1; } });
     expect(again).toEqual({ synced: 0, added: 0, failures: [] });
     expect(changed).toBe(1);
+    // The Settings cadence is read live and overrides every source's own interval.
+    const live = await syncDue({ fetch, sources, items, now, intervalMinutes: () => 0, onChanged: () => { changed += 1; } });
+    expect(live).toEqual({ synced: 3, added: 3, failures: [] });
+    expect(fetch.calls.filter((url) => url.startsWith("https://b."))).toHaveLength(1);
+    expect(changed).toBe(2);
     db.close();
   });
 

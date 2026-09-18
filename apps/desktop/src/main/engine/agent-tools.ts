@@ -1,16 +1,29 @@
 import type { Annotation, ItemRecord, MaterialRecord, MaterialSummary, OpenUrlResult } from "../../shared/contracts";
 import type { DynamicTool, ToolCall, ToolReply } from "./codex-client";
-import { itemHits, materialHits, mergeHits } from "./search";
+import { itemHits, materialHits, mergeHits, searchWords } from "./search";
 
 // The agent's window onto the library. Every tool validates its arguments by hand (no zod in the
 // main bundle), returns one JSON string, and never leaks paths or bytes to the model.
 
+/** Material ids the model retrieved during the running turn; the only ids an artifact may cite. */
+export interface TurnScope { seen: Set<string>; reset: (seed?: readonly string[]) => void }
+export function createTurnScope(): TurnScope {
+  const seen = new Set<string>();
+  return { seen, reset: (seed = []) => { seen.clear(); for (const id of seed) seen.add(id); } };
+}
+
 export interface ToolDeps {
+  /** Shared with the AgentService, which resets it at the start of every turn. */
+  scope?: TurnScope;
   store: {
     list: () => Promise<MaterialSummary[]>;
+    /** Materials whose title, byline, tags or body contain every word of the query. */
+    search: (query: string) => Promise<MaterialSummary[]>;
     get: (id: string) => Promise<MaterialRecord | undefined>;
     openUrl: (url: string, origin: "web" | "feed") => Promise<OpenUrlResult>;
     saveArtifact: (input: { title: string; markdown: string; lineage: readonly string[] }) => Promise<MaterialRecord>;
+    /** The captured page as structured text; undefined when the material has no capture. */
+    captureText: (id: string) => Promise<string | undefined>;
   };
   items: { search: (query: string) => ItemRecord[]; inbox: () => ItemRecord[] };
   annotations: { list: (materialId: string) => Promise<Annotation[]> };
@@ -33,7 +46,7 @@ const idSchema = { type: "string", pattern: "^[a-f0-9]{16}$", description: "A ma
 const limitSchema = { type: "integer", minimum: 1, maximum: MAX_LIST };
 
 export const agentTools: readonly DynamicTool[] = [
-  { name: "library_search", description: `Find materials and inbox items whose title or byline contains every word of the query. Use it before claiming the library has or lacks something, and to find ids for material_read. Returns up to ${SEARCH_HITS} hits with id, kind (material or item), title, subtitle. ${CITE}`,
+  { name: "library_search", description: `Find materials (title, byline, tags or body text) and inbox items (title, source) containing every word of the query; at most 8 words are used. Use it before claiming the library has or lacks something, and to find ids for material_read. Returns up to ${SEARCH_HITS} hits with id, kind (material or item), title, subtitle. ${CITE}`,
     inputSchema: { type: "object", properties: { query: { type: "string", minLength: 1, maxLength: 200 } }, required: ["query"], additionalProperties: false } },
   { name: "library_recent", description: "The newest materials in the library (id, title, byline, publishedAt, url, readingMinutes, origin). Use it to see what the reader has been reading, or when a question is about the library as a whole.",
     inputSchema: { type: "object", properties: { limit: { ...limitSchema, description: `How many, default ${DEFAULT_RECENT}.` } }, additionalProperties: false } },
@@ -45,7 +58,9 @@ export const agentTools: readonly DynamicTool[] = [
     inputSchema: { type: "object", properties: { limit: { ...limitSchema, description: `How many, default ${DEFAULT_RECENT}.` } }, additionalProperties: false } },
   { name: "library_import", description: "Fetch a public http(s) page and add it to the library as a material, returning its id, title and readingMinutes. Use it only when the reader asked for an outside page or an inbox item's full text; then read it with material_read.",
     inputSchema: { type: "object", properties: { url: { type: "string", minLength: 8, maxLength: 4096 } }, required: ["url"], additionalProperties: false } },
-  { name: "artifact_write", description: `Save a document you wrote (a synthesis, a summary) into the library as a Markdown material. \`sources\` must list the id of every material you drew on; unknown ids are rejected. Every claim in the markdown should carry [material-id] and exact quotes. Returns { id, title }; tell the reader the id. ${CITE}`,
+  { name: "material_source", description: `The captured raw page of a material as readable text with its structure (blank lines between blocks, # headings, - list items, fenced code, [text](href) links), ${PAGE_CHARS} characters per call, navigation and chrome included. Use it for a rebuild when the extracted text is broken; page with nextOffset until it is null. Only materials fetched with capture on have it.`,
+    inputSchema: { type: "object", properties: { id: idSchema, offset: { type: "integer", minimum: 0, description: "Character offset; use the previous call's nextOffset." } }, required: ["id"], additionalProperties: false } },
+  { name: "artifact_write", description: `Save a document you wrote (a synthesis, a summary) into the library as a Markdown material. \`sources\` must list the id of every material you drew on; only ids you retrieved in this turn (library_search, library_recent, material_read, material_source, material_annotations, library_import) or the material the conversation is about are accepted. Every claim in the markdown should carry [material-id] and exact quotes. Returns { id, title }; tell the reader the id. ${CITE}`,
     inputSchema: { type: "object", properties: { title: { type: "string", minLength: 1, maxLength: MAX_TITLE }, markdown: { type: "string", minLength: 1, maxLength: MAX_MARKDOWN }, sources: { type: "array", items: idSchema, minItems: 1, maxItems: MAX_LINEAGE, uniqueItems: true } }, required: ["title", "markdown", "sources"], additionalProperties: false } },
 ];
 
@@ -87,16 +102,38 @@ function quoteOf(query: string) { return `"${query.length > 40 ? `${query.slice(
 
 interface Outcome { value: unknown; summary: string }
 
-async function execute(tool: string, raw: unknown, deps: ToolDeps): Promise<Outcome> {
+/** One page of `content` from `offset`, with the cursor for the next call. */
+function page(content: string, offset: number) {
+  if (offset > content.length) throw new Error(`Offset ${offset} is past the end of the text (${content.length} characters).`);
+  const end = Math.min(content.length, offset + PAGE_CHARS);
+  return { content: content.slice(offset, end), offset, nextOffset: end < content.length ? end : null, totalCharacters: content.length };
+}
+
+/** The last capture rendered, so paging through one page does not parse it again per call. */
+interface CaptureCache { id?: string; text?: string }
+
+async function captureOf(id: string, title: string, deps: ToolDeps, cache: CaptureCache): Promise<string> {
+  if (cache.id === id && cache.text !== undefined) return cache.text;
+  const text = await deps.store.captureText(id);
+  if (text === undefined) throw new Error(`Material ${id} (${title}) has a capture record but its page file is missing; fetch it again with capture on.`);
+  cache.id = id; cache.text = text;
+  return text;
+}
+
+async function execute(tool: string, raw: unknown, deps: ToolDeps, cache: CaptureCache): Promise<Outcome> {
   if (tool === "library_search") {
     const args = record(raw, ["query"]);
     const query = text(args, "query", 200);
-    const hits = mergeHits(materialHits(query, await deps.store.list()), itemHits(deps.items.search(query))).slice(0, SEARCH_HITS);
-    return { value: { hits }, summary: `library_search ${quoteOf(query)} → ${hits.length} hit${hits.length === 1 ? "" : "s"}` };
+    const words = searchWords(query);
+    const hits = mergeHits(materialHits(query, await deps.store.search(query)), itemHits(deps.items.search(query))).slice(0, SEARCH_HITS);
+    for (const hit of hits) if (hit.kind === "material") deps.scope?.seen.add(hit.id);
+    const truncated = query.trim().split(/\s+/).filter(Boolean).length > words.length;
+    return { value: { hits, ...(truncated ? { note: `Only the first ${words.length} words of the query were used.` } : {}) }, summary: `library_search ${quoteOf(query)} → ${hits.length} hit${hits.length === 1 ? "" : "s"}` };
   }
   if (tool === "library_recent") {
     const limit = integer(record(raw, ["limit"]), "limit", DEFAULT_RECENT, MAX_LIST, 1);
     const materials = (await deps.store.list()).slice(0, limit).map(recentOf);
+    for (const material of materials) deps.scope?.seen.add(material.id);
     return { value: { materials }, summary: `library_recent → ${materials.length} material${materials.length === 1 ? "" : "s"}` };
   }
   if (tool === "material_read") {
@@ -107,14 +144,25 @@ async function execute(tool: string, raw: unknown, deps: ToolDeps): Promise<Outc
     if (!material) throw new Error(`Material ${id} is not in the library. Find ids with library_search or library_recent.`);
     const content = material.markdown ?? material.plain;
     if (content === undefined) throw new Error(`Material ${id} (${material.title}) has no text to read; it is probably a scanned PDF.`);
-    if (offset > content.length) throw new Error(`Offset ${offset} is past the end of the text (${content.length} characters).`);
-    const end = Math.min(content.length, offset + PAGE_CHARS);
-    const value = { id, title: material.title, ...(material.byline ? { byline: material.byline } : {}), url: material.url, content: content.slice(offset, end), offset, nextOffset: end < content.length ? end : null, totalCharacters: content.length };
+    deps.scope?.seen.add(id);
+    const value = { id, title: material.title, ...(material.byline ? { byline: material.byline } : {}), url: material.url, ...page(content, offset) };
     return { value, summary: `material_read ${id} @${offset} → ${quoteOf(material.title)}` };
+  }
+  if (tool === "material_source") {
+    const args = record(raw, ["id", "offset"]);
+    const id = materialId(args);
+    const offset = integer(args, "offset", 0, Number.MAX_SAFE_INTEGER);
+    const material = await deps.store.get(id);
+    if (!material) throw new Error(`Material ${id} is not in the library. Find ids with library_search or library_recent.`);
+    if (!material.capture) throw new Error(`Material ${id} (${material.title}) has no captured page: it was fetched with capture off, dropped as a file, or is a PDF or an artifact. There is nothing to rebuild from; read it with material_read instead.`);
+    deps.scope?.seen.add(id);
+    const value = { id, title: material.title, url: material.url, ...page(await captureOf(id, material.title, deps, cache), offset) };
+    return { value, summary: `material_source ${id} @${offset} → ${quoteOf(material.title)}` };
   }
   if (tool === "material_annotations") {
     const id = materialId(record(raw, ["id"]));
     if (!(await deps.store.get(id))) throw new Error(`Material ${id} is not in the library.`);
+    deps.scope?.seen.add(id);
     const annotations = (await deps.annotations.list(id)).map(({ quote, note, kind, color, createdAt }) => ({ quote, kind, color, createdAt, ...(note ? { note } : {}) }));
     return { value: { annotations }, summary: `material_annotations ${id} → ${annotations.length}` };
   }
@@ -130,6 +178,7 @@ async function execute(tool: string, raw: unknown, deps: ToolDeps): Promise<Outc
     deps.onMaterialized?.(result.material);
     deps.onChanged();
     const { id, title, readingMinutes } = result.material;
+    deps.scope?.seen.add(id);
     return { value: { id, title, readingMinutes }, summary: `library_import → ${quoteOf(title)}` };
   }
   if (tool === "artifact_write") {
@@ -138,7 +187,11 @@ async function execute(tool: string, raw: unknown, deps: ToolDeps): Promise<Outc
     const markdown = text(args, "markdown", MAX_MARKDOWN);
     const sources = args.sources;
     if (!Array.isArray(sources) || sources.length === 0 || sources.length > MAX_LINEAGE || !sources.every((id) => typeof id === "string" && /^[a-f0-9]{16}$/.test(id))) throw new ArgumentError(`"sources" must be 1 to ${MAX_LINEAGE} material ids.`);
+    const scope = deps.scope;
+    const unseen = scope ? (sources as string[]).filter((id) => !scope.seen.has(id)) : [];
+    if (unseen.length > 0) throw new Error(`These sources were not retrieved during this turn, so they cannot be cited: ${unseen.join(", ")}. Read them with material_read (or find them with library_search) first.`);
     const saved = await deps.store.saveArtifact({ title, markdown, lineage: sources as string[] });
+    scope?.seen.add(saved.id);
     deps.onChanged();
     return { value: { id: saved.id, title: saved.title }, summary: `artifact_write ${quoteOf(saved.title)} → ${saved.id}` };
   }
@@ -148,10 +201,11 @@ async function execute(tool: string, raw: unknown, deps: ToolDeps): Promise<Outc
 /** One handler per turn; calls run one after another so imports and writes have a clear order. */
 export function createToolHandler(deps: ToolDeps): (call: ToolCall) => Promise<ToolReply> {
   let queue: Promise<unknown> = Promise.resolve();
+  const cache: CaptureCache = {};
   return (call) => {
     const run = queue.then(async (): Promise<ToolReply> => {
       try {
-        const outcome = await execute(call.tool, call.arguments, deps);
+        const outcome = await execute(call.tool, call.arguments, deps, cache);
         return { success: true, text: JSON.stringify({ ok: true, ...(outcome.value as Record<string, unknown>) }), summary: outcome.summary };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);

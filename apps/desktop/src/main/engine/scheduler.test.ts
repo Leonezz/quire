@@ -37,6 +37,23 @@ describe("Scheduler", () => {
     expect(started).toBe(2);
   });
 
+  it("reads a function interval before every wait, so a changed setting applies from the next tick", async () => {
+    let runs = 0;
+    let interval = 1000;
+    const scheduler = new Scheduler({ run: async () => { runs += 1; }, report: () => {}, intervalMs: () => interval, initialDelayMs: 0 });
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runs).toBe(1);
+    interval = 200;
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(runs).toBe(2);
+    await vi.advanceTimersByTimeAsync(200);
+    expect(runs).toBe(3);
+    scheduler.stop();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(runs).toBe(3);
+  });
+
   it("reports every failure and keeps going", async () => {
     const reported: unknown[] = [];
     let calls = 0;

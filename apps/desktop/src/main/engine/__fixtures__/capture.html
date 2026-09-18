@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Cache keys that include the prompt — Systems Notes</title>
+  <style>body { font: 16px sans-serif } .hidden { display: none }</style>
+  <script>window.dataLayer = [];</script>
+</head>
+<body>
+  <nav><a href="/">Home</a> <a href="/archive">Archive</a></nav>
+  <main>
+    <article>
+      <h1>Cache keys   that include
+        the prompt</h1>
+      <p class="byline">By <a href="https://systems.example.test/about">Ada Lovelace</a> · <time datetime="2026-09-01">1 September 2026</time></p>
+      <p>Two harnesses cache the tokenised prompt keyed on the <em>question text</em> alone,
+         so a changed system prompt silently reuses the old one.<br>The fix is small.</p>
+      <h2>What went wrong</h2>
+      <ul>
+        <li>The key ignored the system prompt.</li>
+        <li>Nobody <strong>noticed</strong> for a week.</li>
+      </ul>
+      <blockquote><p>Caches are a promise about identity.</p></blockquote>
+      <pre><code>def key(prompt):
+    return sha256(render(prompt))  # indented
+</code></pre>
+      <figure><img src="https://systems.example.test/diagram.png" alt="The cache path"><figcaption>Figure 1: the path.</figcaption></figure>
+      <p>See the <a href="https://systems.example.test/posts/retries">retries post</a> and <a href="/relative">this one</a>.</p>
+      <table><tr><th>Harness</th><th>Hit rate</th></tr><tr><td>A</td><td>90%</td></tr></table>
+      <svg viewBox="0 0 1 1"><text>hidden svg text</text></svg>
+      <noscript>Enable JavaScript.</noscript>
+      <iframe src="https://ads.example.test/x"></iframe>
+      <template><p>never rendered</p></template>
+    </article>
+  </main>
+  <aside class="related"><h3>Related</h3><a href="https://systems.example.test/posts/other">Other post</a></aside>
+  <footer>© Systems Notes</footer>
+</body>
+</html>

@@ -19,13 +19,10 @@ export function searchWords(query: string): string[] {
   return query.toLowerCase().split(/\s+/).filter(Boolean).slice(0, MAX_WORDS);
 }
 
-/** Every word must appear in the material's title or byline. */
+/** Hits for materials the store already matched (title, byline, tags or body). */
 export function materialHits(query: string, materials: readonly MaterialSummary[]): SearchHit[] {
-  const words = searchWords(query);
-  if (words.length === 0) return [];
-  return materials
-    .filter((material) => { const haystack = `${material.title} ${material.byline ?? ""}`.toLowerCase(); return words.every((word) => haystack.includes(word)); })
-    .map((material) => ({ kind: "material" as const, id: material.id, title: material.title, subtitle: joinSubtitle(material.byline ?? hostOf(material.url), dateOf(material.publishedAt ?? material.fetchedAt)) }));
+  if (searchWords(query).length === 0) return [];
+  return materials.map((material) => ({ kind: "material" as const, id: material.id, title: material.title, subtitle: joinSubtitle(material.byline ?? hostOf(material.url), dateOf(material.publishedAt ?? material.fetchedAt)) }));
 }
 
 export function itemHits(items: readonly ItemRecord[]): SearchHit[] {

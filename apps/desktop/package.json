@@ -16,6 +16,7 @@
     "@read/reader": "workspace:*",
     "@read/reader-pdf": "workspace:*",
     "@read/ui": "workspace:*",
+    "linkedom": "0.18.13",
     "lucide-react": "1.46.0",
     "mathml-to-latex": "1.8.0",
     "pdfjs-dist": "6.3.289",

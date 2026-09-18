@@ -43,6 +43,12 @@ export class AnnotationStore {
     await this.write(materialId, next);
   }
 
+  /** Every annotation of a material, when the material is deleted. Unknown ids are a no-op. */
+  async deleteAll(materialId: string): Promise<void> {
+    if (!validId(materialId)) throw new Error("ANNOTATION_INVALID_MATERIAL");
+    await rm(this.path(materialId), { force: true });
+  }
+
   private async write(materialId: string, annotations: Annotation[]) {
     await mkdir(this.dir, { recursive: true });
     await writeFile(this.path(materialId), JSON.stringify({ annotations }, null, 2), "utf8");

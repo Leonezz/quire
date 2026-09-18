@@ -2,10 +2,11 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { ItemRecord } from "../../shared/contracts";
 import { openDatabase, type Database } from "./db";
 import { EventStore } from "./events";
 import { FetchError, type FetchedPage, type Fetcher } from "./fetch";
-import { readItem } from "./inbox";
+import { keepItem, readItem } from "./inbox";
 import { ItemStore } from "./items";
 import { MaterialStore } from "./materials";
 
@@ -100,6 +101,54 @@ describe("readItem", () => {
     expect(noCopy).toMatchObject({ ok: false, code: "NETWORK", message: "getaddrinfo ENOTFOUND" });
     expect(warnings).toHaveLength(1);
     expect(items.get(short!.id)?.openedAt).toBeUndefined();
+  });
+
+  it("keeps an item: materializes it like Read, marks it kept (not opened) and records a kept event on the material", async () => {
+    const fetch = fetcherOf(async (url) => ({ bytes: html("Cache keys"), mediaType: "text/html", finalUrl: url.toString() }));
+    const store = new MaterialStore(root, fetch);
+    const items = new ItemStore(db);
+    const events = new EventStore(db);
+    items.upsert({ id: "feed", title: "Systems Notes", kind: "feed" }, [
+      { externalId: "a", title: "Cache keys", link: "https://systems.example.test/posts/cache-keys", publishedAt: "2026-09-14T00:00:00.000Z", gist: "", readingMinutes: 2, signals: {}, summaryOnly: true },
+      { externalId: "b", title: "Other", link: "https://systems.example.test/posts/other", publishedAt: "2026-09-13T00:00:00.000Z", gist: "", readingMinutes: 2, signals: {}, summaryOnly: true },
+    ]);
+    const [first, second] = items.inbox() as [ItemRecord, ItemRecord];
+    let materialized = 0;
+    const result = await keepItem(first.id, { items, events, store, warn: () => { throw new Error("no warning expected"); }, onMaterialized: () => { materialized += 1; } });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.material).toMatchObject({ title: "Cache keys", origin: "feed" });
+    const kept = items.get(first.id)!;
+    expect(kept.materialId).toBe(result.material.id);
+    expect(kept.keptAt).toBeDefined();
+    expect(kept.openedAt).toBeUndefined();
+    expect(items.inbox().map((item) => item.id)).toEqual([second.id]);
+    expect(events.list("kept").map((e) => e.ref)).toEqual([result.material.id]);
+    expect(events.list("opened")).toEqual([]);
+    expect(materialized).toBe(1);
+
+    // Reading a kept item reuses its material and opens it; keeping an already read item does not fetch again.
+    const read = await readItem(first.id, { items, events, store, warn: () => {}, onMaterialized: () => { materialized += 1; } });
+    expect(read.ok && read.material.id).toBe(result.material.id);
+    expect(items.get(first.id)?.openedAt).toBeDefined();
+    expect(fetch.calls).toHaveLength(1);
+    expect(materialized).toBe(1);
+    const again = await keepItem(first.id, { items, events, store, warn: () => {}, onMaterialized: () => { materialized += 1; } });
+    expect(again.ok && again.material.id).toBe(result.material.id);
+    expect(fetch.calls).toHaveLength(1);
+    expect(events.list("kept")).toHaveLength(2);
+    expect(materialized).toBe(1);
+  });
+
+  it("keep reports the fetch failure and leaves the item undecided when no feed copy exists", async () => {
+    const fetch = fetcherOf(async () => { throw new FetchError("HTTP_500", "The page answered 500."); });
+    const store = new MaterialStore(root, fetch);
+    const items = new ItemStore(db);
+    items.upsert({ id: "feed", title: "Systems Notes", kind: "feed" }, [{ externalId: "a", title: "Cache keys", link: "https://systems.example.test/posts/cache-keys", publishedAt: "2026-09-14T00:00:00.000Z", gist: "", readingMinutes: 2, signals: {}, summaryOnly: true }]);
+    const id = items.inbox()[0]!.id;
+    expect(await keepItem(id, { items, events: new EventStore(db), store, warn: () => {} })).toMatchObject({ ok: false, code: "HTTP_500" });
+    expect(items.inbox()).toHaveLength(1);
+    expect(await keepItem("missing", { items, events: new EventStore(db), store, warn: () => {} })).toMatchObject({ ok: false, code: "ITEM_NOT_FOUND" });
   });
 
   it("answers ITEM_NOT_FOUND for unknown ids", async () => {

@@ -14,6 +14,10 @@ export interface MaterialSummary {
   quality: ContentNormalizationQuality;
   /** Agent artifacts only: the materials the artifact was written from, so every claim has a trail. */
   lineage?: string[];
+  /** User tags from the metadata overrides. */
+  tags: string[];
+  /** Set when the agent rebuilt this material into a cleaner artifact (its id). */
+  rebuiltAs?: string;
 }
 
 /** Present when the material is a PDF; the bytes live next to the record and are read with getMaterialBytes. */
@@ -26,6 +30,10 @@ export interface PdfInfo {
 export interface MaterialRecord extends MaterialSummary {
   finalUrl: string;
   pdf?: PdfInfo;
+  /** The raw page as captured (kept next to the record as <id>.html) so the agent can rebuild from it. */
+  capture?: { byteLength: number; mediaType: string };
+  /** What the user overrode; the top-level fields already carry the effective values. */
+  overrides?: MaterialMeta;
   lang?: string;
   dir?: "ltr" | "rtl";
   /** Reader representation: schema id and JSON payload (v2 preferred, v1 otherwise). */
@@ -71,7 +79,7 @@ export interface CorpusImportResult {
   failed: { slug: string; message: string }[];
 }
 
-export interface ReadApi extends ReadApiM1, ReadApiM2 {
+export interface ReadApi extends ReadApiM1, ReadApiM2, ReadApiM3 {
   version: string;
   platform: string;
   /** Fires after the main process changed the library on its own (an import); the renderer reloads the list. */
@@ -152,6 +160,8 @@ export interface ItemRecord {
   summaryOnly: boolean;
   /** Set once the item has been read (opened) at least once. */
   openedAt?: string;
+  /** Kept into the library without reading (k); decided, like opened. */
+  keptAt?: string;
   finishedAt?: string;
   queuedAt?: string;
   queuePosition?: number;
@@ -247,7 +257,7 @@ export type AgentContext =
   | { kind: "selection"; materialId: string; quote: string; locator: string };
 
 /** Canned intents map to prompt templates; "ask" sends the text as written. */
-export type AgentTask = "ask" | "explain" | "verify" | "related" | "summary" | "synthesis";
+export type AgentTask = "ask" | "explain" | "verify" | "related" | "summary" | "synthesis" | "rebuild";
 
 export interface AgentRequest {
   context: AgentContext;
@@ -256,10 +266,13 @@ export interface AgentRequest {
   text: string;
   /** Continue an earlier conversation in the same panel. */
   threadId?: string;
+  /** Append to a stored session; omitted starts a new one (the result carries its id). */
+  sessionId?: string;
 }
 
 export type AgentResult =
-  | { ok: true; threadId: string; turnId: string; text: string }
+  /** `sources`: the material ids the agent retrieved this turn (plus the one it was asked about); only these are trustworthy citations. */
+  | { ok: true; threadId: string; turnId: string; text: string; sessionId: string; sources: string[] }
   | { ok: false; code: "AGENT_UNAVAILABLE" | "AUTH_REQUIRED" | "TURN_RUNNING" | "TURN_FAILED" | "TURN_INTERRUPTED" | "TURN_TIMEOUT"; message: string };
 
 export interface AgentStatus {
@@ -278,7 +291,7 @@ export type AgentEvent =
   | { type: "started"; threadId: string; turnId: string }
   | { type: "delta"; turnId: string; delta: string }
   | { type: "tool"; turnId: string; name: string; status: "running" | "done" | "failed"; summary?: string }
-  | { type: "completed"; turnId: string }
+  | { type: "completed"; turnId: string; sources: string[] }
   | { type: "failed"; turnId: string; message: string };
 
 export interface ReadApiM2 {
@@ -289,4 +302,87 @@ export interface ReadApiM2 {
   /** Starts the ChatGPT login flow in the browser; resolves once the account is available or with the failure reason. */
   agentLogin: () => Promise<AgentStatus>;
   onAgentEvent: (listener: (event: AgentEvent) => void) => () => void;
+}
+
+// ---------------------------------------------------------------------------
+// M3: metadata, library management, settings, agent sessions, rebuild.
+// ---------------------------------------------------------------------------
+
+/** Per-material overrides the user typed; absent fields fall back to what was extracted. */
+export interface MaterialMeta {
+  title?: string;
+  byline?: string;
+  publishedAt?: string;
+  tags?: string[];
+  /** A free-form note about the material itself (not an annotation). */
+  note?: string;
+}
+
+export interface TagCount { tag: string; count: number }
+
+export interface LibraryFilter {
+  /** "pdf" selects application/pdf; "artifact" origin agent; others by origin. */
+  kind?: "all" | "articles" | "pdf" | "artifact" | "feed";
+  tag?: string;
+  /** Every word must match title, byline or tags. */
+  query?: string;
+  sort?: "fetched" | "published" | "title";
+}
+
+export interface Settings {
+  /** Minutes between two syncs of the same source (default 30). */
+  syncIntervalMinutes: number;
+  /** Keep the raw page next to the record so the agent can rebuild it (default true). */
+  keepCapture: boolean;
+  /** Override the Codex binary; empty means auto-detect. */
+  codexPath: string;
+  /** Model and reasoning effort passed to Codex; empty means Codex's own default. */
+  agentModel: string;
+  agentReasoningEffort: "" | "low" | "medium" | "high";
+  /** Where materials, images and the database live (read-only, for the sheet). */
+  dataDirectory: string;
+}
+
+export interface AgentTurnRecord {
+  id: string;
+  role: "user" | "agent";
+  text: string;
+  task?: AgentTask;
+  tools?: { name: string; status: "done" | "failed"; summary?: string }[];
+  status?: "completed" | "failed" | "interrupted";
+  at: string;
+}
+
+export interface AgentSessionSummary {
+  id: string;
+  title: string;
+  context: AgentContext;
+  createdAt: string;
+  updatedAt: string;
+  turnCount: number;
+}
+
+export interface AgentSession extends AgentSessionSummary {
+  threadId?: string;
+  turns: AgentTurnRecord[];
+}
+
+export interface ReadApiM3 {
+  /** Materials filtered and sorted for the Library; the plain listMaterials stays for the rest. */
+  queryLibrary: (filter: LibraryFilter) => Promise<MaterialSummary[]>;
+  updateMaterialMeta: (id: string, patch: MaterialMeta) => Promise<MaterialRecord>;
+  listTags: () => Promise<TagCount[]>;
+  /** Removes the records, their bytes, images are left in the shared cache; items that pointed at them lose the link. */
+  deleteMaterials: (ids: string[]) => Promise<void>;
+  /** Keep an Inbox/Queue item in the library without reading it (materializes it, marks it kept). */
+  keepItem: (id: string) => Promise<OpenUrlResult>;
+
+  getSettings: () => Promise<Settings>;
+  updateSettings: (patch: Partial<Omit<Settings, "dataDirectory">>) => Promise<Settings>;
+
+  listAgentSessions: () => Promise<AgentSessionSummary[]>;
+  getAgentSession: (id: string) => Promise<AgentSession | undefined>;
+  deleteAgentSession: (id: string) => Promise<void>;
+  /** Fires after sessions changed on the main side (a turn was appended, a session deleted). */
+  onAgentSessionsChanged: (listener: () => void) => () => void;
 }

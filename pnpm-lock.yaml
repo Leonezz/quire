@@ -29,6 +29,9 @@ importers:
       '@read/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      linkedom:
+        specifier: 0.18.13
+        version: 0.18.13
       lucide-react:
         specifier: 1.46.0
         version: 1.46.0(react@19.3.0)
@@ -273,6 +276,9 @@ importers:
       react-aria-components:
         specifier: 1.21.1
         version: 1.21.1(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      react-resizable-panels:
+        specifier: 4.12.4
+        version: 4.12.4(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
     devDependencies:
       '@storybook/addon-a11y':
         specifier: 10.6.0

@@ -26,6 +26,16 @@ describe("AnnotationStore", () => {
     expect(await store.list(material)).toEqual([]);
   });
 
+  it("deletes every annotation of a material at once", async () => {
+    const store = new AnnotationStore(root);
+    await store.save({ ...base, id: "aaaaaaaaaaaaaaaa" });
+    await store.save({ ...base, id: "bbbbbbbbbbbbbbbb" });
+    await store.deleteAll(material);
+    expect(await store.list(material)).toEqual([]);
+    await store.deleteAll(material);
+    await expect(store.deleteAll("../etc")).rejects.toThrow("ANNOTATION_INVALID_MATERIAL");
+  });
+
   it("rejects malformed ids and empty locators loudly", async () => {
     const store = new AnnotationStore(root);
     await expect(store.save({ ...base, id: "nope" })).rejects.toThrow("ANNOTATION_INVALID_ID");

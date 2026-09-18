@@ -10,6 +10,10 @@ describe("reading time", () => {
     expect(wordCount("这里记录每周值得分享的科技内容")).toBe(15);
     expect(readingMinutes("字".repeat(4700))).toBe(12);
   });
+  it("does not count full-width punctuation as words", () => {
+    expect(wordCount("你好，世界。这是一个测试，包含标点符号。")).toBe(16);
+    expect(wordCount("「引用」…！？")).toBe(2);
+  });
   it("adds both scripts of a mixed text", () => {
     expect(wordCount("React Native 再见了")).toBe(5);
     expect(readingMinutes("")).toBe(1);

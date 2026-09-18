@@ -16,16 +16,24 @@ import { Scheduler } from "./engine/scheduler";
 import { readItem } from "./engine/inbox";
 import { itemHits, materialHits, mergeHits } from "./engine/search";
 import { AgentService } from "./engine/agent";
-import { agentTools, createToolHandler } from "./engine/agent-tools";
+import { agentTools, createToolHandler, createTurnScope } from "./engine/agent-tools";
 import { CodexClient } from "./engine/codex-client";
+import { MetaStore } from "./engine/meta";
+import { SettingsStore } from "./engine/settings";
+import { SessionStore } from "./engine/agent-sessions";
+import { registerM3Handlers } from "./ipc-m3";
 
-const store = new MaterialStore(app.getPath("userData"));
-const images = new ImageCache(app.getPath("userData"));
-const annotations = new AnnotationStore(app.getPath("userData"));
-const db = openDatabase(join(app.getPath("userData"), "quire.sqlite"));
+const userData = app.getPath("userData");
+const settings = new SettingsStore(join(userData, "settings.json"), userData, { warn: (message) => console.warn(`[settings] ${message}`) });
+const db = openDatabase(join(userData, "quire.sqlite"));
+const meta = new MetaStore(db);
+const store = new MaterialStore(userData, fetchPage, { meta, keepCapture: () => settings.get().keepCapture });
+const images = new ImageCache(userData);
+const annotations = new AnnotationStore(userData);
 const items = new ItemStore(db);
 const sources = new SourceStore(db, items);
 const events = new EventStore(db);
+const sessions = new SessionStore(db);
 
 const MAX_QUEUE_IDS = 5000;
 const DECISIONS: readonly ItemDecision[] = ["queue", "dismiss", "unqueue", "undismiss"];
@@ -36,7 +44,7 @@ function boundedString(value: unknown, max: number, code: string): string {
   return value;
 }
 
-function broadcast(channel: "library:changed" | "sources:changed" | "agent:event", payload?: AgentEvent) {
+function broadcast(channel: "library:changed" | "sources:changed" | "agent:event" | "agent:sessions:changed", payload?: AgentEvent) {
   for (const win of BrowserWindow.getAllWindows()) win.webContents.send(channel, payload);
 }
 
@@ -118,12 +126,21 @@ async function addSource(input: string): Promise<AddSourceResult> {
   return synced.ok ? { ok: true, source: synced.source, added: synced.added } : { ok: false, code: synced.code, message: synced.message };
 }
 
+// Every sync (scheduled, Sync all, Sync now on one source) runs under one lock, so two runs never touch the same source at once.
+let syncLock: Promise<unknown> = Promise.resolve();
+function exclusiveSync<T>(run: () => Promise<T>): Promise<T> {
+  const next = syncLock.then(run, run);
+  syncLock = next.catch(() => undefined);
+  return next;
+}
 async function syncAll() {
-  const outcome = await syncDue({ fetch: fetchPage, sources, items, onChanged: () => broadcast("sources:changed") });
+  const outcome = await exclusiveSync(() => syncDue({ fetch: fetchPage, sources, items, intervalMinutes: () => settings.get().syncIntervalMinutes, onChanged: () => broadcast("sources:changed") }));
   for (const failure of outcome.failures) reportSyncFailure(`sync of ${failure.source.locator}`, failure.message);
 }
 
-const scheduler = new Scheduler({ run: syncAll, report: (error) => reportSyncFailure("scheduled sync", error) });
+// The scheduler polls at the sync interval (never slower than 15 minutes) and syncs what is due by that same setting.
+const SCHEDULER_MAX_MS = 15 * 60_000;
+const scheduler = new Scheduler({ run: syncAll, report: (error) => reportSyncFailure("scheduled sync", error), intervalMs: () => Math.min(SCHEDULER_MAX_MS, settings.get().syncIntervalMinutes * 60_000) });
 
 ipcMain.handle("source:detect", (_event, input: unknown) => detectSource(boundedString(input, 4096, "IPC_INVALID_INPUT"), fetchPage));
 ipcMain.handle("source:add", (_event, input: unknown) => addSource(boundedString(input, 4096, "IPC_INVALID_INPUT")));
@@ -131,7 +148,7 @@ ipcMain.handle("source:list", () => sources.list());
 ipcMain.handle("source:sync", async (_event, id: unknown) => {
   const source = sources.get(boundedString(id, 64, "IPC_INVALID_ID"));
   if (!source) throw new Error("SOURCE_NOT_FOUND");
-  const result = await syncSource(source, { fetch: fetchPage, sources, items });
+  const result = await exclusiveSync(() => syncSource(source, { fetch: fetchPage, sources, items }));
   broadcast("sources:changed");
   if (!result.ok) reportSyncFailure(`sync of ${source.locator}`, result.message);
   return result;
@@ -178,19 +195,24 @@ ipcMain.handle("event:record", (_event, kind: unknown, ref: unknown) => {
 ipcMain.handle("event:stats", () => events.stats());
 ipcMain.handle("search:query", async (_event, query: unknown): Promise<SearchHit[]> => {
   const text = boundedString(query, 200, "IPC_INVALID_QUERY");
-  return mergeHits(materialHits(text, await store.list()), itemHits(items.search(text)));
+  return mergeHits(materialHits(text, await store.search(text)), itemHits(items.search(text)));
 });
 
 // --- M2: the agent. Codex app-server in the main process; the renderer sees text and events. -----
-const codex = new CodexClient({ onDiagnostic: (message) => console.warn(`[agent] ${message}`) });
+const codex = new CodexClient({ onDiagnostic: (message) => console.warn(`[agent] ${message}`), configuredPath: () => settings.get().codexPath });
+const turnScope = createTurnScope();
 const agent = new AgentService({
-  client: codex, tools: agentTools, userData: app.getPath("userData"), store,
-  toolHandler: createToolHandler({ store, items, annotations, onChanged: () => broadcast("library:changed"), onMaterialized: (record) => void images.prefetch(imageUrlsOf(record)) }),
+  client: codex, tools: agentTools, userData, store, sessions,
+  scope: turnScope,
+  toolHandler: createToolHandler({ scope: turnScope, store, items, annotations, onChanged: () => broadcast("library:changed"), onMaterialized: (record) => void images.prefetch(imageUrlsOf(record)) }),
   onEvent: (event) => broadcast("agent:event", event),
+  onSessionsChanged: () => broadcast("agent:sessions:changed"),
+  onLibraryChanged: () => broadcast("library:changed"),
+  settings: () => { const { agentModel, agentReasoningEffort } = settings.get(); return { agentModel, agentReasoningEffort }; },
   openExternal: (url) => shell.openExternal(url),
 });
 
-const AGENT_TASKS: readonly AgentTask[] = ["ask", "explain", "verify", "related", "summary", "synthesis"];
+const AGENT_TASKS: readonly AgentTask[] = ["ask", "explain", "verify", "related", "summary", "synthesis", "rebuild"];
 const MAX_AGENT_TEXT = 20_000;
 
 function agentContext(value: unknown): AgentContext {
@@ -204,18 +226,30 @@ function agentContext(value: unknown): AgentContext {
 }
 
 function agentRequest(value: unknown): AgentRequest {
-  const request = value as { context?: unknown; task?: unknown; text?: unknown; threadId?: unknown } | undefined;
+  const request = value as { context?: unknown; task?: unknown; text?: unknown; threadId?: unknown; sessionId?: unknown } | undefined;
   if (!request || typeof request !== "object") throw new Error("IPC_INVALID_AGENT_REQUEST");
   if (!AGENT_TASKS.includes(request.task as AgentTask)) throw new Error("IPC_INVALID_AGENT_TASK");
   if (typeof request.text !== "string" || request.text.length > MAX_AGENT_TEXT) throw new Error("IPC_INVALID_AGENT_TEXT");
   if (request.threadId !== undefined) boundedString(request.threadId, 128, "IPC_INVALID_AGENT_THREAD");
-  return { context: agentContext(request.context), task: request.task as AgentTask, text: request.text, ...(typeof request.threadId === "string" ? { threadId: request.threadId } : {}) };
+  if (request.sessionId !== undefined) boundedString(request.sessionId, 64, "IPC_INVALID_AGENT_SESSION");
+  return {
+    context: agentContext(request.context), task: request.task as AgentTask, text: request.text,
+    ...(typeof request.threadId === "string" ? { threadId: request.threadId } : {}),
+    ...(typeof request.sessionId === "string" ? { sessionId: request.sessionId } : {}),
+  };
 }
 
 ipcMain.handle("agent:status", () => agent.status());
 ipcMain.handle("agent:ask", (_event, request: unknown) => agent.ask(agentRequest(request)));
 ipcMain.handle("agent:interrupt", () => agent.interrupt());
 ipcMain.handle("agent:login", () => agent.login());
+
+// --- M3: metadata, library management, settings, agent sessions. ------------------------------
+registerM3Handlers({
+  store, meta, annotations, items, events, settings, sessions, broadcast, withPrefetch,
+  onCodexPathChanged: () => codex.stop(),
+  warn: (message) => console.warn(message),
+});
 
 // One window. Native vibrancy behind a transparent page so the glass panels
 // in the renderer sit on the real desktop, not on a painted gradient.

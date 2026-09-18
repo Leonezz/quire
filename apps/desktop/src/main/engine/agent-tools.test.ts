@@ -40,7 +40,7 @@ describe("agentTools", () => {
       expect(tool.inputSchema.type).toBe("object");
       expect(tool.inputSchema.additionalProperties).toBe(false);
     }
-    expect(agentTools.map((t) => t.name)).toEqual(["library_search", "library_recent", "material_read", "material_annotations", "inbox_list", "library_import", "artifact_write"]);
+    expect(agentTools.map((t) => t.name)).toEqual(["library_search", "library_recent", "material_read", "material_annotations", "inbox_list", "library_import", "material_source", "artifact_write"]);
     expect(agentTools.find((t) => t.name === "material_read")?.description).toMatch(/exact words/);
   });
 });
@@ -115,6 +115,28 @@ describe("createToolHandler", () => {
     expect(bad.success).toBe(false);
     expect(parse(bad.text).error).toMatch(/Unknown material ids in lineage: 0123456789abcdef/);
     expect(changes).toHaveLength(1);
+  });
+
+  it("pages the captured page through material_source and refuses materials without a capture", async () => {
+    const { handle, store, material } = await setup();
+    const long = `<!doctype html><html><head><title>Long page</title></head><body><nav>Menu</nav><article><h1>Long page</h1>${"<p>A paragraph of the captured page, kept verbatim for the rebuild.</p>".repeat(500)}</article></body></html>`;
+    const captured = await new MaterialStore(root, async (url) => ({ bytes: new TextEncoder().encode(long), mediaType: "text/html", finalUrl: url.toString() })).openUrl("https://example.test/long");
+    if (!captured.ok) throw new Error(captured.message);
+    const text = (await store.captureText(captured.material.id))!;
+    expect(text.length).toBeGreaterThan(PAGE_CHARS);
+    const first = parse((await handle({ tool: "material_source", arguments: { id: captured.material.id }, callId: "c1" })).text);
+    expect(first).toMatchObject({ ok: true, id: captured.material.id, title: "Long page", offset: 0, nextOffset: PAGE_CHARS, totalCharacters: text.length });
+    expect((first.content as string).startsWith("Menu\n\n# Long page")).toBe(true);
+    const second = parse((await handle({ tool: "material_source", arguments: { id: captured.material.id, offset: PAGE_CHARS }, callId: "c2" })).text);
+    expect(second).toMatchObject({ offset: PAGE_CHARS, nextOffset: null });
+    expect((first.content as string) + (second.content as string)).toBe(text);
+
+    const noCapture = await handle({ tool: "material_source", arguments: { id: material.id }, callId: "c3" });
+    expect(noCapture.success).toBe(false);
+    expect(parse(noCapture.text).error).toMatch(/has no captured page: .* nothing to rebuild from; read it with material_read instead/);
+    const unknown = await handle({ tool: "material_source", arguments: { id: "0123456789abcdef" }, callId: "c4" });
+    expect(parse(unknown.text).error).toMatch(/not in the library/);
+    expect(parse((await handle({ tool: "material_source", arguments: { id: captured.material.id, offset: 10_000_000 }, callId: "c5" })).text).error).toMatch(/past the end/);
   });
 
   it("names an unknown tool and the tools that exist", async () => {

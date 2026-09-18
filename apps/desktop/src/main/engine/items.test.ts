@@ -19,7 +19,7 @@ function input(overrides: Partial<ItemInput> & { externalId: string }): ItemInpu
 
 describe("ItemStore", () => {
   it("opens the schema once and keeps its version", () => {
-    expect((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(1);
+    expect((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(2);
     const again = openDatabase(join(root, "quire.sqlite"));
     expect(again.prepare("SELECT COUNT(*) AS n FROM items").get()).toEqual({ n: 0 });
     again.close();
@@ -101,6 +101,44 @@ describe("ItemStore", () => {
     expect(second.openedAt).toBe(first.openedAt);
     expect(second.materialId).toBe("bbbbbbbbbbbbbbbb");
     expect(items.inbox()).toEqual([]);
+  });
+
+  it("keeps an item as decided without opening it, and a later read still opens it", () => {
+    const items = new ItemStore(db, () => new Date("2026-09-18T10:00:00Z"));
+    items.upsert(source, [input({ externalId: "a" }), input({ externalId: "b" })]);
+    const [a, b] = items.inbox().map((item) => item.id) as [string, string];
+    const kept = items.markKept(a, "aaaaaaaaaaaaaaaa");
+    expect(kept).toMatchObject({ keptAt: "2026-09-18T10:00:00.000Z", materialId: "aaaaaaaaaaaaaaaa" });
+    expect(kept.openedAt).toBeUndefined();
+    expect(items.inbox().map((item) => item.id)).toEqual([b]);
+    expect(items.queue()).toEqual([]);
+    expect((db.prepare("SELECT state FROM items WHERE id = ?").get(a) as { state: string }).state).toBe("kept");
+    expect(items.markKept(a, "bbbbbbbbbbbbbbbb").keptAt).toBe("2026-09-18T10:00:00.000Z");
+    // Queueing a kept item shows it in the queue; unqueueing returns it to kept, not to the inbox.
+    items.decide(a, "queue");
+    expect(items.queue().map((item) => item.id)).toEqual([a]);
+    items.decide(a, "unqueue");
+    expect(items.inbox().map((item) => item.id)).toEqual([b]);
+    expect(items.markOpened(a, "cccccccccccccccc").openedAt).toBeDefined();
+    expect((db.prepare("SELECT state FROM items WHERE id = ?").get(a) as { state: string }).state).toBe("opened");
+    expect(() => items.markKept("nope", "aaaaaaaaaaaaaaaa")).toThrow("ITEM_NOT_FOUND");
+  });
+
+  it("unlinks a deleted material from every item while keeping their decisions", () => {
+    const items = new ItemStore(db);
+    items.upsert(source, [input({ externalId: "a" }), input({ externalId: "b" }), input({ externalId: "c" })]);
+    const [a, b, c] = items.inbox().map((item) => item.id) as [string, string, string];
+    items.markOpened(a, "0123456789abcdef");
+    items.markKept(b, "0123456789abcdef");
+    items.markOpened(c, "fedcba9876543210");
+    expect(items.unlinkMaterial("0123456789abcdef")).toBe(2);
+    expect(items.unlinkMaterial("0123456789abcdef")).toBe(0);
+    expect(items.get(a)).not.toHaveProperty("materialId");
+    expect(items.get(a)?.openedAt).toBeDefined();
+    expect(items.get(b)?.keptAt).toBeDefined();
+    expect(items.get(c)?.materialId).toBe("fedcba9876543210");
+    expect(items.inbox()).toEqual([]);
+    expect(items.healthOf("src-a").keptCount).toBe(1);
   });
 
   it("finishes every item read as a material, once", () => {

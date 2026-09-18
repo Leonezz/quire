@@ -210,6 +210,41 @@ describe("CodexClient", () => {
     expect(await h.client.waitForAccount(1, 100)).toMatchObject({ account: { type: "chatgpt" } });
   });
 
+  it("passes the model to thread/start and thread/resume, and model and effort to turn/start, only when set", async () => {
+    const h = harness(basicScript((fake, turnRequest) => { fake.send(ok(idOf(turnRequest), { turn: { id: "turn-9", status: "inProgress", items: [] } })); completeTurn(fake, "turn-9", "ok"); }, {
+      "thread/resume": (fake, m) => fake.send(ok(idOf(m), { thread: { id: "thread-1" } })),
+    }));
+    await h.client.runTurn({ ...noTools, model: "gpt-5-codex", effort: "high" });
+    const server = h.server();
+    expect(server.requests("thread/start")[0]!.params).toMatchObject({ model: "gpt-5-codex" });
+    expect(server.requests("thread/start")[0]!.params).not.toHaveProperty("effort");
+    expect(server.requests("turn/start")[0]!.params).toMatchObject({ model: "gpt-5-codex", effort: "high" });
+    await h.client.runTurn({ ...noTools, threadId: "thread-1", model: "gpt-5-codex" });
+    expect(server.requests("thread/resume")[0]!.params).toMatchObject({ threadId: "thread-1", model: "gpt-5-codex" });
+    expect(server.requests("turn/start")[1]!.params).not.toHaveProperty("effort");
+    await h.client.runTurn(noTools);
+    expect(server.requests("thread/start")[1]!.params).not.toHaveProperty("model");
+    expect(server.requests("turn/start")[2]!.params).not.toHaveProperty("model");
+  });
+
+  it("honours the configured path from Settings over CODEX_PATH, and re-reads it after stop()", async () => {
+    expect(resolveCodexBinary({ CODEX_PATH: "/x/codex" }, (p) => p === "/settings/codex", "/settings/codex")).toBe("/settings/codex");
+    expect(() => resolveCodexBinary({}, () => false, "/gone/codex")).toThrow(/Codex path in Settings \(\/gone\/codex\) does not exist/);
+    let configured = "";
+    const commands: string[] = [];
+    const spawn: Spawn = (command, args) => { commands.push(command); const fake = new FakeProcess(args, () => {}); setTimeout(() => { fake.stdout.write("codex-cli 0.144.1\n"); fake.exit(0); }, 0); return fake; };
+    const client = new CodexClient({ spawn, env: { CODEX_PATH: "/env/codex" }, exists: () => true, configuredPath: () => configured });
+    expect(client.binary()).toBe("/env/codex");
+    await client.version();
+    configured = "/settings/codex";
+    expect(client.binary()).toBe("/settings/codex");
+    await client.version();
+    expect(commands).toEqual(["/env/codex"]);
+    client.stop();
+    await client.version();
+    expect(commands).toEqual(["/env/codex", "/settings/codex"]);
+  });
+
   it("stop() ends the process and reports the binary as missing when nothing is installed", async () => {
     const h = harness(basicScript(() => {}));
     await h.client.initialize();

@@ -10,6 +10,8 @@ export interface SyncDeps {
   sources: SourceStore;
   items: ItemStore;
   now?: () => Date;
+  /** The Settings cadence, read at every pass; without it each source's own interval applies. */
+  intervalMinutes?: () => number;
 }
 
 const CONCURRENCY = 2;
@@ -46,10 +48,10 @@ export async function syncSource(source: SourceRecord, deps: SyncDeps): Promise<
   }
 }
 
-export function isDue(source: SourceRecord, now: Date): boolean {
+export function isDue(source: SourceRecord, now: Date, intervalMinutes = source.intervalMinutes): boolean {
   if (source.pausedAt) return false;
   if (!source.lastSyncAt) return true;
-  return now.getTime() - new Date(source.lastSyncAt).getTime() >= source.intervalMinutes * 60_000;
+  return now.getTime() - new Date(source.lastSyncAt).getTime() >= intervalMinutes * 60_000;
 }
 
 export interface SyncDueOutcome {
@@ -61,7 +63,7 @@ export interface SyncDueOutcome {
 /** Syncs every due source, two at a time; `onChanged` fires once when any source or item changed. */
 export async function syncDue(deps: SyncDeps & { onChanged: () => void }): Promise<SyncDueOutcome> {
   const now = deps.now ?? (() => new Date());
-  const queue = deps.sources.list().filter((source) => isDue(source, now()));
+  const queue = deps.sources.list().filter((source) => isDue(source, now(), deps.intervalMinutes?.() ?? source.intervalMinutes));
   const outcome: SyncDueOutcome = { synced: 0, added: 0, failures: [] };
   await Promise.all(Array.from({ length: Math.min(CONCURRENCY, queue.length) }, async () => {
     for (let source = queue.shift(); source !== undefined; source = queue.shift()) {

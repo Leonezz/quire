@@ -28,7 +28,7 @@ export interface SourceHealth {
   weeklyRate: number;
 }
 
-type ItemState = "undecided" | "queued" | "dismissed" | "opened";
+type ItemState = "undecided" | "queued" | "dismissed" | "opened" | "kept";
 type Row = Record<string, string | number | null>;
 
 const INBOX_CAP = 500;
@@ -40,10 +40,14 @@ function itemIdFor(sourceId: string, externalId: string): string {
   return createHash("sha256").update(`${sourceId}\0${externalId}`).digest("hex").slice(0, 16);
 }
 
-function stateOf(row: { queued_at: string | null; dismissed_at: string | null; opened_at: string | null }): ItemState {
+interface StateColumns { queued_at: string | null; dismissed_at: string | null; opened_at: string | null; kept_at: string | null }
+
+/** Derived, never set directly: queued > dismissed > opened > kept > undecided. Kept is decided, like opened. */
+function stateOf(row: StateColumns): ItemState {
   if (row.queued_at) return "queued";
   if (row.dismissed_at) return "dismissed";
   if (row.opened_at) return "opened";
+  if (row.kept_at) return "kept";
   return "undecided";
 }
 
@@ -62,13 +66,13 @@ function toRecord(row: Row): ItemRecord {
     readingMinutes: row.reading_minutes as number,
     signals: JSON.parse(row.signals as string) as ItemSignals,
     summaryOnly: row.summary_only === 1,
-    ...optional("opened_at"), ...optional("finished_at"), ...optional("queued_at"), ...optional("dismissed_at"), ...optional("material_id"),
+    ...optional("opened_at"), ...optional("kept_at"), ...optional("finished_at"), ...optional("queued_at"), ...optional("dismissed_at"), ...optional("material_id"),
     ...(typeof row.queue_position === "number" ? { queuePosition: row.queue_position } : {}),
     ...(row.introduced_by === "agent" ? { introducedBy: "agent" as const } : {}),
   };
 }
 
-const COLUMNS = "id, source_id, source_title, source_kind, external_id, title, gist, link, published_at, fetched_at, reading_minutes, signals, summary_only, opened_at, finished_at, queued_at, queue_position, dismissed_at, material_id, introduced_by";
+const COLUMNS = "id, source_id, source_title, source_kind, external_id, title, gist, link, published_at, fetched_at, reading_minutes, signals, summary_only, opened_at, finished_at, queued_at, queue_position, dismissed_at, material_id, introduced_by, kept_at";
 
 /** Items of every source. Decisions (queue / dismiss / opened) survive re-syncs; only the entry's own fields refresh. */
 export class ItemStore {
@@ -78,7 +82,7 @@ export class ItemStore {
   upsert(source: Pick<SourceRecord, "id" | "title" | "kind">, inputs: readonly ItemInput[]): number {
     const fetchedAt = this.now().toISOString();
     const insert = this.db.prepare(`INSERT INTO items (${COLUMNS}, state, content_reader_schema, content_reader, content_markdown, content_plain)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'undecided', ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'undecided', ?, ?, ?, ?)
       ON CONFLICT (source_id, external_id) DO UPDATE SET
         source_title = excluded.source_title, title = excluded.title, gist = excluded.gist, link = excluded.link, published_at = excluded.published_at,
         reading_minutes = excluded.reading_minutes, signals = excluded.signals, summary_only = excluded.summary_only,
@@ -175,6 +179,19 @@ export class ItemStore {
     return this.get(id) as ItemRecord;
   }
 
+  /** Keep without reading: the first keep sets keptAt; the item is decided (out of the Inbox) but not opened. */
+  markKept(id: string, materialId: string): ItemRecord {
+    if (!this.get(id)) throw new Error("ITEM_NOT_FOUND");
+    this.db.prepare("UPDATE items SET kept_at = COALESCE(kept_at, ?), material_id = ? WHERE id = ?").run(this.now().toISOString(), materialId, id);
+    this.refreshState(id);
+    return this.get(id) as ItemRecord;
+  }
+
+  /** A deleted material: the items that pointed at it lose the link but stay decided (opened / kept). */
+  unlinkMaterial(materialId: string): number {
+    return Number(this.db.prepare("UPDATE items SET material_id = NULL WHERE material_id = ?").run(materialId).changes);
+  }
+
   /** A material read to completion finishes every item that was read as it; the first finish sticks. */
   markFinished(materialId: string): number {
     return Number(this.db.prepare("UPDATE items SET finished_at = ? WHERE material_id = ? AND finished_at IS NULL").run(this.now().toISOString(), materialId).changes);
@@ -201,7 +218,7 @@ export class ItemStore {
   }
 
   private refreshState(id: string) {
-    const row = this.db.prepare("SELECT queued_at, dismissed_at, opened_at FROM items WHERE id = ?").get(id) as { queued_at: string | null; dismissed_at: string | null; opened_at: string | null };
+    const row = this.db.prepare("SELECT queued_at, dismissed_at, opened_at, kept_at FROM items WHERE id = ?").get(id) as unknown as StateColumns;
     this.db.prepare("UPDATE items SET state = ? WHERE id = ?").run(stateOf(row), id);
   }
 }
