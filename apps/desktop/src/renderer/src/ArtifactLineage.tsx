@@ -13,8 +13,11 @@ export function hostLabel(material: Pick<MaterialRecord, "origin" | "url" | "fin
   try { return new URL(material.finalUrl || material.url).hostname; } catch { return material.url; }
 }
 
-/** The materials an agent artifact was written from, as a small collapsible under the title; each opens the source. */
-export function ArtifactLineage({ lineage, onOpenMaterial }: { lineage: readonly string[]; onOpenMaterial: (id: string) => void }) {
+/**
+ * The materials an agent artifact was written from; each opens the source. In the reader header
+ * it is a collapsed line under the title; in the Info panel (`defaultOpen`) the list is shown at once.
+ */
+export function ArtifactLineage({ lineage, onOpenMaterial, defaultOpen = false }: { lineage: readonly string[]; onOpenMaterial: (id: string) => void; defaultOpen?: boolean }) {
   const [titles, setTitles] = useState<Map<string, string> | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
   useEffect(() => {
@@ -26,7 +29,7 @@ export function ArtifactLineage({ lineage, onOpenMaterial }: { lineage: readonly
   }, []);
   if (lineage.length === 0) return null;
   return (
-    <details className="group mb-8 -mt-5 text-[12.5px] text-label-2">
+    <details open={defaultOpen} className={`group text-[12.5px] text-label-2 ${defaultOpen ? "" : "mb-8 -mt-5"}`}>
       <summary className="inline-flex cursor-default list-none items-center gap-1 rounded-pill py-0.5 pr-2 pl-1 text-accent-text outline-none hover:bg-accent-soft focus-visible:ring-[3px] focus-visible:ring-accent-ring [&::-webkit-details-marker]:hidden"><ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />Sources</summary>
       {error ? <p role="alert" className="mt-1.5 text-red-text">{error}</p> : null}
       <ol className="mt-1.5 grid list-decimal gap-1 pl-6">

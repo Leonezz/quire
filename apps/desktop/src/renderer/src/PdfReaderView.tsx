@@ -1,27 +1,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronLeft, Highlighter, List, Sparkles } from "lucide-react";
-import { AskButton, Inspector, InspectorPanel, InspectorTab, InspectorTabs, Kbd, TocRail, Toolbar, ToolbarButton, ToolbarGroup, ToolbarTitle, type Key } from "@read/ui";
+import { ChevronLeft, Highlighter, Info, List, Sparkles } from "lucide-react";
+import { AskButton, Kbd, SplitGroup, SplitPanel, SplitSeparator, TocRail, Toolbar, ToolbarButton, ToolbarGroup, ToolbarTitle, useSplitSizes } from "@read/ui";
 import { PdfCanvasViewer, parsePdfRegionsLocator, pdfReadingProgress, pdfRegionLocatorForSelection, pdfSelectionText, usePdfReaderStateMemory, type PdfCanvasViewerHandle, type PdfOutlineEntry, type PdfReaderState, type PdfRegionOverlay } from "@read/reader-pdf";
 import { ANNOTATION_COLORS, citationFor, useAnnotations } from "./annotations";
-import { NotesPanel, type NoteDraft } from "./NotesPanel";
-import { AgentPanel } from "./AgentPanel";
+import type { NoteDraft } from "./NotesPanel";
+import { ReaderInspector, type ReaderTab } from "./ReaderInspector";
 import { hostLabel } from "./ArtifactLineage";
+import type { ReaderProps } from "./ReaderView";
 import { SelectionToolbar, type SelectionCapture } from "./SelectionToolbar";
 import type { AgentContext, Annotation } from "../../shared/contracts";
-import type { MaterialRecord } from "../../shared/contracts";
 import { read } from "./api";
 import { ReadingSettings } from "./ReadingSettings";
-import { applyTheme, loadPrefs, savePrefs, type ReadingPrefs } from "./readingPrefs";
+import { useReadingPrefs } from "./readingPrefs";
 
 type Loaded = { status: "loading" } | { status: "ready"; url: string } | { status: "error"; message: string };
 
 /** PDF reading: the same toolbar contract as the article reader, the pages rendered by pdf.js. */
-export function PdfReaderView({ material, onBack, onOpenLink, onOpenMaterial, onProgress, embedded = false }: { material: MaterialRecord; onBack?: (() => void) | undefined; onOpenLink: (url: string) => void; onOpenMaterial: (id: string) => void; onProgress?: ((fraction: number) => void) | undefined; embedded?: boolean }) {
+export function PdfReaderView({ material, onBack, onOpenLink, onOpenMaterial, onProgress, onMaterialSaved, onOpenSettings, embedded = false }: ReaderProps) {
   const pdf = material.pdf;
   const [loaded, setLoaded] = useState<Loaded>({ status: "loading" });
-  const [prefs, setPrefs] = useState<ReadingPrefs>(loadPrefs);
+  const [prefs, setPrefs] = useReadingPrefs();
   const [progress, setProgress] = useState(0);
-  const [inspectorTab, setInspectorTab] = useState<Key | null>(null);
+  const [inspectorTab, setInspectorTab] = useState<ReaderTab | null>(null);
+  const sizes = useSplitSizes("reader");
   const { annotations, error: annotationsError, add, update, remove } = useAnnotations(material.id);
   const [noteDraft, setNoteDraft] = useState<NoteDraft | null>(null);
   const [activeAnnotation, setActiveAnnotation] = useState<string | undefined>(undefined);
@@ -35,8 +36,6 @@ export function PdfReaderView({ material, onBack, onOpenLink, onOpenMaterial, on
   const identity = `${material.id}:pdf`;
   const { initialState, remember } = usePdfReaderStateMemory(identity, pdf?.pages ?? 0);
   const urlRef = useRef<string | undefined>(undefined);
-
-  useEffect(() => { savePrefs(prefs); applyTheme(prefs.theme); }, [prefs]);
 
   // The bytes cross the bridge once and become a blob: URL that pdf.js reads with range requests.
   useEffect(() => {
@@ -65,6 +64,7 @@ export function PdfReaderView({ material, onBack, onOpenLink, onOpenMaterial, on
       if (event.key === "Escape" && !typing) { event.preventDefault(); if (inspectorTab) setInspectorTab(null); else onBack?.(); }
       if ((event.metaKey || event.ctrlKey) && event.key === "j") { event.preventDefault(); setInspectorTab((tab) => (tab === "agent" ? null : "agent")); }
       if (event.key === "n" && !typing && !event.metaKey && !event.ctrlKey) { event.preventDefault(); setInspectorTab((tab) => (tab === "notes" ? null : "notes")); }
+      if (event.key === "i" && !typing && !event.metaKey && !event.ctrlKey) { event.preventDefault(); setInspectorTab((tab) => (tab === "info" ? null : "info")); }
       if (event.key === "t" && !typing && !event.metaKey && !event.ctrlKey) { event.preventDefault(); setTocPinned((pinned) => !pinned); }
     };
     document.addEventListener("keydown", onKey);
@@ -102,20 +102,23 @@ export function PdfReaderView({ material, onBack, onOpenLink, onOpenMaterial, on
   const subtitle = [material.origin === "agent" ? "Agent" : hostLabel(material), pdf ? `${pdf.pages} pages` : "", `${progress}%`].filter(Boolean).join(" · ");
 
   return (
-    <div className={`grid h-full ${inspectorOpen ? "grid-cols-[minmax(0,1fr)_360px]" : "grid-cols-[minmax(0,1fr)]"} grid-rows-[56px_minmax(0,1fr)] gap-3 ${embedded ? "p-0" : "p-3"}`}>
+    <div className={`grid h-full grid-cols-[minmax(0,1fr)] grid-rows-[56px_minmax(0,1fr)] gap-3 ${embedded ? "p-0" : "p-3"}`}>
       <Toolbar aria-label="Reader toolbar" className={`${embedded ? "" : "titlebar-drag pl-[92px]"} col-span-full`}>
         {embedded ? <span /> : <ToolbarGroup><ToolbarButton aria-label="Back" isSelected={false} onChange={() => onBack?.()}><ChevronLeft /></ToolbarButton></ToolbarGroup>}
         <ToolbarTitle title={material.title} subtitle={subtitle} />
         <ToolbarGroup>
           <span className={`mr-1.5 inline-flex h-[22px] items-center gap-1 rounded-pill px-2.5 text-[11.5px] font-medium ${pdf?.textLayer === "absent" ? "bg-orange-soft text-orange-text" : "bg-fill text-label-2"}`}>{pdf?.textLayer === "absent" ? "scanned PDF" : "PDF"}</span>
           <ToolbarButton aria-label="Contents (t)" isSelected={tocPinned} isDisabled={outline.length === 0} onChange={setTocPinned}><List /></ToolbarButton>
+          <ToolbarButton aria-label="Info (i)" isSelected={inspectorTab === "info"} onChange={(on) => setInspectorTab(on ? "info" : null)}><Info /></ToolbarButton>
           <ToolbarButton aria-label="Notes (n)" isSelected={inspectorTab === "notes"} onChange={(on) => setInspectorTab(on ? "notes" : null)}><Highlighter /></ToolbarButton>
           <ReadingSettings prefs={prefs} onChange={setPrefs} />
           <AskButton aria-label="Ask" isSelected={inspectorTab === "agent"} onChange={(on) => setInspectorTab(on ? "agent" : null)}><Sparkles />Ask<Kbd>⌘J</Kbd></AskButton>
         </ToolbarGroup>
       </Toolbar>
 
-      <main ref={mainRef} key={material.id} className="reader-enter relative grid min-h-0 grid-rows-[2px_minmax(0,1fr)] overflow-hidden rounded-panel bg-content shadow-[0_0_0_1px_var(--separator-soft),0_6px_20px_rgba(15,17,21,.04)]">
+      <SplitGroup id="reader" aria-label="Reader and inspector" className="h-full">
+      <SplitPanel id="page" minSize={360}>
+      <main ref={mainRef} key={material.id} className="reader-enter relative grid h-full min-h-0 grid-rows-[2px_minmax(0,1fr)] overflow-hidden rounded-panel bg-content shadow-[0_0_0_1px_var(--separator-soft),0_6px_20px_rgba(15,17,21,.04)]">
         <div className="bg-separator-soft"><i className="block h-full bg-accent opacity-80" style={{ width: `${progress}%` }} /></div>
         <SelectionToolbar root={mainRef.current} viewport={mainRef.current} capture={captureSelection} onHighlight={(capture, color) => void add({ ...capture, kind: "highlight", color })} onNote={(capture) => void onNote(capture)} onCopy={(capture) => void navigator.clipboard.writeText(citationFor(material, { quote: capture.quote }))} onAsk={(capture) => { setAsked(capture); setInspectorTab("agent"); }} />
         {outline.length > 1 ? (
@@ -143,20 +146,19 @@ export function PdfReaderView({ material, onBack, onOpenLink, onOpenMaterial, on
           <div className="grid place-items-center text-[13px] text-label-3">Opening…</div>
         )}
       </main>
-
+      </SplitPanel>
       {inspectorOpen ? (
-        <Inspector aria-label="Inspector" selectedKey={inspectorTab} onSelectionChange={setInspectorTab}>
-          <InspectorTabs>
-            <InspectorTab id="notes"><Highlighter />Notes</InspectorTab>
-            <InspectorTab id="agent"><Sparkles />Agent</InspectorTab>
-          </InspectorTabs>
-          <InspectorPanel id="notes">
-            <NotesPanel material={material} annotations={annotations} error={annotationsError} activeId={activeAnnotation} draft={noteDraft} onDraftChange={setNoteDraft}
-              onJump={jumpTo} onUpdateNote={(id, note) => void update(id, { note })} onDelete={(id) => void remove(id)} sectionFor={sectionFor} />
-          </InspectorPanel>
-          <InspectorPanel id="agent"><AgentPanel context={agentContext} subject="this PDF" onOpenMaterial={onOpenMaterial} onOpenLink={onOpenLink} onClearSelection={() => setAsked(null)} /></InspectorPanel>
-        </Inspector>
+        <>
+          <SplitSeparator aria-label="Resize inspector" hit={12} footprint={12} line="hover" />
+          <SplitPanel id="inspector" defaultSize={sizes.sizeOf("inspector", 360)} minSize={300} maxSize={520} onResize={sizes.onResize("inspector")}>
+            <ReaderInspector material={material} tab={inspectorTab} onTabChange={setInspectorTab} subject="this PDF" agentContext={agentContext} onClearSelection={() => setAsked(null)}
+              annotations={annotations} annotationsError={annotationsError} activeAnnotation={activeAnnotation} noteDraft={noteDraft} onNoteDraftChange={setNoteDraft}
+              onJump={jumpTo} onUpdateNote={(id, note) => void update(id, { note })} onDeleteAnnotation={(id) => void remove(id)} sectionFor={sectionFor}
+              onMaterialSaved={onMaterialSaved} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onOpenSettings={onOpenSettings} />
+          </SplitPanel>
+        </>
       ) : null}
+      </SplitGroup>
     </div>
   );
 }

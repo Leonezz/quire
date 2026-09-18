@@ -1,6 +1,9 @@
+import { useCallback, useSyncExternalStore } from "react";
 import { read } from "./api";
 
-// Reading settings are global: one set of values for every material.
+// Reading settings are global: one set of values for every material. They live in localStorage
+// and in a tiny store here, so the Aa popover in a reader and the Settings sheet in the shell
+// edit the same values and every open reader follows at once.
 export type ReadingPrefs = {
   font: "sans" | "serif" | "mono";
   size: 16 | 17 | 18 | 19 | 20 | 22;
@@ -51,4 +54,37 @@ export function applyTheme(theme: ReadingPrefs["theme"]) {
   if (theme === "system") delete root.dataset.theme; else root.dataset.theme = theme;
   // Paper is a light appearance for the window chrome.
   void read.setTheme(theme === "sepia" ? "light" : theme);
+}
+
+// ---------------------------------------------------------------------------
+// The store: one value, subscribers, and a setter that saves and applies the theme.
+// ---------------------------------------------------------------------------
+
+let current: ReadingPrefs | undefined;
+const listeners = new Set<() => void>();
+
+function snapshot(): ReadingPrefs {
+  if (!current) current = loadPrefs();
+  return current;
+}
+
+/** Replaces the prefs everywhere: saved, the theme applied to the document, every subscriber told. */
+export function setReadingPrefs(next: ReadingPrefs): void {
+  const previous = snapshot();
+  current = next;
+  savePrefs(next);
+  if (previous.theme !== next.theme) applyTheme(next.theme);
+  for (const listener of listeners) listener();
+}
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener);
+  return () => { listeners.delete(listener); };
+}
+
+/** The shared reading prefs and their setter; every component using it re-renders on a change. */
+export function useReadingPrefs(): [ReadingPrefs, (next: ReadingPrefs) => void] {
+  const prefs = useSyncExternalStore(subscribe, snapshot, snapshot);
+  const set = useCallback((next: ReadingPrefs) => setReadingPrefs(next), []);
+  return [prefs, set];
 }

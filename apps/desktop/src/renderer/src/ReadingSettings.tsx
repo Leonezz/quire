@@ -6,14 +6,11 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
   return <div className="grid grid-cols-[84px_minmax(0,1fr)] items-center gap-2.5"><span className="text-[12.5px] font-medium text-label-2">{label}</span>{children}</div>;
 }
 
-/** The Aa popover. Every control changes the page live; the values apply to every material. */
-export function ReadingSettings({ prefs, onChange }: { prefs: ReadingPrefs; onChange: (next: ReadingPrefs) => void }) {
+/** The reading controls themselves: the Aa popover and the Reading section of Settings show the same ones. */
+export function ReadingControls({ prefs, onChange }: { prefs: ReadingPrefs; onChange: (next: ReadingPrefs) => void }) {
   const set = <K extends keyof ReadingPrefs>(key: K, value: ReadingPrefs[K]) => onChange({ ...prefs, [key]: value });
   const sizeIndex = SIZES.indexOf(prefs.size);
   return (
-    <DialogTrigger>
-      <ToolbarButton aria-label="Reading settings"><Type /></ToolbarButton>
-      <Popover placement="bottom end" className="w-[392px]" aria-label="Reading settings">
         <div className="grid gap-3">
           <Row label="Typeface">
             <div className="grid grid-cols-3 gap-1.5">
@@ -39,6 +36,16 @@ export function ReadingSettings({ prefs, onChange }: { prefs: ReadingPrefs; onCh
           <Row label="Focus mode"><div className="flex items-center gap-2.5"><Switch isSelected={prefs.focus} onChange={(v) => set("focus", v)} aria-label="Focus mode" /><span className="text-[11.5px] text-label-3">Hides the inspector and the progress line</span></div></Row>
           <div className="flex items-center justify-between pt-1 text-[11.5px] text-label-3"><span>Applies to every material</span><Button variant="plain" size="sm" onPress={() => onChange(DEFAULT_PREFS)}>Reset</Button></div>
         </div>
+  );
+}
+
+/** The Aa popover. Every control changes the page live; the values apply to every material. */
+export function ReadingSettings({ prefs, onChange }: { prefs: ReadingPrefs; onChange: (next: ReadingPrefs) => void }) {
+  return (
+    <DialogTrigger>
+      <ToolbarButton aria-label="Reading settings"><Type /></ToolbarButton>
+      <Popover placement="bottom end" className="w-[392px]" aria-label="Reading settings">
+        <ReadingControls prefs={prefs} onChange={onChange} />
       </Popover>
     </DialogTrigger>
   );

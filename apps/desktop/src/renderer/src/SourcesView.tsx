@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Button, ItemList, ItemRow, Sheet, SheetDialog, SheetFooter } from "@read/ui";
+import { Button, ConfirmSheet, ItemList, ItemRow, SplitGroup, SplitPanel, SplitSeparator, useSplitSizes } from "@read/ui";
 import type { SourceRecord } from "../../shared/contracts";
 import { read } from "./api";
 import { EmptyState, InlineError, panelClass } from "./ItemPreview";
@@ -18,6 +18,7 @@ export function SourcesView({ sources, selectedId, onSelect, refresh, onOpenLink
   const [actionError, setActionError] = useState<string | undefined>(undefined);
   const [confirming, setConfirming] = useState(false);
   const current = sources.find((source) => source.id === selectedId);
+  const sizes = useSplitSizes("sources");
   const messageOf = (cause: unknown, fallback: string) => (cause instanceof Error ? cause.message : fallback);
 
   const sync = async (source: SourceRecord) => {
@@ -47,8 +48,9 @@ export function SourcesView({ sources, selectedId, onSelect, refresh, onOpenLink
   };
 
   return (
-    <main className={`grid min-h-0 flex-1 grid-cols-[420px_minmax(0,1fr)] overflow-hidden ${panelClass}`}>
-      <div className="flex min-h-0 flex-col border-r border-separator-soft">
+    <SplitGroup id="sources" aria-label="Sources" className={`min-h-0 flex-1 overflow-hidden ${panelClass}`}>
+      <SplitPanel id="list" defaultSize={sizes.sizeOf("list", 420)} minSize={280} maxSize={560} onResize={sizes.onResize("list")}>
+      <div className="flex h-full min-h-0 flex-col">
         {sources.length ? (
           <ItemList aria-label="Sources" items={sources} selectionMode="single" selectionBehavior="replace" disallowEmptySelection selectedKeys={selectedId ? new Set([selectedId]) : new Set()}
             onSelectionChange={(keys) => { const key = keys === "all" ? undefined : [...keys][0]; if (key !== undefined) onSelect(String(key)); }} className="flex-1">
@@ -65,7 +67,10 @@ export function SourcesView({ sources, selectedId, onSelect, refresh, onOpenLink
           <EmptyState title="No sources yet." hint="⌘N and paste a feed URL, a site, or an arXiv category like cs.CL." />
         )}
       </div>
-      <section className="flex min-h-0 flex-col overflow-auto">
+      </SplitPanel>
+      <SplitSeparator aria-label="Resize list" />
+      <SplitPanel id="detail" minSize={360}>
+      <section className="flex h-full min-h-0 flex-col overflow-auto">
         {current ? (() => {
           const health = sourceHealth(current);
           const tone = health.tone === "ok" ? "bg-green" : health.tone === "paused" ? "bg-orange" : "bg-red";
@@ -95,21 +100,15 @@ export function SourcesView({ sources, selectedId, onSelect, refresh, onOpenLink
                 {current.failureCount > 0 ? <Detail label="Failures"><span className="text-red-text">{current.failureCount} in a row{current.lastError ? ` — ${current.lastError}` : ""}</span></Detail> : null}
                 <Detail label="Added">{new Date(current.addedAt).toLocaleDateString()}</Detail>
               </dl>
-              <Sheet isOpen={confirming} onOpenChange={(next) => { if (!next && busy !== "remove") setConfirming(false); }}>
-                <SheetDialog title={`Disconnect ${current.title}?`}>
-                  <p className="m-0 text-[13.5px] text-label-2">Undecided items from this source are removed; read and kept material stays.</p>
-                  <SheetFooter>
-                    <Button variant="quiet" onPress={() => setConfirming(false)} isDisabled={busy === "remove"}>Cancel</Button>
-                    <Button variant="primary" onPress={() => void remove(current)} isDisabled={busy === "remove"}>{busy === "remove" ? "Disconnecting…" : "Disconnect"}</Button>
-                  </SheetFooter>
-                </SheetDialog>
-              </Sheet>
+              <ConfirmSheet isOpen={confirming} title={`Disconnect ${current.title}?`} message="Undecided items from this source are removed; read and kept material stays."
+                confirmLabel="Disconnect" busyLabel="Disconnecting…" busy={busy === "remove"} onConfirm={() => void remove(current)} onCancel={() => setConfirming(false)} />
             </div>
           );
         })() : (
           <EmptyState title="Nothing selected" hint={sources.length ? "Select a source to see how it is doing." : "Sources you add appear on the left."} />
         )}
       </section>
-    </main>
+      </SplitPanel>
+    </SplitGroup>
   );
 }

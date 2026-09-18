@@ -20,25 +20,26 @@
     "react-dom": "^19"
   },
   "dependencies": {
+    "lucide-react": "1.46.0",
     "react-aria-components": "1.21.1",
-    "lucide-react": "1.46.0"
+    "react-resizable-panels": "4.12.4"
   },
   "devDependencies": {
-    "react": "19.3.0",
-    "react-dom": "19.3.0",
-    "@types/react": "^19",
-    "@types/react-dom": "^19",
-    "typescript": "5.9.3",
-    "vite": "^7",
-    "@vitejs/plugin-react": "^5",
-    "tailwindcss": "4.3.3",
-    "@tailwindcss/vite": "4.3.3",
-    "storybook": "10.6.0",
-    "@storybook/react-vite": "10.6.0",
     "@storybook/addon-a11y": "10.6.0",
     "@storybook/addon-vitest": "10.6.0",
-    "vitest": "4.1.11",
+    "@storybook/react-vite": "10.6.0",
+    "@tailwindcss/vite": "4.3.3",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^5",
     "@vitest/browser-playwright": "4.1.11",
-    "playwright": "1.63.0"
+    "playwright": "1.63.0",
+    "react": "19.3.0",
+    "react-dom": "19.3.0",
+    "storybook": "10.6.0",
+    "tailwindcss": "4.3.3",
+    "typescript": "5.9.3",
+    "vite": "^7",
+    "vitest": "4.1.11"
   }
 }

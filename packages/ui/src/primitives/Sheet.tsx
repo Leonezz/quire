@@ -4,14 +4,17 @@ import { cx } from "../cx";
 export { DialogTrigger };
 
 /** Centered sheet: dimmed, blurred window behind; Esc and outside click dismiss. */
-export function Sheet({ className, children, ...props }: ModalOverlayProps & { children: React.ReactNode }) {
+export type SheetSize = "md" | "lg";
+const sizes: Record<SheetSize, string> = { md: "w-[560px]", lg: "w-[760px]" };
+
+export function Sheet({ className, children, size = "md", ...props }: ModalOverlayProps & { children: React.ReactNode; size?: SheetSize | undefined }) {
   return (
     <ModalOverlay
       {...props}
       isDismissable
       className={composeRenderProps(className, (cls) => cx("fixed inset-0 z-40 grid place-items-start justify-center bg-[rgba(15,17,21,.26)] pt-16 backdrop-blur-[6px] entering:animate-[fade_.15s_ease] exiting:animate-[fade_.12s_ease_reverse]", cls))}
     >
-      <Modal className="w-[560px] max-w-[92vw] rounded-[22px] bg-content shadow-float outline-none">{children}</Modal>
+      <Modal className={cx(sizes[size], "max-w-[92vw] rounded-[22px] bg-content shadow-float outline-none")}>{children}</Modal>
     </ModalOverlay>
   );
 }

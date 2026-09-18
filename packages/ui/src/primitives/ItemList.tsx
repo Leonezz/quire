@@ -1,5 +1,5 @@
 import { Button, Collection, GridList, GridListHeader, GridListItem, GridListSection, composeRenderProps, type GridListItemProps, type GridListProps, type GridListSectionProps } from "react-aria-components";
-import { GripVertical } from "lucide-react";
+import { Bookmark, GripVertical } from "lucide-react";
 import { cx } from "../cx";
 
 /**
@@ -48,18 +48,25 @@ export interface ItemRowProps extends Omit<GridListItemProps, "children"> {
   minutes?: number;
   signals?: string[];
   state?: RowState;
-  tag?: "agent" | "summary" | "artifact";
+  tag?: "agent" | "summary" | "artifact" | "rebuilt";
   progress?: number;
+  /** User tags, shown as small chips after the source (the first `maxChips`, then "+n"). */
+  chips?: string[];
+  maxChips?: number;
+  /** A bookmark glyph after the time: the item was kept into the library. */
+  kept?: boolean;
   /** Replaces the read-state marker; use for Sources. */
   health?: RowHealth;
   /** A line under the source, for something the row must say in its own words (an error). */
   detail?: React.ReactNode;
 }
 
-const tagLabel = { agent: "from Agent", summary: "summary only", artifact: "artifact" } as const;
+const tagLabel = { agent: "from Agent", summary: "summary only", artifact: "artifact", rebuilt: "rebuilt" } as const;
 const healthLabel: Record<RowHealth, string> = { ok: "healthy", paused: "paused", failing: "failing" };
 
-export function ItemRow({ title, source, time, gist, minutes, signals = [], state = "unread", tag, progress, health, detail, className, ...props }: ItemRowProps) {
+export function ItemRow({ title, source, time, gist, minutes, signals = [], state = "unread", tag, progress, chips = [], maxChips = 3, kept = false, health, detail, className, ...props }: ItemRowProps) {
+  const shownChips = chips.slice(0, maxChips);
+  const hiddenChips = chips.length - shownChips.length;
   return (
     <GridListItem
       {...props}
@@ -88,10 +95,19 @@ export function ItemRow({ title, source, time, gist, minutes, signals = [], stat
       <div className="grid min-w-0 grid-cols-1 gap-0.5">
         <div className="flex items-baseline gap-2">
           <span className={cx("min-w-0 flex-1 truncate text-[14.5px] leading-5 tracking-[-.01em]", state === "read" ? "font-medium text-label-2" : "font-semibold text-label")}>{title}</span>
-          {tag ? <span className={cx("whitespace-nowrap rounded-pill px-[7px] py-px text-[10.5px] font-medium leading-[14px]", tag === "summary" ? "bg-fill text-label-2" : "bg-purple-soft text-purple-text")}>{tagLabel[tag]}</span> : null}
+          {tag ? <span className={cx("whitespace-nowrap rounded-pill px-[7px] py-px text-[10.5px] font-medium leading-[14px]", tag === "summary" ? "bg-fill text-label-2" : tag === "rebuilt" ? "bg-accent-soft text-accent-text" : "bg-purple-soft text-purple-text")}>{tagLabel[tag]}</span> : null}
           {time ? <span className="whitespace-nowrap text-[11.5px] tabular-nums text-label-3">{time}</span> : null}
+          {kept ? <Bookmark role="img" aria-label="kept" className="size-3 shrink-0 self-center fill-current text-label-3" /> : null}
         </div>
-        <div className="truncate text-[12.5px] leading-[17px] text-label-2">{source}</div>
+        <div className="flex min-w-0 items-center gap-1.5 text-[12.5px] leading-[17px] text-label-2">
+          <span className="min-w-0 truncate">{source}</span>
+          {shownChips.length ? (
+            <span className="flex shrink-0 items-center gap-1" aria-label={`tags: ${chips.join(", ")}`}>
+              {shownChips.map((chip) => <span key={chip} className="max-w-[96px] truncate rounded-pill bg-fill px-1.5 text-[10.5px] font-medium leading-[15px] text-label-2">{chip}</span>)}
+              {hiddenChips > 0 ? <span className="text-[10.5px] font-medium text-label-3">+{hiddenChips}</span> : null}
+            </span>
+          ) : null}
+        </div>
         {detail ? <div className="mt-0.5 line-clamp-2 text-[12.5px] leading-[17px]">{detail}</div> : null}
         {gist ? <div className="mt-0.5 line-clamp-2 text-[13px] leading-[18.5px] text-label-2">{gist}</div> : null}
         {minutes !== undefined || signals.length || progress !== undefined ? (

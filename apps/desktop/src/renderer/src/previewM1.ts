@@ -1,4 +1,4 @@
-import type { ItemRecord, MaterialRecord, MaterialSummary, ReadApiM1, ReadingEvent, ReadingStats, SearchHit, SourceRecord } from "../../shared/contracts";
+import type { ItemRecord, MaterialRecord, MaterialSummary, OpenUrlResult, ReadApiM1, ReadingEvent, ReadingStats, SearchHit, SourceRecord } from "../../shared/contracts";
 import { isArxivCategory } from "./format";
 
 // The M1 half of the browser preview: two sources and a handful of items seeded into
@@ -58,7 +58,7 @@ function update(mutate: (state: PreviewState) => PreviewState): PreviewState { c
 const listeners = new Set<() => void>();
 function notify() { for (const listener of listeners) listener(); }
 
-const undecided = (item: ItemRecord) => !item.openedAt && !item.queuedAt && !item.dismissedAt;
+const undecided = (item: ItemRecord) => !item.openedAt && !item.queuedAt && !item.dismissedAt && !item.keptAt;
 const byNewest = (a: ItemRecord, b: ItemRecord) => b.publishedAt.localeCompare(a.publishedAt);
 const byQueue = (a: ItemRecord, b: ItemRecord) => (a.queuePosition ?? 0) - (b.queuePosition ?? 0);
 const newId = () => `ev-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
@@ -85,6 +85,21 @@ function matches(query: string, haystack: string): boolean {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean);
   const text = haystack.toLowerCase();
   return words.length > 0 && words.every((word) => text.includes(word));
+}
+
+/**
+ * M3's keep, on M1's items: an Inbox / Queue item backed by a sample material is marked kept
+ * (decided, like opened) and a "kept" event recorded; queued items stay queued. Anything else
+ * would need the engine to fetch.
+ */
+export async function keepPreviewItem(id: string, getMaterial: (id: string) => Promise<MaterialRecord | undefined>): Promise<OpenUrlResult> {
+  const item = requireItem(load(), id);
+  const material = item.materialId ? await getMaterial(item.materialId) : undefined;
+  if (!material) return { ok: false, code: PREVIEW_CODE, message: "Keeping an item fetches its full text, which needs the engine. Run the desktop app; in the preview only the two items backed by sample materials can be kept." };
+  const now = new Date().toISOString();
+  update((current) => ({ ...current, items: current.items.map((candidate) => (candidate.id === id ? { ...candidate, keptAt: candidate.keptAt ?? now, materialId: material.id } : candidate)), events: [...current.events, { id: newId(), kind: "kept", ref: material.id, at: now }] }));
+  notify();
+  return { ok: true, material };
 }
 
 export function createPreviewM1(deps: { getMaterial: (id: string) => Promise<MaterialRecord | undefined>; listMaterials: () => Promise<MaterialSummary[]> }): ReadApiM1 {

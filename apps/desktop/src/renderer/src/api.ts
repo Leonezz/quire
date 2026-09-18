@@ -3,6 +3,7 @@ import sample from "./dev/sample-material.json";
 import samplePdf from "./dev/sample-pdf.json";
 import { createPreviewM1 } from "./previewM1";
 import { createPreviewM2, previewArtifacts } from "./previewM2";
+import { createPreviewM3 } from "./previewM3";
 
 // In Electron the preload bridge provides window.read. In a plain browser (Vite dev
 // server, Storybook) there is no engine, so reading works against one sample material
@@ -11,8 +12,8 @@ const sampleMaterial = sample as unknown as MaterialRecord;
 // The PDF sample's bytes are served from public/dev/sample.pdf (not committed; any PDF placed there works).
 const samplePdfMaterial = samplePdf as unknown as MaterialRecord;
 const samples = [sampleMaterial, samplePdfMaterial];
-function summaryOf({ id, url, title, byline, publishedAt, fetchedAt, readingMinutes, origin, mediaType, quality, lineage }: MaterialRecord): MaterialSummary {
-  return { id, url, title, fetchedAt, readingMinutes, origin, mediaType, quality, ...(byline ? { byline } : {}), ...(publishedAt ? { publishedAt } : {}), ...(lineage ? { lineage } : {}) };
+function summaryOf({ id, url, title, byline, publishedAt, fetchedAt, readingMinutes, origin, mediaType, quality, lineage, tags, rebuiltAs }: MaterialRecord): MaterialSummary {
+  return { id, url, title, fetchedAt, readingMinutes, origin, mediaType, quality, tags: tags ?? [], ...(byline ? { byline } : {}), ...(publishedAt ? { publishedAt } : {}), ...(lineage ? { lineage } : {}), ...(rebuiltAs ? { rebuiltAs } : {}) };
 }
 const unavailable: OpenUrlResult = { ok: false, code: "PREVIEW_MODE", message: "The engine is not available in the browser preview. Run the desktop app to add material." };
 
@@ -23,7 +24,8 @@ async function corpusIndex(): Promise<MaterialSummary[]> {
   // The Vite dev server answers unknown paths with index.html (200), so the type is the real signal.
   if (response.status === 404 || !(response.headers.get("content-type") ?? "").includes("json")) return [];
   if (!response.ok) throw new Error(`Preview corpus index failed: HTTP ${response.status}`);
-  return (await response.json()) as MaterialSummary[];
+  // The exported index predates tags; the M3 overlay (previewM3.ts) fills them in from the overrides.
+  return ((await response.json()) as Omit<MaterialSummary, "tags">[]).map((entry) => ({ ...entry, tags: [] }));
 }
 
 async function corpusMaterial(id: string): Promise<MaterialRecord | undefined> {
@@ -42,19 +44,24 @@ function writePreviewAnnotations(materialId: string, annotations: Annotation[]) 
   localStorage.setItem(`read:preview-annotations:${materialId}`, JSON.stringify(annotations));
 }
 
-const previewGetMaterial = async (id: string) => [...samples, ...previewArtifacts()].find((material) => material.id === id) ?? (await corpusMaterial(id));
-const previewListMaterials = async () => [...samples.map(summaryOf), ...previewArtifacts().map(summaryOf), ...(await corpusIndex())];
+const baseGetMaterial = async (id: string) => [...samples, ...previewArtifacts()].find((material) => material.id === id) ?? (await corpusMaterial(id));
+const baseListMaterials = async () => [...samples.map(summaryOf), ...previewArtifacts().map(summaryOf), ...(await corpusIndex())];
+// Metadata overrides, tags, deletion, keep and settings: localStorage (see previewM3.ts). Its list and record
+// carry the overrides and hide what was deleted, so everything else reads through it.
+const previewM3 = createPreviewM3({ getMaterial: baseGetMaterial, listMaterials: baseListMaterials });
+const previewGetMaterial = previewM3.getMaterial;
+const previewListMaterials = previewM3.listMaterials;
 
 const browserPreview: ReadApi = {
   // Sources, Inbox, Queue, events and search: seeded into localStorage (see previewM1.ts).
   ...createPreviewM1({ getMaterial: previewGetMaterial, listMaterials: previewListMaterials }),
   // The agent: unavailable in a browser, or a scripted stream behind the demo switch (see previewM2.ts).
   ...createPreviewM2({ listMaterials: previewListMaterials }),
+  ...previewM3,
   version: "preview",
   platform: "browser",
   // The preview paints its own ground (see styles.css), so there is no native appearance to sync.
   setTheme: async () => undefined,
-  onLibraryChanged: () => () => undefined,
   importCorpus: async () => { throw new Error("The evaluation corpus is imported by the desktop app (Developer menu); the browser preview lists it directly."); },
   openUrl: async () => unavailable,
   openFile: async () => unavailable,

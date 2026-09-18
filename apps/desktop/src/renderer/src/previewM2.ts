@@ -29,6 +29,7 @@ const demoArtifact: MaterialRecord = {
   mediaType: "text/markdown",
   quality: { completeness: "declared_full", conformance: "conformant", identityConfidence: "strong", safety: "safe", warnings: [] },
   lineage: ["526130b61f003c33", "5f725f31pdf00001"],
+  tags: [],
   markdown: [
     "## Highlights without the DOM",
     "",
@@ -53,6 +54,7 @@ const taskIntro: Record<AgentTask, string> = {
   related: "## Related in your library",
   summary: "## Summary",
   synthesis: "## Synthesis",
+  rebuild: "## Rebuilt",
 };
 
 /** The scripted answer: a heading, prose with emphasis, a fenced block, a list, a quote and a citation. */
@@ -139,8 +141,11 @@ export function createPreviewM2(deps: { listMaterials: () => Promise<MaterialSum
       const materials = await deps.listMaterials();
       const contextId = request.context.kind === "library" ? undefined : request.context.materialId;
       const citation = materials.find((material) => material.id !== contextId && /^[a-f0-9]{16}$/.test(material.id))?.id;
+      // What the scripted turn "retrieved": the material asked about and the one it cites.
+      const sources = [contextId, citation].filter((id): id is string => id !== undefined);
       const text = scriptedAnswer(request, subjectOf(request.context, materials), citation);
       const threadId = request.threadId ?? newId("thread");
+      const sessionId = request.sessionId ?? newId("session");
       const turnId = newId("turn");
       const chunks = chunksOf(text);
       return new Promise<AgentResult>((resolve) => {
@@ -152,7 +157,7 @@ export function createPreviewM2(deps: { listMaterials: () => Promise<MaterialSum
         at(120, () => emit({ type: "tool", turnId, name: "library_search", status: "running", summary: `"${request.context.kind === "library" ? "recent" : "highlight"}"` }));
         at(480, () => emit({ type: "tool", turnId, name: "library_search", status: "done", summary: `"${request.context.kind === "library" ? "recent" : "highlight"}" → ${Math.min(4, materials.length)} hits` }));
         chunks.forEach((delta, index) => at(300 + index * CHUNK_MS, () => emit({ type: "delta", turnId, delta })));
-        at(300 + chunks.length * CHUNK_MS + 60, () => { emit({ type: "completed", turnId }); finish({ ok: true, threadId, turnId, text }); });
+        at(300 + chunks.length * CHUNK_MS + 60, () => { emit({ type: "completed", turnId, sources }); finish({ ok: true, threadId, turnId, text, sessionId, sources }); });
       });
     },
   };

@@ -18,7 +18,7 @@ const libraryActions: QuickAction[] = [
   { label: "Find related to…", task: "related", prompts: true },
   { label: "Synthesise", task: "synthesis" },
 ];
-const taskLabel: Record<AgentTask, string> = { ask: "Ask", explain: "Explain", verify: "Verify", related: "Find related", summary: "Summarise", synthesis: "Synthesise" };
+const taskLabel: Record<AgentTask, string> = { ask: "Ask", explain: "Explain", verify: "Verify", related: "Find related", summary: "Summarise", synthesis: "Synthesise", rebuild: "Rebuild" };
 
 function contextLabel(context: AgentContext, subject: string): string {
   if (context.kind === "library") return "Library";
@@ -39,12 +39,14 @@ function promptLabel(task: AgentTask, text: string, context: AgentContext, subje
  * a reader its material or, after "Ask about this" on a selection, the selected passage.
  * `subject` names the material for the pill and the canned prompts ("this article", "this PDF").
  */
-export function AgentPanel({ context, subject = "this material", onOpenMaterial, onOpenLink, onClearSelection }: {
+export function AgentPanel({ context, subject = "this material", onOpenMaterial, onOpenLink, onClearSelection, onOpenSettings }: {
   context: AgentContext;
   subject?: string;
   onOpenMaterial: (id: string) => void;
   onOpenLink: (url: string) => void;
   onClearSelection?: (() => void) | undefined;
+  /** Opens the Settings sheet at the Agent section (Codex path, model), offered when the agent is unavailable. */
+  onOpenSettings?: (() => void) | undefined;
 }) {
   const { status, statusError, turns, running, ask, stop, login } = useAgent(context);
   const [draft, setDraft] = useState("");
@@ -136,7 +138,10 @@ export function AgentPanel({ context, subject = "this material", onOpenMaterial,
         {status && !available ? (
           <div className="grid gap-2 rounded-card bg-content-2 p-3 text-[12.5px] text-label-2">
             <span>{status.reason ?? "The agent is not available."}</span>
-            {authRequired ? <Button size="sm" variant="primary" className="justify-self-start" onPress={() => void login()}>Sign in to Codex</Button> : null}
+            <div className="flex flex-wrap gap-1.5">
+              {authRequired ? <Button size="sm" variant="primary" onPress={() => void login()}>Sign in to Codex</Button> : null}
+              {onOpenSettings ? <Button size="sm" onPress={onOpenSettings}>Agent settings…</Button> : null}
+            </div>
           </div>
         ) : null}
         {available && authRequired ? <Button size="sm" variant="primary" className="justify-self-start" onPress={() => void login()}>Sign in to Codex</Button> : null}

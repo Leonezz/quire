@@ -51,6 +51,8 @@ export function useAgent(context: AgentContext) {
   const [statusError, setStatusError] = useState<string | undefined>(undefined);
   const [turns, setTurns] = useState<AgentTurnState[]>([]);
   const threadId = useRef<string | undefined>(undefined);
+  // The stored session the turns append to; the first answer names it, follow-ups carry it back.
+  const sessionId = useRef<string | undefined>(undefined);
   const threadKey = threadKeyOf(context);
   const contextRef = useRef(context);
   contextRef.current = context;
@@ -68,7 +70,7 @@ export function useAgent(context: AgentContext) {
   useEffect(() => { void refreshStatus(); }, [refreshStatus]);
 
   // A new material means a new thread and an empty transcript.
-  useEffect(() => { threadId.current = undefined; setTurns([]); }, [threadKey]);
+  useEffect(() => { threadId.current = undefined; sessionId.current = undefined; setTurns([]); }, [threadKey]);
 
   useEffect(() => read.onAgentEvent((event) => {
     setTurns((current) => {
@@ -89,9 +91,10 @@ export function useAgent(context: AgentContext) {
     setTurns((current) => [...current, { id, task, prompt: text, label, answer: "", tools: [], status: "running" }]);
     const finish = (patch: Partial<AgentTurnState>) => { if (mounted.current) setTurns((current) => current.map((turn) => (turn.id === id ? { ...turn, ...patch } : turn))); };
     try {
-      const result = await read.agentAsk({ context: contextRef.current, task, text, ...(threadId.current ? { threadId: threadId.current } : {}) });
+      const result = await read.agentAsk({ context: contextRef.current, task, text, ...(threadId.current ? { threadId: threadId.current } : {}), ...(sessionId.current ? { sessionId: sessionId.current } : {}) });
       if (result.ok) {
         threadId.current = result.threadId;
+        sessionId.current = result.sessionId;
         finish({ turnId: result.turnId, answer: result.text, status: "done", error: undefined });
       } else {
         finish({ status: result.code === "TURN_INTERRUPTED" ? "interrupted" : "failed", error: result.message, authRequired: result.code === "AUTH_REQUIRED" });
