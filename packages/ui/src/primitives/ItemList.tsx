@@ -41,7 +41,7 @@ export function ItemRow({ title, source, time, gist, minutes, signals = [], stat
       {...props}
       textValue={title}
       className={composeRenderProps(className, (cls) => cx(
-        "group grid w-full max-w-full grid-cols-[16px_minmax(0,1fr)] gap-x-2.5 overflow-hidden rounded-xl py-[11px] pl-2.5 pr-3 text-left outline-none transition-colors duration-100",
+        "group grid w-full min-w-0 max-w-full shrink-0 grid-cols-[16px_minmax(0,1fr)] gap-x-2.5 rounded-xl py-[11px] pl-2.5 pr-3 text-left outline-none transition-colors duration-100",
         "data-[hovered]:bg-fill data-[selected]:bg-accent-soft data-[selected]:shadow-[inset_0_0_0_1px_rgba(52,103,224,.18)]",
         "data-[focus-visible]:ring-[3px] data-[focus-visible]:ring-accent-ring data-[dragging]:opacity-60",
         cls,
@@ -52,7 +52,7 @@ export function ItemRow({ title, source, time, gist, minutes, signals = [], stat
         state === "unread" && "size-[7px] rounded-full bg-accent",
         state === "queued" && "ml-0.5 size-0 border-y-[4.5px] border-l-[6px] border-y-transparent border-l-accent",
       )} />
-      <div className="grid min-w-0 gap-0.5">
+      <div className="grid min-w-0 grid-cols-1 gap-0.5">
         <div className="flex items-baseline gap-2">
           <span className={cx("min-w-0 flex-1 truncate text-[14.5px] leading-5 tracking-[-.01em]", state === "read" ? "font-medium text-label-2" : "font-semibold text-label")}>{title}</span>
           {tag ? <span className={cx("whitespace-nowrap rounded-pill px-[7px] py-px text-[10.5px] font-medium leading-[14px]", tag === "summary" ? "bg-fill text-label-2" : "bg-purple-soft text-purple-text")}>{tagLabel[tag]}</span> : null}
