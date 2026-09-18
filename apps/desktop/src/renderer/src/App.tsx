@@ -72,7 +72,7 @@ export function App() {
   const addSheet = <AddSheet open={addOpen} busy={addBusy} error={addError} onClose={() => { setAddOpen(false); setAddError(undefined); }} onSubmit={(url) => void submitUrl(url)} />;
 
   return (
-    <div className={askOpen ? "grid h-full grid-cols-[236px_minmax(0,1fr)_360px] grid-rows-[56px_minmax(0,1fr)] gap-3 p-3" : "grid h-full grid-cols-[236px_minmax(0,1fr)] grid-rows-[56px_minmax(0,1fr)] gap-3 p-3"}>
+    <div className={view === "library" ? "grid h-full grid-cols-[236px_420px_minmax(0,1fr)] grid-rows-[56px_minmax(0,1fr)] gap-3 p-3" : askOpen ? "grid h-full grid-cols-[236px_minmax(0,1fr)_360px] grid-rows-[56px_minmax(0,1fr)] gap-3 p-3" : "grid h-full grid-cols-[236px_minmax(0,1fr)] grid-rows-[56px_minmax(0,1fr)] gap-3 p-3"}>
       <Sidebar aria-label="Sidebar" className="row-span-2 titlebar-drag" selectedKeys={new Set([view])} onSelectionChange={(keys) => { const key = [...keys][0]; if (key) setView(key as View); }}>
         <SidebarSection title="Read">
           <SidebarItem id="inbox" icon={<InboxIcon />} label="Inbox" count={unread} />
@@ -82,20 +82,20 @@ export function App() {
         </SidebarSection>
       </Sidebar>
 
-      <Toolbar aria-label="Toolbar" className="titlebar-drag col-start-2 col-end-[-1]">
+      <Toolbar aria-label="Toolbar" className={`titlebar-drag col-start-2 ${view === "library" ? "col-end-3" : "col-end-[-1]"}`}>
         <ToolbarGroup><ToolbarButton aria-label="Toggle sidebar"><List /></ToolbarButton></ToolbarGroup>
         <ToolbarTitle title={titles[view]} subtitle={view === "inbox" ? `${unread} unread · 9 sources` : undefined} />
         <ToolbarGroup>
           {view === "inbox" ? <Segmented aria-label="Group by" defaultSelectedKeys={["date"]}><Segment id="date">Date</Segment><Segment id="source">Source</Segment></Segmented> : null}
           <ToolbarButton aria-label="Add (⌘N)" isSelected={addOpen} onChange={(on) => setAddOpen(on)}><Plus /></ToolbarButton>
           <ToolbarButton aria-label="Search"><SearchIcon /></ToolbarButton>
-          <AskButton aria-label="Ask" isSelected={askOpen} onChange={(open) => { setAskOpen(open); if (open) setInspectorTab("agent"); }}><Sparkles />Ask<Kbd>⌘J</Kbd></AskButton>
+          {view !== "library" ? <AskButton aria-label="Ask" isSelected={askOpen} onChange={(open) => { setAskOpen(open); if (open) setInspectorTab("agent"); }}><Sparkles />Ask<Kbd>⌘J</Kbd></AskButton> : null}
         </ToolbarGroup>
       </Toolbar>
 
-      <main className="grid min-h-0 grid-cols-[420px_minmax(0,1fr)] overflow-hidden rounded-panel bg-content shadow-[0_0_0_1px_var(--separator-soft),0_6px_20px_rgba(15,17,21,.04)]">
-        {view === "library" ? (
-          <div className="flex min-h-0 flex-col border-r border-separator-soft">
+      {view === "library" ? (
+        <>
+          <section className="col-start-2 row-start-2 flex min-h-0 flex-col overflow-hidden rounded-panel bg-content shadow-[0_0_0_1px_var(--separator-soft),0_6px_20px_rgba(15,17,21,.04)]">
             <ItemGroup>Kept · {library.length}</ItemGroup>
             {library.length ? (
               <ItemList aria-label="Library" items={library} selectionMode="single" selectionBehavior="replace" selectedKeys={librarySelected} onSelectionChange={setLibrarySelected} className="flex-1">
@@ -104,8 +104,18 @@ export function App() {
             ) : (
               <div className="grid flex-1 place-items-center px-6 text-center text-label-2"><div><strong className="mb-1.5 block text-[16px] font-semibold text-label">Nothing kept yet.</strong><span className="text-[13px]">Press ⌘N and paste a page URL to read it here.</span></div></div>
             )}
-          </div>
-        ) : (
+          </section>
+          <section className="col-start-3 row-start-1 row-span-2 flex min-h-0 flex-col">
+            {(() => {
+            const chosen = library.find((item) => librarySelected !== "all" && librarySelected.has(item.id));
+            return chosen ? (
+              <ErrorBoundary key={chosen.id} label="The reader"><MaterialReader id={chosen.id} onOpenLink={openLink} /></ErrorBoundary>
+            ) : <div className="grid flex-1 place-items-center rounded-panel bg-content text-center text-label-2 shadow-[0_0_0_1px_var(--separator-soft),0_6px_20px_rgba(15,17,21,.04)]"><div><strong className="mb-1.5 block text-[18px] font-semibold text-label">Nothing selected</strong><span className="text-[13px]">Select something you kept.</span></div></div>;
+            })()}
+          </section>
+        </>
+      ) : (
+      <main className="grid min-h-0 grid-cols-[420px_minmax(0,1fr)] overflow-hidden rounded-panel bg-content shadow-[0_0_0_1px_var(--separator-soft),0_6px_20px_rgba(15,17,21,.04)]">
         <div className="flex min-h-0 flex-col border-r border-separator-soft">
           <ItemGroup>Today</ItemGroup>
           <ItemList aria-label={titles[view]} items={items} selectionMode="single" selectedKeys={selected} onSelectionChange={setSelected} className="flex-1">
@@ -124,14 +134,8 @@ export function App() {
             )}
           </ItemList>
         </div>
-        )}
         <section className="flex min-h-0 flex-col overflow-auto">
-          {view === "library" ? (() => {
-            const chosen = library.find((item) => librarySelected !== "all" && librarySelected.has(item.id));
-            return chosen ? (
-              <ErrorBoundary key={chosen.id} label="The reader"><MaterialReader id={chosen.id} onOpenLink={openLink} /></ErrorBoundary>
-            ) : <div className="grid flex-1 place-items-center text-center text-label-2"><div><strong className="mb-1.5 block text-[18px] font-semibold text-label">Nothing selected</strong><span className="text-[13px]">Select something you kept.</span></div></div>;
-          })() : current ? (
+          {current ? (
             <>
               <div className="px-9 pt-7">
                 <div className="flex items-center gap-2 text-[12.5px] text-label-2">{current.sourceTitle}<span className="rounded-pill bg-fill px-2 py-px text-[11.5px] font-medium">feed full text</span></div>
@@ -151,8 +155,9 @@ export function App() {
           )}
         </section>
       </main>
+      )}
 
-      {askOpen ? (
+      {askOpen && view !== "library" ? (
         <Inspector aria-label="Inspector" selectedKey={inspectorTab} onSelectionChange={setInspectorTab}>
           <InspectorTabs>
             <InspectorTab id="contents"><Text />Contents</InspectorTab>

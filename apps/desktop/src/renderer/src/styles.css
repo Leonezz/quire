@@ -16,3 +16,12 @@ body { background: transparent; color: var(--label); font: 400 14px/20px var(--f
 ::highlight(read-find) { background: rgba(255, 213, 74, .5); }
 ::highlight(read-find-current) { background: var(--orange); color: #fff; }
 .reader-body { text-align: var(--reading-align, start); }
+
+/* Scrollbars: the reader's position lives in the contents rail and the progress line, so its
+   viewport hides the native bar; lists get a thin overlay thumb with no track or border. */
+.reader-viewport, .pdf-canvas-viewer__page-scroll { scrollbar-width: none; }
+.reader-viewport::-webkit-scrollbar, .pdf-canvas-viewer__page-scroll::-webkit-scrollbar { display: none; }
+[role="grid"] { scrollbar-width: thin; scrollbar-color: var(--label-4) transparent; }
+[role="grid"]::-webkit-scrollbar { width: 8px; }
+[role="grid"]::-webkit-scrollbar-track { background: transparent; }
+[role="grid"]::-webkit-scrollbar-thumb { background: var(--label-4); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }

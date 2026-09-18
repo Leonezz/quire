@@ -171,7 +171,7 @@ export function ReaderView({ material, onBack, onOpenLink, embedded = false }: {
   const inspectorOpen = inspectorTab !== null && !prefs.focus;
 
   return (
-    <div className={inspectorOpen ? "grid h-full grid-cols-[minmax(0,1fr)_360px] grid-rows-[56px_minmax(0,1fr)] gap-3 p-3" : "grid h-full grid-cols-[minmax(0,1fr)] grid-rows-[56px_minmax(0,1fr)] gap-3 p-3"}>
+    <div className={`grid h-full ${inspectorOpen ? "grid-cols-[minmax(0,1fr)_360px]" : "grid-cols-[minmax(0,1fr)]"} grid-rows-[56px_minmax(0,1fr)] gap-3 ${embedded ? "p-0" : "p-3"}`}>
       <Toolbar aria-label="Reader toolbar" className={`${embedded ? "" : "titlebar-drag pl-[92px]"} col-span-full transition-opacity ${reading ? "opacity-70 hover:opacity-100" : ""}`}>
         {embedded ? <span /> : <ToolbarGroup><ToolbarButton aria-label="Back" isSelected={false} onChange={() => onBack?.()}><ChevronLeft /></ToolbarButton></ToolbarGroup>}
         <ToolbarTitle title={material.title} subtitle={subtitle} />
@@ -193,7 +193,7 @@ export function ReaderView({ material, onBack, onOpenLink, embedded = false }: {
             <TocRail aria-label="Contents" entries={outline.map((entry) => ({ id: entry.id, label: entry.label, level: entry.level - 1 }))} activeId={activeHeading} pinned={tocPinned} onSelect={(id) => document.getElementById(id)?.scrollIntoView({ block: "start", behavior: "smooth" })} />
           </div>
         ) : null}
-        <div ref={viewportRef} className="overflow-auto px-14 pb-[120px] pt-12" style={prefsStyle(prefs)}>
+        <div ref={viewportRef} className="reader-viewport overflow-auto px-14 pb-[120px] pt-12" style={prefsStyle(prefs)}>
           <article ref={bodyRef} className="reader-body" style={{ textAlign: prefs.justify ? "justify" : "start" }}>
             <p className="mb-3 text-[13px] font-medium text-accent-text">{(material.origin === "file" ? decodeURIComponent(material.url.replace("file:///", "")) : new URL(material.finalUrl).hostname)}</p>
             <h1>{material.title}</h1>
