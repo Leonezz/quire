@@ -20,7 +20,9 @@ Blogs, newsletters, papers, PDFs — whatever you bring in, Quire turns it into 
 
 **Subscribe, then decide.** Paste a feed, a site, or an arXiv category like `cs.CL`. New items land in an Inbox that asks one question per item: read it now (`↵`), queue it (`q`), or let it go (`e`). The Queue keeps what you saved in the order you want; Sources shows each subscription's health. `⌘K` finds anything by title.
 
-**An agent that reads with you.** Press `⌘J` to ask about the article, a selected passage, or the whole library: explain, verify, find related material, summarise, or write a synthesis. Answers cite the materials they draw on, and a synthesis is kept as its own artifact with its sources attached. Runs on the Codex CLI signed in on your Mac.
+**An agent that reads with you.** Press `⌘J` to ask about the article, a selected passage, or the whole library: explain, verify, find related material, summarise, or write a synthesis. Answers cite only the materials the agent actually opened, a synthesis is kept as its own artifact with its sources attached, and conversations stay with the material they are about (`⌘⇧J` lists them all). When a page came through garbled, ask the agent to rebuild it from the saved original. Runs on the Codex CLI signed in on your Mac.
+
+**A library you can shape.** Edit a material's title, author, date and tags in the Info panel (`i`), filter the Library by kind or tag, search titles, delete in bulk. Every pane is resizable and remembers its size; `⌘,` opens Settings.
 
 ## Where it is going
 

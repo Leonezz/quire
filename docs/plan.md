@@ -59,6 +59,15 @@
 - 已验：桌面 app 对阮一峰一期周刊 Summarise 与 Related，后者调用 library_search 引用了 7 篇库内材料。
 - 未做（推后）：MCP server 形态（现用实验性 dynamicTools）；artifact skills 移植；多文档综合的验收样例；面板关闭即丢转录（线程 id 可续，但未持久化）。
 
+### 第 7 刀：M3 元数据、库管理、设置、会话、重建 — 已完成 2026-09-19（`1eaa6f9` `8b50586` `f8e4a08`）
+- 独立评审（Sonnet，`eval/quality-review-m1-m2.md`）：7 个领域 4 MAJOR / 1 PASS / 1 MINOR；前十项已全部修复：CJK 标点不再算词、turn id 未到前按 Stop 会延后生效、定时 / 全量 / 单源同步共用一把锁、artifact lineage 与引用 pill 只接受本轮真正取过的材料 id（`sources` 随 completed 事件与会话轮次落库，schema v3）、⌘K 与 library_search 搜正文、决定错误按条目作用域、Queue 排序请求代际保护、上下文 pill 用真实标题、Library 无选中时 ⌘J 可用、Disconnect 失败在确认层内可见、agent 失败按码区分并可重试、渲染层首批 26 个测试。
+- 元数据：`material_meta` 覆盖层（标题 / 作者 / 日期 / 标签 / 备注），阅读器 Info 面板（`i`）编辑并可重置；Library 行显示标签 chips。
+- 库管理：`queryLibrary`（类型 / 标签 / 排序 / 标题搜索）、多选删除（级联删记录、字节、批注、元数据，条目解除链接）、Inbox / Queue 的 Keep（`k`，不标已读入库）。
+- 设置（⌘,）：`userData/settings.json` — 同步间隔（调度实时生效）、保留原始页面、Codex 路径 / 模型 / 推理强度（`turn/start` 的 `model` / `effort`）、数据目录、快捷键表；阅读设置与 Aa 弹层共用一份状态。
+- 布局：`SplitPane`（react-resizable-panels）侧栏 / 列表 / 检查器可拖拽与键盘调整并按像素记忆，`⌘\` 收起侧栏；无作用元素走查：Toggle sidebar 变真、外壳检查器占位 tab 删除、占位文案换成真实 agent 状态。
+- Agent：会话落库（`agent_sessions` / `agent_turns`），面板重开恢复转录，History / New conversation，全局 Agent 视图（⌘⇧J）；对无法稳定解析的页面，"Rebuild with the agent"让 agent 通过 `material_source` 分页读取保留的原始页面（linkedom 转结构化文本），写出忠实的 Markdown artifact 并以 `rebuiltAs` 回链（已用阮一峰 411 期实测：标题 / 作者 / 日期 / 章节 / 图片完整）。
+- 未做（推后）：Info 面板显示"原始值"需要合同暴露抽取值；agent 向 Inbox 推荐条目（introducedBy）；多文档综合的验收样例；OPML。
+
 ## 评测集导入 app
 - Developer 菜单 → Import Evaluation Corpus（⌘⇧I，仅开发检出可见）把 `eval/corpus` 全部快照按当前抽取器入库；2026-09-18 实测 64 篇导入、0 失败。浏览器预览也直接列出导出后的语料（`EXPORT=1`）。
 - 第二轮独立评审（`eval/quality-review-2.md`）：46 通过 / 4 轻微 / 14 严重（首轮 36 / 6 / 22）；随后又修了 Paul Graham 脚注、卡片链接的 Markdown、尾部 discuss / read-my-book 段。剩余主要是站点级残留（Quanta、Stratechery 的相关文章卡片），留给 L3 profile。
