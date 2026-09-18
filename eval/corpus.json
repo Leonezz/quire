@@ -506,5 +506,14 @@
     "tags": [
       "code"
     ]
+  },
+  {
+    "slug": "openai-4o-zh",
+    "url": "https://openai.com/zh-Hans-CN/index/hello-gpt-4o/",
+    "framework": "next",
+    "tags": [
+      "images",
+      "zh"
+    ]
   }
 ]

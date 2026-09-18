@@ -10,7 +10,7 @@ export function ItemList<T extends object>({ className, ...props }: GridListProp
   return (
     <GridList
       {...props}
-      className={composeRenderProps(className, (cls) => cx("flex flex-col gap-px overflow-auto px-2 py-2.5 outline-none", cls))}
+      className={composeRenderProps(className, (cls) => cx("flex flex-col gap-px overflow-y-auto overflow-x-hidden px-2 py-2.5 outline-none", cls))}
     />
   );
 }

@@ -801,6 +801,11 @@ function contentStatsFromDocument(sourceDocument: DocumentLike) {
   };
 }
 
+// richUnits order: pre, figure, picture, image, table, math, noteref, endnotes, link, citation, heading, list, details.
+// Links, headings and lists are exactly what site footers and related-post widgets are made of, so a
+// semantic <article> that wraps them inflates those three; only the content categories are enforced.
+const NAVIGATION_HEAVY_RICH_UNITS = new Set([8, 10, 11]);
+
 function candidateRetainsSourceRichStructure(
   candidate: ExtractionCandidate,
   sourceRichUnits: readonly number[],
@@ -809,6 +814,7 @@ function candidateRetainsSourceRichStructure(
   return sourceRichUnits.every(
     (sourceCount, index) =>
       sourceCount === 0 ||
+      NAVIGATION_HEAVY_RICH_UNITS.has(index) ||
       (candidateRichUnits[index] ?? 0) >=
         Math.max(1, Math.ceil(sourceCount * MIN_RICH_CATEGORY_RETENTION_RATIO)),
   );
@@ -1220,9 +1226,12 @@ export function normalizeArticleCapture(
     // extraction must drop. Without a semantic region, "what the best
     // extractor kept" is the reference, which still rejects an extractor that
     // lost code blocks or tables the other one preserved.
+    // <main> is a page region, not an article boundary: it routinely holds the
+    // site's related-post widgets, whose images would be "lost" by any correct extraction.
+    const rootIsArticleBoundary = semanticRoot !== undefined && semanticRoot.tagName.toLowerCase() !== "main" && semanticRoot.getAttribute("role") !== "main";
     const sourceRichUnits = siteAdapterExtraction
       ? contentStats(siteAdapterExtraction.content).richUnits
-      : semanticRootExtraction
+      : semanticRootExtraction && rootIsArticleBoundary
         ? contentStats(semanticRootExtraction.content).richUnits
         : unionRichUnits([defuddle, readability]);
     const defuddleIsHealthy =
@@ -1261,13 +1270,21 @@ export function normalizeArticleCapture(
     const longerCandidate = [defuddle, readability]
       .filter((candidate): candidate is ExtractionCandidate => candidate !== undefined)
       .sort((a, b) => contentStats(b.content).textCharacters - contentStats(a.content).textCharacters)[0];
+    // A semantic root far larger than what the extractors found is a page-wide
+    // wrapper (article + footer widgets), not the article: the extraction wins then.
+    const rootIsPageWide =
+      semanticRootExtraction !== undefined &&
+      longerCandidate !== undefined &&
+      contentStats(semanticRootExtraction.content).textCharacters > contentStats(longerCandidate.content).textCharacters * 1.5;
     const selected = siteAdapterExtraction
       ? siteAdapterExtraction
       : defuddleIsHealthy
         ? defuddle!
         : readabilityIsHealthy
           ? readability!
-          : semanticRootExtraction ?? longerCandidate;
+          : rootIsPageWide
+            ? longerCandidate
+            : semanticRootExtraction ?? longerCandidate;
     if (!selected) {
       return articleFailure(
         [

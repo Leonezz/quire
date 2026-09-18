@@ -106,4 +106,25 @@ describe("pruneArticleChrome", () => {
     expect(result.content).not.toContain("<font");
     expect(result.content).toContain("<br><br>");
   });
+
+  it("unwraps a blockquote that only wraps code and drops footnote back-references", () => {
+    const html = `${body(6)}<blockquote><pre><code>curl -b 'foo=bar' https://google.com</code></pre></blockquote><blockquote><p>A real quote.</p></blockquote><section class="footnotes"><ol><li id="fn-1"><p>Note text.</p><p><a href="#fnref-1" class="footnote-backref">↩</a></p></li></ol></section>`;
+    const result = pruneArticleChrome(html);
+    expect(result.rulesApplied).toEqual(["article.prune.code-blockquote@1", "article.prune.footnote-backrefs@1"]);
+    expect(result.content).not.toContain("<blockquote><pre>");
+    expect(result.content).toContain("<blockquote><p>A real quote.</p></blockquote>");
+    expect(result.content).not.toContain("↩");
+    expect(result.content).toContain("<p>Note text.</p>");
+  });
+
+  it("removes same-page anchor lists and loading placeholders anywhere, and trailing card lists", () => {
+    const html = `${body(6)}<ul><li><a href="https://x.test/p#a">A</a></li><li><a href="https://x.test/p#b">B</a></li></ul><p>正在加载…</p>${body(6)}<hr><p><strong><a href="https://x.test/plus">Plus</a></strong></p><p>Interviews</p><ul><li><h2>An Interview with Someone</h2><p>Thursday, September 17, 2026</p><a href="https://x.test/i1">read</a></li><li><h2>Another Interview</h2><a href="https://x.test/i2">read</a></li></ul><a href="https://x.test/all">View All</a>`;
+    const result = pruneArticleChrome(html);
+    expect(result.content).not.toContain('href="https://x.test/p#a"');
+    expect(result.content).not.toContain("正在加载");
+    expect(result.content).not.toContain("An Interview with Someone");
+    expect(result.content).not.toContain("View All");
+    expect(result.rulesApplied).toContain("article.prune.navigation-lists@1");
+    expect(result.rulesApplied).toContain("article.prune.trailing-cards@1");
+  });
 });

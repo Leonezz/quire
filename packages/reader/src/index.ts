@@ -1,4 +1,4 @@
-export { ReaderDocumentSurface } from "./ReaderDocumentSurface";
+export { ReaderDocumentSurface, readerImageLimits } from "./ReaderDocumentSurface";
 export type { ReaderDocumentSurfaceProps, ReaderFallback } from "./ReaderDocumentSurface";
 export { resolveReaderDocument } from "./registry";
 export type { ReaderDocumentResolution } from "./registry";

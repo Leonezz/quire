@@ -177,10 +177,46 @@ function linkDensity(element: Element) {
   return Math.min(1, linked / text);
 }
 
+/** Every item is a link plus at most a date or a short blurb: a list of cards, not a list the author wrote. */
+function isLinkCardList(element: Element) {
+  const tag = element.tagName.toLowerCase();
+  if (tag !== "ul" && tag !== "ol") return false;
+  const items = Array.from(element.children).filter((child) => child.tagName.toLowerCase() === "li");
+  if (items.length === 0) return false;
+  return items.every((item) => {
+    const link = item.querySelector("a[href]");
+    if (!link) return false;
+    const text = (item.textContent ?? "").replace(/\s+/gu, " ").trim();
+    const rest = text.replace(link.textContent ?? "", "").trim();
+    const cardLike = item.querySelector("h1, h2, h3, h4, img, picture, time") !== null || /(?:19|20)\d{2}/u.test(rest);
+    const prose = /[.!?。！？]\s/u.test(rest) && rest.length > 120;
+    return !prose && (rest.length <= 80 || (cardLike && text.length <= 240));
+  });
+}
+
 /** Structural content never counts as chrome, wherever it sits. */
 const STRUCTURAL_TAGS = /^(table|pre|figure|blockquote|dl|details|ul|ol|code|math)$/iu;
 function isStructural(element: Element) {
+  if (isLinkCardList(element)) return false;
   return STRUCTURAL_TAGS.test(element.tagName) || element.getAttribute("role") === "doc-endnotes" || /\b(footnotes?|footnote-list|references|bibliography)\b/iu.test(element.getAttribute("class") ?? "") || /^(footnotes?|references|bibliography)$/iu.test(element.id);
+}
+
+const PLACEHOLDER_TEXT = /^(loading|正在加载|加载中|please wait)[.…]*$/iu;
+
+/** Same-page anchor lists anywhere are navigation (an in-page ToC without a heading, a tab strip); loading placeholders are app residue. */
+function removeNavigationLists(document: Document, rules: string[]) {
+  let changed = false;
+  for (const list of Array.from(document.querySelectorAll("ul, ol"))) {
+    if (!list.isConnected || !isAnchorList(list)) continue;
+    const previous = (list as El).previousElementSibling;
+    if (previous && /^h[1-6]$/iu.test(previous.tagName) && /references|bibliography|notes|footnotes|links|resources|参考|链接|引用|注释|脚注|文献/iu.test(previous.textContent ?? "")) continue;
+    list.remove();
+    changed = true;
+  }
+  for (const element of Array.from(document.querySelectorAll("p, div, span"))) {
+    if (element.children.length === 0 && PLACEHOLDER_TEXT.test((element.textContent ?? "").trim())) { element.remove(); changed = true; }
+  }
+  if (changed) rules.push("article.prune.navigation-lists@1");
 }
 
 /** Permalink anchors ("#", "¶", icon-only links) are removed; a heading that is itself a link is unwrapped. */
@@ -367,6 +403,32 @@ function anchorsToTargets(document: Document, rules: string[]) {
   if (changed) rules.push("article.prune.anchor-targets@1");
 }
 
+/** A blockquote that only wraps code is a styling habit (Movable Type, some Markdown themes): the code stands on its own. */
+function unwrapCodeBlockquotes(document: Document, rules: string[]) {
+  let changed = false;
+  for (const quote of Array.from(document.querySelectorAll("blockquote"))) {
+    const children = Array.from(quote.children);
+    if (children.length === 0 || !children.every((child) => child.tagName.toLowerCase() === "pre")) continue;
+    if ((quote.textContent ?? "").trim() !== children.map((child) => (child.textContent ?? "").trim()).join("").trim()) continue;
+    quote.replaceWith(...children);
+    changed = true;
+  }
+  if (changed) rules.push("article.prune.code-blockquote@1");
+}
+
+/** Footnote back-references (↩) are navigation the reader provides itself; left in, they become one-line paragraphs. */
+function removeFootnoteBackrefs(document: Document, rules: string[]) {
+  let changed = false;
+  for (const link of Array.from(document.querySelectorAll("a[href*='#fnref'], a.footnote-backref, a.reversefootnote, a[role='doc-backlink'], a[rel='footnote-backref']"))) {
+    if (!/^[\s↩↵⤴^↑]*︎?$/u.test((link.textContent ?? "").trim())) continue;
+    const parent = link.parentElement;
+    link.remove();
+    if (parent && (parent.textContent ?? "").trim().length === 0 && parent.querySelector("img, pre, table") === null) parent.remove();
+    changed = true;
+  }
+  if (changed) rules.push("article.prune.footnote-backrefs@1");
+}
+
 /** Obsolete presentational wrappers hide paragraph structure from every later step. */
 function unwrapFontTags(document: Document, rules: string[]) {
   const fonts = Array.from(document.querySelectorAll("font, center"));
@@ -398,14 +460,15 @@ function trimPromoTail(document: Document, rules: string[]) {
     if (MEDIA_TAGS.test(tag) && tag !== "hr") break;
     if (tag === "hr" || (text.length === 0 && !element.querySelector("img, picture, svg, video, iframe"))) { element.remove(); continue; }
     // "Here's another article just for you:" — a lead-in whose cards were already removed.
-    const leadIn = removed > 0 && text.length < 120 && /[:：]$/u.test(text);
+    const leadIn = removed > 0 && text.length < 120 && (/[:：]$/u.test(text) || (text.length < 40 && !/[.!?。！？]/u.test(text) && linksWithin(element).length === 0 && !/^h[1-6]$/u.test(tag)));
     // A link list under "References" / "Notes" is content, and so is everything before it.
     const previous = (element as El).previousElementSibling;
-    if ((tag === "ul" || tag === "ol") && previous && /^h[1-6]$/u.test(previous.tagName.toLowerCase()) && /references|bibliography|notes|footnotes|sources|citations|acknowledg|links|resources/iu.test(previous.textContent ?? "")) break;
+    if ((tag === "ul" || tag === "ol") && previous && /^h[1-6]$/u.test(previous.tagName.toLowerCase()) && /references|bibliography|notes|footnotes|sources|citations|acknowledg|links|resources|参考|链接|引用|注释|脚注|文献/iu.test(previous.textContent ?? "")) break;
     if (isStructural(element)) break;
     const cards = linksWithin(element).filter((link) => link.querySelector("img, picture, svg")).length;
     const chrome =
       leadIn ||
+      isLinkCardList(element) ||
       (linkDensity(element) >= 0.5 && text.length < 600) ||
       (cards >= 2 && text.length < 400) ||
       (PROMO_TEXT.test(text) && text.length < 600) ||
@@ -432,10 +495,13 @@ export function pruneArticleChrome(html: string, options: PruneOptions = {}): Pr
   const doc = document as unknown as Document;
   unwrapFontTags(doc, rules);
   anchorsToTargets(doc, rules);
+  unwrapCodeBlockquotes(doc, rules);
+  removeFootnoteBackrefs(doc, rules);
   unwrapLayoutTables(doc, rules);
   cleanHeadings(doc, rules);
   normalizeTitleHeadings(doc, options.title, options.siteNames, rules);
   removeTableOfContents(doc, rules);
+  removeNavigationLists(doc, rules);
   removeTrailingChrome(doc, rules);
   trimPromoTail(doc, rules);
   trimPromoHead(doc, options.byline, rules);

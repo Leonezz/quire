@@ -1,3 +1,4 @@
+import { readerImageLimits } from "./ReaderDocumentSurface";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -763,6 +764,8 @@ describe("ReaderDocumentSurface", () => {
   });
 
   it("bounds unique asynchronous image requests per reader surface", async () => {
+    readerImageLimits.maxRequestsPerSurface = 32;
+    readerImageLimits.maxPendingRequests = 64;
     const resolveImageSource = vi.fn(async () => undefined);
     const container = document.createElement("div");
     document.body.replaceChildren(container);
@@ -940,6 +943,8 @@ describe("ReaderDocumentSurface", () => {
   });
 
   it("bounds pending image work, removes queued aborts, and leaves capacity for later surfaces", async () => {
+    readerImageLimits.maxRequestsPerSurface = 32;
+    readerImageLimits.maxPendingRequests = 64;
     const firstContainer = document.createElement("div");
     const secondContainer = document.createElement("div");
     const overflowContainer = document.createElement("div");

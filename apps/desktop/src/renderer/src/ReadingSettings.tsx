@@ -3,7 +3,7 @@ import { Button, Popover, Segment, Segmented, Switch, ToolbarButton, cx, DialogT
 import { DEFAULT_PREFS, SIZES, type ReadingPrefs } from "./readingPrefs";
 
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
-  return <div className="grid grid-cols-[78px_minmax(0,1fr)] items-center gap-2.5"><span className="text-[12.5px] font-medium text-label-2">{label}</span>{children}</div>;
+  return <div className="grid grid-cols-[84px_minmax(0,1fr)] items-center gap-2.5"><span className="text-[12.5px] font-medium text-label-2">{label}</span>{children}</div>;
 }
 
 /** The Aa popover. Every control changes the page live; the values apply to every material. */
@@ -13,7 +13,7 @@ export function ReadingSettings({ prefs, onChange }: { prefs: ReadingPrefs; onCh
   return (
     <DialogTrigger>
       <ToolbarButton aria-label="Reading settings"><Type /></ToolbarButton>
-      <Popover placement="bottom end" className="w-[340px]" aria-label="Reading settings">
+      <Popover placement="bottom end" className="w-[392px]" aria-label="Reading settings">
         <div className="grid gap-3">
           <Row label="Typeface">
             <div className="grid grid-cols-3 gap-1.5">

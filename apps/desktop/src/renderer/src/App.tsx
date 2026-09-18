@@ -4,6 +4,7 @@ import { AskButton, Button, Inspector, InspectorPanel, InspectorSection, Inspect
 import { items, signalsOf, timeOf } from "./fixtures";
 import { ReaderView } from "./ReaderView";
 import { PdfReaderView } from "./PdfReaderView";
+import { ArticlePane } from "./ArticlePane";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { AddSheet } from "./AddSheet";
 import type { MaterialRecord, MaterialSummary } from "../../shared/contracts";
@@ -135,14 +136,7 @@ export function App() {
           {view === "library" ? (() => {
             const chosen = library.find((item) => librarySelected !== "all" && librarySelected.has(item.id));
             return chosen ? (
-              <>
-                <div className="px-9 pt-7">
-                  <div className="flex items-center gap-2 text-[12.5px] text-label-2">{(chosen.origin === "file" ? "Local file" : new URL(chosen.url).hostname)}<span className="rounded-pill bg-fill px-2 py-px text-[11.5px] font-medium">{chosen.quality.safety === "degraded_plaintext" ? "plain text only" : "web extract"}</span></div>
-                  <h1 className="mb-1.5 mt-2.5 text-[24px] font-bold leading-[29px] tracking-[-.02em] text-balance">{chosen.title}</h1>
-                  <div className="flex flex-wrap gap-x-3 text-[12.5px] text-label-2">{chosen.byline ? <span>{chosen.byline}</span> : null}<span>{chosen.readingMinutes} min</span><span>kept {timeOf(chosen.fetchedAt)}</span></div>
-                </div>
-                <div className="flex items-center gap-2 px-9 py-[18px]"><Button variant="primary" onPress={() => void openMaterial(chosen.id)}>Open <Kbd>↵</Kbd></Button></div>
-              </>
+              <ArticlePane key={chosen.id} summary={chosen} onOpen={() => void openMaterial(chosen.id)} onOpenLink={openLink} />
             ) : <div className="grid flex-1 place-items-center text-center text-label-2"><div><strong className="mb-1.5 block text-[18px] font-semibold text-label">Nothing selected</strong><span className="text-[13px]">Select something you kept.</span></div></div>;
           })() : current ? (
             <>

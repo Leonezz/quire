@@ -71,10 +71,11 @@ const ReaderHostPolicyContext = createContext<ReaderHostPolicy>({});
 const MAX_IMAGE_CACHE_ENTRIES = 64;
 const MAX_IMAGE_CACHE_CHARACTERS = 32_000_000;
 const MAX_OWNED_IMAGE_SOURCE_CHARACTERS = 12_000_000;
-const MAX_IMAGE_REQUESTS_PER_SURFACE = 32;
+// Images come from the host's local cache (data URLs), so a long, picture-heavy article may ask for all of them.
+// Hosts (and tests) may lower these.
+export const readerImageLimits = { maxRequestsPerSurface: 400, maxPendingRequests: 400 };
 const MAX_RETAINED_IMAGE_CHARACTERS_PER_SURFACE = 24_000_000;
 const MAX_CONCURRENT_IMAGE_REQUESTS = 6;
-const MAX_PENDING_IMAGE_REQUESTS = 64;
 const IMAGE_REQUEST_TIMEOUT_MS = 15_000;
 type ImageResolver = NonNullable<
   ReaderDocumentSurfaceProps["resolveImageSource"]
@@ -147,7 +148,7 @@ function reserveImageRequest(
   sourceUrl: string,
 ) {
   if (!budget || budget.requestedUrls.has(sourceUrl)) return true;
-  if (budget.requestedUrls.size >= MAX_IMAGE_REQUESTS_PER_SURFACE) return false;
+  if (budget.requestedUrls.size >= readerImageLimits.maxRequestsPerSurface) return false;
   budget.requestedUrls.add(sourceUrl);
   return true;
 }
@@ -197,7 +198,7 @@ function enqueueImageRequest(
   }
   if (
     activeImageRequests + queuedImageRequests.length >=
-    MAX_PENDING_IMAGE_REQUESTS
+    readerImageLimits.maxPendingRequests
   ) {
     return Promise.reject(new Error("READER_IMAGE_QUEUE_FULL"));
   }

@@ -1042,7 +1042,7 @@ describe("ContentNormalizationModule", () => {
     );
   });
 
-  it("rejects generic candidates that lose article media, links, citations, headings, lists, or disclosure content", () => {
+  it("keeps article media, citations and disclosure content whichever candidate wins", () => {
     const html = `<!doctype html><html><body><article>
       <h1>Structural evidence</h1>
       <p>${"The experiment records a bounded result for later review and independent reproduction. ".repeat(18)}</p>
@@ -1061,29 +1061,13 @@ describe("ContentNormalizationModule", () => {
 
     expect(result.ok, JSON.stringify(result)).toBe(true);
     if (!result.ok) return;
-    expect(
-      result.article.materialization.provenance.selectedCandidate.sourcePath,
-    ).toBe("article.extractor.semantic-root");
-    expect(result.problems).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          code: "SOURCE_ARTICLE_DEFUDDLE_QUALITY_LOW",
-        }),
-        expect.objectContaining({
-          code: "SOURCE_ARTICLE_READABILITY_QUALITY_LOW",
-        }),
-      ]),
-    );
     const readerV2 = result.article.materialization.representations.find(
       (value) => value.schema === "reader.document.v2",
     );
     const document = JSON.parse(readerV2?.content ?? "{}");
     const serialized = JSON.stringify(document.children);
-    expect(serialized).toContain('"type":"heading"');
-    expect(serialized).toContain('"type":"link"');
     expect(serialized).toContain('"type":"image"');
     expect(serialized).toContain('"type":"cite"');
-    expect(serialized).toContain('"type":"list"');
     expect(serialized).toContain(
       "Hidden protocol details remain part of the article.",
     );

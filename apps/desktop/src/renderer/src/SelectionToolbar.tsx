@@ -59,18 +59,18 @@ export function SelectionToolbar({ root, viewport, capture, onHighlight, onNote,
     <div
       role="toolbar"
       aria-label="Selection"
-      className="glass-strong absolute z-20 flex -translate-x-1/2 items-center gap-1 rounded-pill p-1"
+      className="glass-strong absolute z-20 flex -translate-x-1/2 items-center gap-0.5 rounded-pill p-1"
       style={{ top: placement.top, left: placement.left }}
       onMouseDown={(event) => event.preventDefault()}
     >
       {ANNOTATION_COLORS.map(({ color, label }) => (
-        <Button key={color} variant="quiet" size="sm" aria-label={`Highlight ${label.toLowerCase()}`} className="size-7 min-w-0 px-0" onPress={() => { onHighlight(placement.capture, color); done(); }}>
-          <i aria-hidden="true" className="block size-4 rounded-full" style={{ background: color }} />
+        <Button key={color} variant="quiet" size="sm" aria-label={`Highlight ${label.toLowerCase()}`} className="size-8 min-w-0 shrink-0 px-0" onPress={() => { onHighlight(placement.capture, color); done(); }}>
+          <i aria-hidden="true" className="block size-[18px] shrink-0 rounded-full shadow-[inset_0_0_0_1px_rgba(0,0,0,.08)]" style={{ background: color }} />
         </Button>
       ))}
-      <span className="mx-0.5 h-4 w-px bg-separator" />
-      <Button variant="quiet" size="sm" aria-label="Add a note" className="size-7 min-w-0 px-0" onPress={() => { onNote(placement.capture); done(); }}><MessageSquarePlus className="size-4" /></Button>
-      <Button variant="quiet" size="sm" aria-label="Copy citation" className="size-7 min-w-0 px-0" onPress={() => { onCopy(placement.capture); done(); }}><Copy className="size-4" /></Button>
+      <span className="mx-1 h-5 w-px shrink-0 bg-separator" />
+      <Button variant="quiet" size="sm" aria-label="Add a note" className="size-8 min-w-0 shrink-0 px-0" onPress={() => { onNote(placement.capture); done(); }}><MessageSquarePlus className="size-[18px]" /></Button>
+      <Button variant="quiet" size="sm" aria-label="Copy citation" className="size-8 min-w-0 shrink-0 px-0" onPress={() => { onCopy(placement.capture); done(); }}><Copy className="size-[18px]" /></Button>
     </div>
   );
 }
