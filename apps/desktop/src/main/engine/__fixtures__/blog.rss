@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+  <channel>
+    <title>Systems Notes</title>
+    <link>https://systems.example.test/</link>
+    <description>Notes on caches, schedulers and the occasional proof.</description>
+    <language>en-us</language>
+    <item>
+      <title>Cache keys that include the prompt</title>
+      <link>https://systems.example.test/posts/cache-keys</link>
+      <guid isPermaLink="true">https://systems.example.test/posts/cache-keys</guid>
+      <pubDate>Mon, 14 Sep 2026 09:30:00 GMT</pubDate>
+      <description>Two harnesses cache the tokenised prompt keyed on the question alone.</description>
+      <content:encoded><![CDATA[
+        <p>Two harnesses cache the tokenised prompt keyed on the question text alone, so a changed system prompt silently reuses the old one. The fix is a cache key that includes the full rendered prompt hash. This paragraph exists to push the entry over the summary threshold, so the words keep coming: the cache is a map from key to token array, the key is a string, and the string must change whenever anything upstream of tokenisation changes.</p>
+        <p>The patch is small once the key is right. Everything else in the harness stays the same, which is the point of fixing the key rather than the callers. Here it is in full, with the hash computed over the rendered prompt rather than the raw question:</p>
+        <pre><code class="language-python">def cache_key(system: str, question: str) -> str:
+    rendered = render(system, question)
+    return hashlib.sha256(rendered.encode()).hexdigest()
+</code></pre>
+        <p>The diagram below shows the two call sites. Both go through the same function now, so a future change to render() cannot leave one of them stale while the other refreshes. That property held before only by accident, and accidents are not a design.</p>
+        <figure><img src="https://systems.example.test/images/cache-key.png" alt="Two call sites sharing one cache key" /><figcaption>Both call sites now share one key.</figcaption></figure>
+        <p>What this does not fix: a prompt whose rendering depends on the clock. Those need the clock in the key too, or a rendering that does not depend on it. Either is fine; not deciding is not.</p>
+      ]]></content:encoded>
+    </item>
+    <item>
+      <title>A short note on fair schedulers</title>
+      <link>https://systems.example.test/posts/fair-schedulers</link>
+      <guid isPermaLink="true">https://systems.example.test/posts/fair-schedulers</guid>
+      <pubDate>Fri, 11 Sep 2026 17:05:00 GMT</pubDate>
+      <description>A fair scheduler that never overlaps runs is easier to reason about than one that tries to catch up. Skip the tick, log it, move on.</description>
+    </item>
+    <item>
+      <title>Why the retry budget is a proof</title>
+      <link>https://systems.example.test/posts/retry-budget</link>
+      <guid isPermaLink="true">https://systems.example.test/posts/retry-budget</guid>
+      <pubDate>Tue, 08 Sep 2026 08:00:00 GMT</pubDate>
+      <description>Bounding retries per window is a proof that the client cannot amplify a partial outage. The bound $r \le b$ is the invariant.</description>
+      <content:encoded><![CDATA[
+        <p>Bounding retries per window is a proof that the client cannot amplify a partial outage: with at most $b$ retries per $w$ seconds, the extra load is at most $b/w$ requests per second per client, whatever the server does. The bound $r \le b$ is the invariant every retry path must preserve, and it is worth writing down once rather than rediscovering during an incident.</p>
+        <p>The argument is short. Each client keeps a token bucket for retries; a retry that finds the bucket empty is dropped, not delayed. Delaying would preserve the count but move the load to a later window, which is exactly the amplification the budget exists to prevent. Dropping is the honest choice, and it is also the one that makes the proof go through without a case analysis on timing.</p>
+        <p>Where teams get this wrong is in the layering: a retry inside the client library, another in the service mesh, and a third in the caller. Each is individually bounded and the product is not. The fix is a single budget shared across layers, or a rule that only one layer retries. Both are fine; the product is not.</p>
+      ]]></content:encoded>
+    </item>
+  </channel>
+</rss>

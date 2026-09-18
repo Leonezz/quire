@@ -20,15 +20,17 @@ body { background: transparent; color: var(--label); font: 400 14px/20px var(--f
 /* Motion: quiet, short, and only where something appears. */
 @keyframes reader-enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 @keyframes toolbar-pop { from { opacity: 0; transform: translate(-50%, 4px) scale(.96); } to { opacity: 1; transform: translate(-50%, 0) scale(1); } }
+@keyframes panel-enter { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 .reader-enter { animation: reader-enter .22s cubic-bezier(.2,.7,.2,1) both; }
 .toolbar-pop { animation: toolbar-pop .14s cubic-bezier(.2,.7,.2,1) both; }
-@media (prefers-reduced-motion: reduce) { .reader-enter, .toolbar-pop { animation: none; } }
+.panel-enter { animation: panel-enter .16s cubic-bezier(.2,.7,.2,1) both; }
+@media (prefers-reduced-motion: reduce) { .reader-enter, .toolbar-pop, .panel-enter { animation: none; } }
 
 /* Scrollbars: the reader's position lives in the contents rail and the progress line, so its
    viewport hides the native bar; lists get a thin overlay thumb with no track or border. */
 .reader-viewport, .pdf-canvas-viewer__page-scroll { scrollbar-width: none; }
 .reader-viewport::-webkit-scrollbar, .pdf-canvas-viewer__page-scroll::-webkit-scrollbar { display: none; }
-[role="grid"] { scrollbar-width: thin; scrollbar-color: var(--label-4) transparent; }
-[role="grid"]::-webkit-scrollbar { width: 8px; }
-[role="grid"]::-webkit-scrollbar-track { background: transparent; }
-[role="grid"]::-webkit-scrollbar-thumb { background: var(--label-4); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }
+[role="grid"], .list-scroll { scrollbar-width: thin; scrollbar-color: var(--label-4) transparent; }
+[role="grid"]::-webkit-scrollbar, .list-scroll::-webkit-scrollbar { width: 8px; }
+[role="grid"]::-webkit-scrollbar-track, .list-scroll::-webkit-scrollbar-track { background: transparent; }
+[role="grid"]::-webkit-scrollbar-thumb, .list-scroll::-webkit-scrollbar-thumb { background: var(--label-4); border-radius: 8px; border: 2px solid transparent; background-clip: padding-box; }

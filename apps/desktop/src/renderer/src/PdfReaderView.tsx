@@ -14,7 +14,7 @@ import { applyTheme, loadPrefs, savePrefs, type ReadingPrefs } from "./readingPr
 type Loaded = { status: "loading" } | { status: "ready"; url: string } | { status: "error"; message: string };
 
 /** PDF reading: the same toolbar contract as the article reader, the pages rendered by pdf.js. */
-export function PdfReaderView({ material, onBack, embedded = false }: { material: MaterialRecord; onBack?: (() => void) | undefined; embedded?: boolean }) {
+export function PdfReaderView({ material, onBack, onProgress, embedded = false }: { material: MaterialRecord; onBack?: (() => void) | undefined; onProgress?: ((fraction: number) => void) | undefined; embedded?: boolean }) {
   const pdf = material.pdf;
   const [loaded, setLoaded] = useState<Loaded>({ status: "loading" });
   const [prefs, setPrefs] = useState<ReadingPrefs>(loadPrefs);
@@ -74,7 +74,7 @@ export function PdfReaderView({ material, onBack, embedded = false }: { material
     remember(state);
     setPage(state.page);
     const fraction = pdfReadingProgress(state, pdf?.pages);
-    if (fraction !== undefined) setProgress(Math.round(fraction * 100));
+    if (fraction !== undefined) { setProgress(Math.round(fraction * 100)); onProgress?.(fraction); }
   };
 
   const regions = useMemo<PdfRegionOverlay[]>(() => annotations.map((annotation) => ({ id: annotation.id, locator: annotation.locator, color: annotation.color, kind: annotation.kind })), [annotations]);

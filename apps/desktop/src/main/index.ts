@@ -5,16 +5,36 @@ import { MaterialStore } from "./engine/materials";
 import { ImageCache } from "./engine/images";
 import { AnnotationStore } from "./engine/annotations";
 import { imageUrlsOf } from "./engine/materials";
-import type { MaterialRecord, OpenUrlResult } from "../shared/contracts";
-import { MAX_BYTES } from "./engine/fetch";
+import type { AddSourceResult, ItemDecision, MaterialRecord, OpenUrlResult, ReadingEventKind, SearchHit } from "../shared/contracts";
+import { MAX_BYTES, fetchPage } from "./engine/fetch";
+import { openDatabase } from "./engine/db";
+import { ItemStore } from "./engine/items";
+import { SourceStore, detectSource } from "./engine/sources";
+import { EventStore } from "./engine/events";
+import { syncDue, syncSource } from "./engine/sync";
+import { Scheduler } from "./engine/scheduler";
+import { readItem } from "./engine/inbox";
+import { itemHits, materialHits, mergeHits } from "./engine/search";
 
 const store = new MaterialStore(app.getPath("userData"));
 const images = new ImageCache(app.getPath("userData"));
 const annotations = new AnnotationStore(app.getPath("userData"));
+const db = openDatabase(join(app.getPath("userData"), "quire.sqlite"));
+const items = new ItemStore(db);
+const sources = new SourceStore(db, items);
+const events = new EventStore(db);
+
+const MAX_QUEUE_IDS = 5000;
+const DECISIONS: readonly ItemDecision[] = ["queue", "dismiss", "unqueue", "undismiss"];
+const EVENT_KINDS: readonly ReadingEventKind[] = ["opened", "finished", "kept", "queued", "dismissed"];
 
 function boundedString(value: unknown, max: number, code: string): string {
   if (typeof value !== "string" || value.length === 0 || value.length > max) throw new Error(code);
   return value;
+}
+
+function broadcast(channel: "library:changed" | "sources:changed") {
+  for (const win of BrowserWindow.getAllWindows()) win.webContents.send(channel);
 }
 
 // One JSON-RPC-ish boundary; every handler validates its input before touching the store.
@@ -48,7 +68,7 @@ async function importCorpus() {
   const dir = corpusDirectory();
   if (!dir) throw new Error("No evaluation corpus next to this build (expected <repo>/eval/corpus).");
   const result = await store.importSnapshots(dir);
-  for (const win of BrowserWindow.getAllWindows()) win.webContents.send("library:changed");
+  broadcast("library:changed");
   const all = await store.list();
   prefetchAll((await Promise.all(all.map((item) => store.get(item.id)))).filter((record): record is MaterialRecord => record !== undefined));
   return result;
@@ -71,6 +91,92 @@ ipcMain.handle("annotation:delete", (_event, materialId: unknown, id: unknown) =
 ipcMain.handle("image:resolve", (_event, url: unknown) => images.resolve(boundedString(url, 4096, "IPC_INVALID_URL")));
 ipcMain.handle("material:bytes", (_event, id: unknown) => store.bytes(boundedString(id, 64, "IPC_INVALID_ID")));
 ipcMain.handle("material:list", () => store.list());
+
+// --- M1: sources, the Inbox / Queue loop, reading events, search ------------------------
+// Every failure of a sync is written on the source (lastError) and reported; nothing is swallowed.
+function reportSyncFailure(context: string, error: unknown) {
+  console.error(`[sources] ${context}:`, error instanceof Error ? error.message : error);
+}
+
+async function addSource(input: string): Promise<AddSourceResult> {
+  let detection;
+  try { detection = await detectSource(input, fetchPage); }
+  catch (error) { return { ok: false, code: "DETECT_FAILED", message: error instanceof Error ? error.message : String(error) }; }
+  if (detection.kind === "page") return { ok: false, code: "NOT_A_FEED", message: `${detection.url} is a page without a feed. Paste its feed URL, or open the page itself in the library.` };
+  let created;
+  try {
+    created = detection.kind === "arxiv"
+      ? sources.add({ kind: "arxiv", locator: detection.category, title: detection.title })
+      : sources.add({ kind: "feed", locator: detection.url, title: detection.title ?? new URL(detection.url).hostname });
+  } catch (error) { return { ok: false, code: "SOURCE_EXISTS", message: error instanceof Error ? error.message : String(error) }; }
+  const synced = await syncSource(created, { fetch: fetchPage, sources, items });
+  broadcast("sources:changed");
+  if (!synced.ok) reportSyncFailure(`first sync of ${created.locator}`, synced.message);
+  return synced.ok ? { ok: true, source: synced.source, added: synced.added } : { ok: false, code: synced.code, message: synced.message };
+}
+
+async function syncAll() {
+  const outcome = await syncDue({ fetch: fetchPage, sources, items, onChanged: () => broadcast("sources:changed") });
+  for (const failure of outcome.failures) reportSyncFailure(`sync of ${failure.source.locator}`, failure.message);
+}
+
+const scheduler = new Scheduler({ run: syncAll, report: (error) => reportSyncFailure("scheduled sync", error) });
+
+ipcMain.handle("source:detect", (_event, input: unknown) => detectSource(boundedString(input, 4096, "IPC_INVALID_INPUT"), fetchPage));
+ipcMain.handle("source:add", (_event, input: unknown) => addSource(boundedString(input, 4096, "IPC_INVALID_INPUT")));
+ipcMain.handle("source:list", () => sources.list());
+ipcMain.handle("source:sync", async (_event, id: unknown) => {
+  const source = sources.get(boundedString(id, 64, "IPC_INVALID_ID"));
+  if (!source) throw new Error("SOURCE_NOT_FOUND");
+  const result = await syncSource(source, { fetch: fetchPage, sources, items });
+  broadcast("sources:changed");
+  if (!result.ok) reportSyncFailure(`sync of ${source.locator}`, result.message);
+  return result;
+});
+// Shares the scheduler's in-flight run, so a manual refresh never overlaps a scheduled one.
+ipcMain.handle("source:syncAll", () => scheduler.tick());
+ipcMain.handle("source:pause", (_event, id: unknown, paused: unknown) => {
+  if (typeof paused !== "boolean") throw new Error("IPC_INVALID_FLAG");
+  const result = sources.pause(boundedString(id, 64, "IPC_INVALID_ID"), paused);
+  broadcast("sources:changed");
+  return result;
+});
+ipcMain.handle("source:remove", (_event, id: unknown) => {
+  sources.remove(boundedString(id, 64, "IPC_INVALID_ID"));
+  broadcast("sources:changed");
+});
+ipcMain.handle("item:inbox", () => items.inbox());
+ipcMain.handle("item:queue", () => items.queue());
+ipcMain.handle("item:get", (_event, id: unknown) => items.get(boundedString(id, 64, "IPC_INVALID_ID")));
+ipcMain.handle("item:read", (_event, id: unknown) => withPrefetch(readItem(boundedString(id, 64, "IPC_INVALID_ID"), {
+  items, events, store,
+  onMaterialized: () => { broadcast("library:changed"); broadcast("sources:changed"); },
+  warn: (message) => console.warn(`[inbox] ${message}`),
+})));
+ipcMain.handle("item:decide", (_event, id: unknown, decision: unknown) => {
+  if (!DECISIONS.includes(decision as ItemDecision)) throw new Error("IPC_INVALID_DECISION");
+  const result = items.decide(boundedString(id, 64, "IPC_INVALID_ID"), decision as ItemDecision);
+  if (decision === "queue" || decision === "dismiss") events.record(decision === "queue" ? "queued" : "dismissed", result.id);
+  broadcast("sources:changed");
+  return result;
+});
+ipcMain.handle("item:reorder", (_event, ids: unknown) => {
+  if (!Array.isArray(ids) || ids.length > MAX_QUEUE_IDS) throw new Error("IPC_INVALID_IDS");
+  items.reorder(ids.map((id) => boundedString(id, 64, "IPC_INVALID_ID")));
+  broadcast("sources:changed");
+});
+ipcMain.handle("event:record", (_event, kind: unknown, ref: unknown) => {
+  if (!EVENT_KINDS.includes(kind as ReadingEventKind)) throw new Error("IPC_INVALID_EVENT_KIND");
+  const id = boundedString(ref, 64, "IPC_INVALID_ID");
+  const event = events.record(kind as ReadingEventKind, id);
+  if (kind === "finished" && items.markFinished(id) > 0) broadcast("sources:changed");
+  return event;
+});
+ipcMain.handle("event:stats", () => events.stats());
+ipcMain.handle("search:query", async (_event, query: unknown): Promise<SearchHit[]> => {
+  const text = boundedString(query, 200, "IPC_INVALID_QUERY");
+  return mergeHits(materialHits(text, await store.list()), itemHits(items.search(text)));
+});
 
 // One window. Native vibrancy behind a transparent page so the glass panels
 // in the renderer sit on the real desktop, not on a painted gradient.
@@ -135,6 +241,8 @@ function installMenu() {
 app.whenReady().then(() => {
   installMenu();
   createWindow();
+  scheduler.start();
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
+app.on("before-quit", () => { scheduler.stop(); db.close(); });
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });

@@ -1,6 +1,7 @@
 import type { Annotation, MaterialRecord, MaterialSummary, OpenUrlResult, ReadApi } from "../../shared/contracts";
 import sample from "./dev/sample-material.json";
 import samplePdf from "./dev/sample-pdf.json";
+import { createPreviewM1 } from "./previewM1";
 
 // In Electron the preload bridge provides window.read. In a plain browser (Vite dev
 // server, Storybook) there is no engine, so reading works against one sample material
@@ -40,7 +41,12 @@ function writePreviewAnnotations(materialId: string, annotations: Annotation[]) 
   localStorage.setItem(`read:preview-annotations:${materialId}`, JSON.stringify(annotations));
 }
 
+const previewGetMaterial = async (id: string) => samples.find((material) => material.id === id) ?? (await corpusMaterial(id));
+const previewListMaterials = async () => [...samples.map(summaryOf), ...(await corpusIndex())];
+
 const browserPreview: ReadApi = {
+  // Sources, Inbox, Queue, events and search: seeded into localStorage (see previewM1.ts).
+  ...createPreviewM1({ getMaterial: previewGetMaterial, listMaterials: previewListMaterials }),
   version: "preview",
   platform: "browser",
   // The preview paints its own ground (see styles.css), so there is no native appearance to sync.
@@ -49,7 +55,7 @@ const browserPreview: ReadApi = {
   importCorpus: async () => { throw new Error("The evaluation corpus is imported by the desktop app (Developer menu); the browser preview lists it directly."); },
   openUrl: async () => unavailable,
   openFile: async () => unavailable,
-  getMaterial: async (id) => samples.find((material) => material.id === id) ?? (await corpusMaterial(id)),
+  getMaterial: previewGetMaterial,
   // Preview annotations live in localStorage so the reading flow can be exercised without the engine.
   listAnnotations: async (materialId) => previewAnnotations(materialId),
   saveAnnotation: async (annotation) => {
@@ -69,7 +75,7 @@ const browserPreview: ReadApi = {
     if (!response.ok) throw new Error(`Preview PDF missing: put any PDF at apps/desktop/src/renderer/public/dev/sample.pdf (HTTP ${response.status}).`);
     return new Uint8Array(await response.arrayBuffer());
   },
-  listMaterials: async () => [...samples.map(summaryOf), ...(await corpusIndex())],
+  listMaterials: previewListMaterials,
 };
 
 export const read: ReadApi = typeof window !== "undefined" && "read" in window && window.read ? window.read : browserPreview;

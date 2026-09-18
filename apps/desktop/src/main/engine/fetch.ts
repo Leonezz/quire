@@ -35,14 +35,21 @@ export interface FetchedPage {
   finalUrl: string;
 }
 
-export async function fetchPage(url: URL): Promise<FetchedPage> {
+/** The shape every network-touching engine module takes, so tests inject fixture bytes instead of the network. */
+export type Fetcher = (url: URL, accept?: string) => Promise<FetchedPage>;
+
+export const PAGE_ACCEPT = "text/html,application/xhtml+xml,application/pdf,text/markdown,text/plain;q=0.9,*/*;q=0.5";
+/** Feeds first, pages second: a site that serves both to its feed URL should answer with the feed. */
+export const FEED_ACCEPT = "application/rss+xml,application/atom+xml,application/xml;q=0.9,text/xml;q=0.9,text/html;q=0.7,*/*;q=0.5";
+
+export async function fetchPage(url: URL, accept: string = PAGE_ACCEPT): Promise<FetchedPage> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
   try {
     const response = await fetch(url, {
       redirect: "follow",
       signal: controller.signal,
-      headers: { accept: "text/html,application/xhtml+xml,application/pdf,text/markdown,text/plain;q=0.9,*/*;q=0.5", "user-agent": "Read/0.1 (+reading-workbench)" },
+      headers: { accept, "user-agent": "Read/0.1 (+reading-workbench)" },
     });
     if (!response.ok) throw new FetchError(`HTTP_${response.status}`, `The page answered ${response.status}.`);
     const finalUrl = response.url || url.toString();

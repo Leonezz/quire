@@ -48,9 +48,14 @@ function outlineOf(root: HTMLElement | null): OutlineEntry[] {
   return entries;
 }
 
-/** `embedded`: rendered inside the Library pane (no back button, no title-bar drag region); Escape only closes the inspector. */
-export function ReaderView({ material, onBack, onOpenLink, embedded = false }: { material: MaterialRecord; onBack?: (() => void) | undefined; onOpenLink: (url: string) => void; embedded?: boolean }) {
+/**
+ * `embedded`: rendered inside a pane (no back button, no title-bar drag region); Escape closes the inspector, then calls `onBack`.
+ * `onProgress` reports the scrolled fraction (0–1) so the owner can record a finished reading.
+ */
+export function ReaderView({ material, onBack, onOpenLink, onProgress, embedded = false }: { material: MaterialRecord; onBack?: (() => void) | undefined; onOpenLink: (url: string) => void; onProgress?: ((fraction: number) => void) | undefined; embedded?: boolean }) {
   const viewportRef = useRef<HTMLDivElement>(null);
+  const onProgressRef = useRef(onProgress);
+  onProgressRef.current = onProgress;
   const bodyRef = useRef<HTMLDivElement>(null);
   const [inspectorTab, setInspectorTab] = useState<Key | null>(null);
   const [outline, setOutline] = useState<OutlineEntry[]>([]);
@@ -143,7 +148,9 @@ export function ReaderView({ material, onBack, onOpenLink, embedded = false }: {
     let idle: number | undefined;
     const onScroll = () => {
       const max = viewport.scrollHeight - viewport.clientHeight;
-      setProgress(max > 0 ? Math.min(100, Math.round((viewport.scrollTop / max) * 100)) : 100);
+      const fraction = max > 0 ? Math.min(1, viewport.scrollTop / max) : 1;
+      setProgress(Math.round(fraction * 100));
+      onProgressRef.current?.(fraction);
       setReading(viewport.scrollTop > 40);
       setActiveHeading(currentHeading(viewport, bodyRef.current));
       if (idle !== undefined) window.clearTimeout(idle);

@@ -15,7 +15,7 @@ const workspace = [
 export default defineConfig({
   // The normalization engine and its deps are bundled into main (like the old
   // esbuild engine bundle); only electron and native modules stay external.
-  main: { resolve: { alias: workspace }, build: { rollupOptions: { external: ["electron", "canvas", "jsdom", "mathml-to-latex", "temml", /^pdfjs-dist/] } } },
+  main: { resolve: { alias: workspace }, build: { rollupOptions: { external: ["electron", "node:sqlite", "canvas", "jsdom", "mathml-to-latex", "temml", /^pdfjs-dist/] } } },
   preload: { plugins: [externalizeDepsPlugin()] },
   renderer: { resolve: { alias: workspace }, plugins: [react(), tailwindcss()] },
 });

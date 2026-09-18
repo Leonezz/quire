@@ -4,11 +4,11 @@ import { gunzipSync } from "node:zlib";
 import { join } from "node:path";
 import { createMarkdownRepresentations, normalizeArticleCapture, type ContentMaterialization, type NormalizationProblem } from "@read/normalize";
 import type { CorpusImportResult, MaterialRecord, MaterialSummary, OpenFileInput, OpenUrlResult } from "../../shared/contracts";
-import { FetchError, assertPublicHttpUrl, fetchPage } from "./fetch";
+import { FetchError, assertPublicHttpUrl, fetchPage, type Fetcher } from "./fetch";
 import { PdfError, inspectPdf } from "./pdf";
+import { readingMinutes } from "./reading-time";
 
 const BUDGET = { maxBytes: 8 * 1024 * 1024, maxDepth: 100, maxNodes: 100_000, maxOutputBytes: 8 * 1024 * 1024 };
-const WORDS_PER_MINUTE = 240;
 const MINUTES_PER_PDF_PAGE = 2.5;
 
 function sha256(bytes: Uint8Array): `sha256:${string}` {
@@ -19,11 +19,6 @@ function idFor(url: string): string {
   return createHash("sha256").update(url).digest("hex").slice(0, 16);
 }
 
-function readingMinutes(text: string): number {
-  const words = text.trim().split(/\s+/).filter(Boolean).length;
-  return Math.max(1, Math.round(words / WORDS_PER_MINUTE));
-}
-
 function pick(materialization: ContentMaterialization) {
   const by = (schema: string) => materialization.representations.find((r) => r.schema === schema)?.content;
   const v2 = by("reader.document.v2");
@@ -32,17 +27,27 @@ function pick(materialization: ContentMaterialization) {
   return { reader, markdown: by("agent.gfm.v1"), plain: by("selection.text.v1") };
 }
 
-/** Materials on disk: one JSON per material, an index for lists. Enough for M0; SQLite arrives with M1. */
+export interface FeedMaterialInput {
+  url: string;
+  title: string;
+  byline?: string;
+  publishedAt?: string;
+  lang?: string;
+  content: { reader?: MaterialRecord["reader"]; markdown?: string; plain?: string };
+}
+
+/** Materials on disk: one JSON per material, an index for lists. Sources, items and events live in SQLite (db.ts). */
 export class MaterialStore {
-  constructor(private readonly root: string) {}
+  constructor(private readonly root: string, private readonly fetch: Fetcher = fetchPage) {}
 
   private get dir() { return join(this.root, "materials"); }
 
-  async openUrl(raw: string): Promise<OpenUrlResult> {
+  /** Fetches and materializes a public page. `origin` marks material that arrived through a subscription. */
+  async openUrl(raw: string, origin: "web" | "feed" = "web"): Promise<OpenUrlResult> {
     try {
       const url = assertPublicHttpUrl(raw);
-      const page = await fetchPage(url);
-      const record = await this.materializeAny(page.bytes, page.mediaType, page.finalUrl, raw);
+      const page = await this.fetch(url);
+      const record = await this.materializeAny(page.bytes, page.mediaType, page.finalUrl, raw, origin);
       await this.save(record);
       return { ok: true, material: record };
     } catch (error) {
@@ -68,7 +73,7 @@ export class MaterialStore {
   }
 
   /** PDFs keep their bytes on disk next to the record; everything else is materialized synchronously. */
-  private async materializeAny(bytes: Uint8Array, mediaType: string, finalUrl: string, requestedUrl: string, origin: "web" | "file" = "web", id = idFor(finalUrl)): Promise<MaterialRecord> {
+  private async materializeAny(bytes: Uint8Array, mediaType: string, finalUrl: string, requestedUrl: string, origin: MaterialRecord["origin"] = "web", id = idFor(finalUrl)): Promise<MaterialRecord> {
     if (mediaType !== "application/pdf" && !(mediaType === "application/octet-stream" && looksLikePdf(bytes))) return this.materialize(bytes, mediaType, finalUrl, requestedUrl, origin, id);
     const inspection = await inspectPdf(bytes);
     await mkdir(this.dir, { recursive: true });
@@ -86,7 +91,7 @@ export class MaterialStore {
     };
   }
 
-  private materialize(bytes: Uint8Array, mediaType: string, finalUrl: string, requestedUrl: string, origin: "web" | "file" = "web", id = idFor(finalUrl)): MaterialRecord {
+  private materialize(bytes: Uint8Array, mediaType: string, finalUrl: string, requestedUrl: string, origin: MaterialRecord["origin"] = "web", id = idFor(finalUrl)): MaterialRecord {
     const fetchedAt = new Date().toISOString();
     const base = { id, url: requestedUrl, finalUrl, mediaType, fetchedAt, origin };
     if (mediaType === "text/html" || mediaType === "application/xhtml+xml") {
@@ -132,6 +137,28 @@ export class MaterialStore {
   private async save(record: MaterialRecord) {
     await mkdir(this.dir, { recursive: true });
     await writeFile(join(this.dir, `${record.id}.json`), JSON.stringify(record), "utf8");
+  }
+
+  /**
+   * A material built from the copy a feed carried, used when the page itself could not be
+   * fetched. The FEED_CONTENT_FALLBACK problem marks it so the reader can say so.
+   */
+  async saveFromFeed(input: FeedMaterialInput): Promise<MaterialRecord> {
+    const plain = input.content.plain ?? input.content.markdown ?? "";
+    const record: MaterialRecord = {
+      id: idFor(input.url), url: input.url, finalUrl: input.url, title: input.title, fetchedAt: new Date().toISOString(),
+      origin: "feed", mediaType: "text/html", readingMinutes: readingMinutes(plain),
+      ...(input.byline ? { byline: input.byline } : {}),
+      ...(input.publishedAt ? { publishedAt: input.publishedAt } : {}),
+      ...(input.lang ? { lang: input.lang } : {}),
+      ...(input.content.reader ? { reader: input.content.reader } : {}),
+      ...(input.content.markdown ? { markdown: input.content.markdown } : {}),
+      ...(input.content.plain ? { plain: input.content.plain } : {}),
+      quality: { completeness: "declared_full", conformance: "conformant", identityConfidence: "medium", safety: "safe", warnings: [] },
+      problems: [{ code: "FEED_CONTENT_FALLBACK", recoverBy: "reopen", scope: "capture", severity: "warning" }],
+    };
+    await this.save(record);
+    return record;
   }
 
   /** Materializes every eval snapshot (corpus/<slug>/page.html.gz + meta.json) that is not in the library yet. */

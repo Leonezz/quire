@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xml:lang="de">
+  <title>Beweise und Bilder</title>
+  <id>https://beweise.example.test/</id>
+  <updated>2026-09-15T10:00:00Z</updated>
+  <link rel="alternate" type="text/html" href="https://beweise.example.test/"/>
+  <link rel="self" type="application/atom+xml" href="https://beweise.example.test/feed.atom"/>
+  <author><name>Ines Adler</name></author>
+  <entry>
+    <title>Momentum, revisited</title>
+    <id>https://beweise.example.test/2026/momentum</id>
+    <link rel="alternate" type="text/html" href="https://beweise.example.test/2026/momentum"/>
+    <published>2026-09-15T10:00:00Z</published>
+    <updated>2026-09-15T10:00:00Z</updated>
+    <content type="html"><![CDATA[
+      <p>Momentum is the simplest fix for a noisy gradient, and the reason it works is not the one usually given. The usual story is averaging; the better story is that the update becomes a heavily damped oscillator whose natural frequency is set by the curvature. This paragraph continues for a while so that the entry clearly carries its full text rather than a summary, which matters for how a reader decides whether to fetch the page or read the feed's copy of it.</p>
+      <p>Write the update as a second-order recurrence and the damping ratio falls out immediately. The stable region is the interval where the recurrence's characteristic roots stay inside the unit circle; everything outside it diverges, and the boundary is where practitioners keep finding their learning rates by trial and error. The formula is short enough to remember and long enough to be worth writing down.</p>
+      <p>Here is the recurrence, with the momentum coefficient as the damping term:</p>
+      <pre><code class="language-text">v_{t+1} = mu * v_t - eta * grad(theta_t)
+theta_{t+1} = theta_t + v_{t+1}</code></pre>
+      <figure><img src="https://beweise.example.test/images/momentum-roots.svg" alt="Characteristic roots inside the unit circle"/><figcaption>The stable region.</figcaption></figure>
+      <p>None of this is new, but it is rarely stated with the damping ratio on the page, and the ratio is the quantity that transfers between problems. Once you know it for one loss surface you know how to move it to another.</p>
+    ]]></content>
+  </entry>
+  <entry>
+    <title>A one-line lemma</title>
+    <id>https://beweise.example.test/2026/one-line-lemma</id>
+    <link rel="alternate" type="text/html" href="https://beweise.example.test/2026/one-line-lemma"/>
+    <published>2026-09-12T08:00:00Z</published>
+    <updated>2026-09-12T08:00:00Z</updated>
+    <summary>Every bounded monotone sequence converges; the proof is the supremum.</summary>
+  </entry>
+  <entry>
+    <title>On reading proofs slowly</title>
+    <id>https://beweise.example.test/2026/reading-slowly</id>
+    <link rel="alternate" type="text/html" href="https://beweise.example.test/2026/reading-slowly"/>
+    <published>2026-09-10T08:00:00Z</published>
+    <updated>2026-09-10T08:00:00Z</updated>
+    <summary type="html"><![CDATA[<p>A proof read at the speed of prose is not read. Each step is a claim, and the claim \(a_n \to a\) is only understood once one has tried to break it. This note collects the habits that make slow reading pleasant rather than dutiful.</p>]]></summary>
+  </entry>
+</feed>

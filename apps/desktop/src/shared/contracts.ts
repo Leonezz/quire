@@ -69,7 +69,7 @@ export interface CorpusImportResult {
   failed: { slug: string; message: string }[];
 }
 
-export interface ReadApi {
+export interface ReadApi extends ReadApiM1 {
   version: string;
   platform: string;
   /** Fires after the main process changed the library on its own (an import); the renderer reloads the list. */
@@ -89,4 +89,147 @@ export interface ReadApi {
   /** Raw bytes of a stored PDF; undefined when the material has none. */
   getMaterialBytes: (id: string) => Promise<Uint8Array | undefined>;
   listMaterials: () => Promise<MaterialSummary[]>;
+}
+
+// ---------------------------------------------------------------------------
+// M1: sources, the Inbox / Queue loop, reading events, search.
+// ---------------------------------------------------------------------------
+
+export type SourceKind = "feed" | "arxiv";
+
+/** A subscription. `locator` is the feed URL, or the arXiv category (e.g. "cs.CL") for kind "arxiv". */
+export interface SourceRecord {
+  id: string;
+  kind: SourceKind;
+  locator: string;
+  title: string;
+  /** The site the feed belongs to, when the feed declares one. */
+  siteUrl?: string;
+  addedAt: string;
+  /** Refresh cadence; the scheduler skips a source whose last sync is younger than this. */
+  intervalMinutes: number;
+  lastSyncAt?: string;
+  lastSuccessAt?: string;
+  /** Message of the most recent failed sync; cleared by the next success. */
+  lastError?: string;
+  /** Consecutive failed syncs. */
+  failureCount: number;
+  pausedAt?: string;
+  itemCount: number;
+  keptCount: number;
+  /** Items per week, averaged over the last four weeks of published dates. */
+  weeklyRate: number;
+}
+
+export interface ItemSignals {
+  code?: boolean;
+  math?: boolean;
+  figures?: boolean;
+  lang?: string;
+}
+
+/**
+ * One entry a source produced. Undecided until read, queued or dismissed; the Inbox lists
+ * only undecided items, the Queue only queued ones (ordered by queuePosition).
+ */
+export interface ItemRecord {
+  id: string;
+  sourceId: string;
+  sourceTitle: string;
+  sourceKind: SourceKind;
+  title: string;
+  /** The first sentences of the entry, for the row and the preview. Plain text, at most ~300 chars. */
+  gist: string;
+  /** Where the full material lives (the article URL, or the arXiv abstract page). */
+  link: string;
+  publishedAt: string;
+  fetchedAt: string;
+  readingMinutes: number;
+  signals: ItemSignals;
+  /** True when the feed carried only a summary; the full text is fetched on Read. */
+  summaryOnly: boolean;
+  /** Set once the item has been read (opened) at least once. */
+  openedAt?: string;
+  finishedAt?: string;
+  queuedAt?: string;
+  queuePosition?: number;
+  dismissedAt?: string;
+  /** The library material this item was read as, once it has been opened. */
+  materialId?: string;
+  introducedBy?: "agent";
+}
+
+export type ItemDecision = "queue" | "dismiss" | "unqueue" | "undismiss";
+
+export type SourceDetection =
+  | { kind: "feed"; url: string; title?: string }
+  | { kind: "arxiv"; category: string; title: string }
+  | { kind: "page"; url: string };
+
+export type AddSourceResult =
+  | { ok: true; source: SourceRecord; added: number }
+  | { ok: false; code: string; message: string };
+
+export type SyncSourceResult =
+  | { ok: true; source: SourceRecord; added: number }
+  | { ok: false; code: string; message: string; source: SourceRecord };
+
+export type ReadingEventKind = "opened" | "finished" | "kept" | "queued" | "dismissed";
+
+export interface ReadingEvent {
+  id: string;
+  kind: ReadingEventKind;
+  /** The item id (opened / queued / dismissed) or the material id (finished / kept). */
+  ref: string;
+  at: string;
+}
+
+/** The north star, computed locally: materials read to completion in the current ISO week and the one before. */
+export interface ReadingStats {
+  weekStart: string;
+  finishedThisWeek: number;
+  finishedLastWeek: number;
+  openedThisWeek: number;
+}
+
+export interface SearchHit {
+  kind: "material" | "item";
+  id: string;
+  title: string;
+  /** Source or host, then a date when known. */
+  subtitle: string;
+}
+
+export interface ReadApiM1 {
+  /** What a pasted string is: a feed, an arXiv category, or a plain page. Fetches the URL once when needed. */
+  detectSource: (input: string) => Promise<SourceDetection>;
+  /** Subscribe (feed URL or arXiv category, as detectSource reports it) and run the first sync. */
+  addSource: (input: string) => Promise<AddSourceResult>;
+  listSources: () => Promise<SourceRecord[]>;
+  syncSource: (id: string) => Promise<SyncSourceResult>;
+  /** Refresh every source that is due; resolves when all are done. */
+  syncAllSources: () => Promise<void>;
+  pauseSource: (id: string, paused: boolean) => Promise<SourceRecord>;
+  /** Disconnects the source and drops its undecided items; read and kept material stays. */
+  removeSource: (id: string) => Promise<void>;
+  /** Fires after the scheduler (or an add / sync / decision made elsewhere) changed sources or items. */
+  onSourcesChanged: (listener: () => void) => () => void;
+
+  /** Undecided items, newest first. */
+  listInbox: () => Promise<ItemRecord[]>;
+  /** Queued items in queue order. */
+  listQueue: () => Promise<ItemRecord[]>;
+  getItem: (id: string) => Promise<ItemRecord | undefined>;
+  /** Read now: materializes the link (arXiv: HTML first, then PDF), marks the item opened, returns the material. */
+  readItem: (id: string) => Promise<OpenUrlResult>;
+  decideItem: (id: string, decision: ItemDecision) => Promise<ItemRecord>;
+  /** The complete new order of the queue, as item ids. */
+  reorderQueue: (ids: string[]) => Promise<void>;
+
+  /** finished / kept refer to a material id; the others to an item id. */
+  recordReadingEvent: (kind: ReadingEventKind, ref: string) => Promise<ReadingEvent>;
+  readingStats: () => Promise<ReadingStats>;
+
+  /** Titles (and bylines / source titles) of materials and items matching every word of the query; at most 50 hits. */
+  search: (query: string) => Promise<SearchHit[]>;
 }

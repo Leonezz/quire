@@ -3,8 +3,8 @@ export type { ButtonProps, ButtonVariant, ButtonSize } from "./primitives/Button
 export { Toolbar, ToolbarGroup, ToolbarTitle, ToolbarButton, AskButton } from "./primitives/Toolbar";
 export { Sidebar, SidebarSection, SidebarItem } from "./primitives/Sidebar";
 export type { SidebarItemProps } from "./primitives/Sidebar";
-export { ItemList, ItemGroup, ItemRow } from "./primitives/ItemList";
-export type { ItemRowProps, RowState } from "./primitives/ItemList";
+export { ItemList, ItemGroup, ItemSection, ItemRow } from "./primitives/ItemList";
+export type { ItemRowProps, RowState, RowHealth } from "./primitives/ItemList";
 export { Segmented, Segment } from "./primitives/Segmented";
 export { Inspector, InspectorTabs, InspectorTab, InspectorPanel, InspectorSection } from "./primitives/Inspector";
 export { Switch } from "./primitives/Switch";
@@ -20,3 +20,5 @@ export type { TextFieldProps } from "./primitives/TextField";
 export { Popover } from "./primitives/Popover";
 export { TocRail } from "./primitives/TocRail";
 export type { TocEntry, TocRailProps } from "./primitives/TocRail";
+export { CommandPalette } from "./primitives/CommandPalette";
+export type { CommandPaletteItem, CommandPaletteProps } from "./primitives/CommandPalette";

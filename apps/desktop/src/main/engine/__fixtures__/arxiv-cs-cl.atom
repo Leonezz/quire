@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom" xmlns:arxiv="http://arxiv.org/schemas/atom">
+  <link href="http://export.arxiv.org/api/query?search_query%3Dcat%3Acs.CL%26id_list%3D%26start%3D0%26max_results%3D50" rel="self" type="application/atom+xml"/>
+  <title type="html">ArXiv Query: search_query=cat:cs.CL&amp;id_list=&amp;start=0&amp;max_results=50</title>
+  <id>http://arxiv.org/api/aDhL0Xp2Qw9vY8e7mK3nR1tS6uZ4</id>
+  <updated>2026-09-18T00:00:00-04:00</updated>
+  <opensearch:totalResults xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">61234</opensearch:totalResults>
+  <opensearch:startIndex xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">0</opensearch:startIndex>
+  <opensearch:itemsPerPage xmlns:opensearch="http://a9.com/-/spec/opensearch/1.1/">50</opensearch:itemsPerPage>
+  <entry>
+    <id>http://arxiv.org/abs/2409.12345v1</id>
+    <updated>2026-09-17T17:59:12Z</updated>
+    <published>2026-09-17T17:59:12Z</published>
+    <title>Retrieval Without Regret: Calibrated Abstention for Long-Context Question Answering</title>
+    <summary>  Long-context language models answer many questions from the prompt alone, yet
+they retrieve anyway, paying latency for evidence they do not use. We study when
+retrieval helps and propose a calibrated abstention rule that predicts, from the
+model's own token-level uncertainty, whether the retrieved passages will change
+the answer. On three long-context benchmarks the rule skips 41% of retrievals
+with no loss in exact match, and its errors concentrate on questions the model
+answers wrongly with or without evidence.
+</summary>
+    <author>
+      <name>Mara Lindqvist</name>
+    </author>
+    <author>
+      <name>Tomasz Nowak</name>
+    </author>
+    <arxiv:comment xmlns:arxiv="http://arxiv.org/schemas/atom">14 pages, 6 figures</arxiv:comment>
+    <link href="http://arxiv.org/abs/2409.12345v1" rel="alternate" type="text/html"/>
+    <link title="pdf" href="http://arxiv.org/pdf/2409.12345v1" rel="related" type="application/pdf"/>
+    <arxiv:primary_category xmlns:arxiv="http://arxiv.org/schemas/atom" term="cs.CL" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cs.CL" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cs.LG" scheme="http://arxiv.org/schemas/atom"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2409.11876v2</id>
+    <updated>2026-09-17T14:02:41Z</updated>
+    <published>2026-09-16T09:11:05Z</published>
+    <title>Tokenizer Drift: Measuring Vocabulary Mismatch Across Model Generations</title>
+    <summary>  Successive model generations ship new tokenizers, and downstream corpora
+tokenised for one generation are reused for the next. We define tokenizer drift
+as the divergence between the token distributions two tokenizers induce on the
+same text and show it predicts fine-tuning loss on transferred datasets better
+than vocabulary overlap does.
+</summary>
+    <author>
+      <name>Yusuf Demir</name>
+    </author>
+    <arxiv:comment xmlns:arxiv="http://arxiv.org/schemas/atom">Accepted at EMNLP 2026 Findings</arxiv:comment>
+    <link href="http://arxiv.org/abs/2409.11876v2" rel="alternate" type="text/html"/>
+    <link title="pdf" href="http://arxiv.org/pdf/2409.11876v2" rel="related" type="application/pdf"/>
+    <arxiv:primary_category xmlns:arxiv="http://arxiv.org/schemas/atom" term="cs.CL" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cs.CL" scheme="http://arxiv.org/schemas/atom"/>
+  </entry>
+  <entry>
+    <id>http://arxiv.org/abs/2409.10021v1</id>
+    <updated>2026-09-15T21:30:00Z</updated>
+    <published>2026-09-15T21:30:00Z</published>
+    <title>Small Evaluators, Large Judgments: When a 1B Model Grades a 70B Model</title>
+    <summary>  We ask whether small models can serve as reliable judges of larger models'
+outputs. Across 12 tasks, a 1B judge agrees with human raters at 0.71 kappa on
+factual questions but drops to 0.38 on open-ended writing, and the gap is
+explained almost entirely by the judge's own ability to produce the reference.
+</summary>
+    <author>
+      <name>Priya Raman</name>
+    </author>
+    <author>
+      <name>Elena Fischer</name>
+    </author>
+    <author>
+      <name>Kwame Mensah</name>
+    </author>
+    <link href="http://arxiv.org/abs/2409.10021v1" rel="alternate" type="text/html"/>
+    <link title="pdf" href="http://arxiv.org/pdf/2409.10021v1" rel="related" type="application/pdf"/>
+    <arxiv:primary_category xmlns:arxiv="http://arxiv.org/schemas/atom" term="cs.CL" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cs.CL" scheme="http://arxiv.org/schemas/atom"/>
+    <category term="cs.AI" scheme="http://arxiv.org/schemas/atom"/>
+  </entry>
+</feed>

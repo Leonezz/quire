@@ -21,5 +21,27 @@ const api: ReadApi = {
   saveAnnotation: (annotation) => ipcRenderer.invoke("annotation:save", annotation),
   deleteAnnotation: (materialId, id) => ipcRenderer.invoke("annotation:delete", materialId, id),
   listMaterials: () => ipcRenderer.invoke("material:list"),
+  // M1: sources, Inbox / Queue, reading events, search.
+  detectSource: (input) => ipcRenderer.invoke("source:detect", input),
+  addSource: (input) => ipcRenderer.invoke("source:add", input),
+  listSources: () => ipcRenderer.invoke("source:list"),
+  syncSource: (id) => ipcRenderer.invoke("source:sync", id),
+  syncAllSources: () => ipcRenderer.invoke("source:syncAll"),
+  pauseSource: (id, paused) => ipcRenderer.invoke("source:pause", id, paused),
+  removeSource: (id) => ipcRenderer.invoke("source:remove", id),
+  onSourcesChanged: (listener) => {
+    const handler = () => listener();
+    ipcRenderer.on("sources:changed", handler);
+    return () => ipcRenderer.removeListener("sources:changed", handler);
+  },
+  listInbox: () => ipcRenderer.invoke("item:inbox"),
+  listQueue: () => ipcRenderer.invoke("item:queue"),
+  getItem: (id) => ipcRenderer.invoke("item:get", id),
+  readItem: (id) => ipcRenderer.invoke("item:read", id),
+  decideItem: (id, decision) => ipcRenderer.invoke("item:decide", id, decision),
+  reorderQueue: (ids) => ipcRenderer.invoke("item:reorder", ids),
+  recordReadingEvent: (kind, ref) => ipcRenderer.invoke("event:record", kind, ref),
+  readingStats: () => ipcRenderer.invoke("event:stats"),
+  search: (query) => ipcRenderer.invoke("search:query", query),
 };
 contextBridge.exposeInMainWorld("read", api);
