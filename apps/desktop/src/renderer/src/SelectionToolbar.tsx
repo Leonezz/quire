@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Copy, MessageSquarePlus } from "lucide-react";
+import { Copy, MessageSquarePlus, Sparkles } from "lucide-react";
 import { Button } from "@read/ui";
 import type { AnnotationColor } from "../../shared/contracts";
 import { ANNOTATION_COLORS } from "./annotations";
@@ -10,9 +10,9 @@ type Placement = { top: number; left: number; capture: SelectionCapture };
 
 /**
  * Floats above a text selection inside the article: pick a colour to highlight,
- * add a note, or copy a citation. Nothing is stored until a button is pressed.
+ * add a note, copy a citation, or ask the agent about it. Nothing is stored until a button is pressed.
  */
-export function SelectionToolbar({ root, viewport, capture, onHighlight, onNote, onCopy }: {
+export function SelectionToolbar({ root, viewport, capture, onHighlight, onNote, onCopy, onAsk }: {
   root: HTMLElement | null;
   viewport: HTMLElement | null;
   /** Turns the live selection into a locator + quote, or undefined when it cannot be anchored (cross-page, outside the text). */
@@ -20,6 +20,8 @@ export function SelectionToolbar({ root, viewport, capture, onHighlight, onNote,
   onHighlight: (capture: SelectionCapture, color: AnnotationColor) => void;
   onNote: (capture: SelectionCapture) => void;
   onCopy: (capture: SelectionCapture) => void;
+  /** "Ask about this": the reader makes the selection the agent's context and opens the panel. */
+  onAsk: (capture: SelectionCapture) => void;
 }) {
   const [placement, setPlacement] = useState<Placement | null>(null);
 
@@ -87,6 +89,7 @@ export function SelectionToolbar({ root, viewport, capture, onHighlight, onNote,
       <span className="mx-1 h-5 w-px shrink-0 bg-separator" />
       <Button variant="quiet" size="sm" aria-label="Add a note" className="size-8 min-w-0 shrink-0 px-0" onPress={() => { onNote(placement.capture); done(); }}><MessageSquarePlus className="size-[18px]" /></Button>
       <Button variant="quiet" size="sm" aria-label="Copy citation" className="size-8 min-w-0 shrink-0 px-0" onPress={() => { onCopy(placement.capture); done(); }}><Copy className="size-[18px]" /></Button>
+      <Button variant="quiet" size="sm" aria-label="Ask about this" className="size-8 min-w-0 shrink-0 px-0" onPress={() => { onAsk(placement.capture); done(); }}><Sparkles className="size-[18px]" /></Button>
     </div>
   );
 }

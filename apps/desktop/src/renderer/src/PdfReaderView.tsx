@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, Highlighter, List, Sparkles } from "lucide-react";
-import { AskButton, Inspector, InspectorPanel, InspectorSection, InspectorTab, InspectorTabs, Kbd, TocRail, Toolbar, ToolbarButton, ToolbarGroup, ToolbarTitle, type Key } from "@read/ui";
+import { AskButton, Inspector, InspectorPanel, InspectorTab, InspectorTabs, Kbd, TocRail, Toolbar, ToolbarButton, ToolbarGroup, ToolbarTitle, type Key } from "@read/ui";
 import { PdfCanvasViewer, parsePdfRegionsLocator, pdfReadingProgress, pdfRegionLocatorForSelection, pdfSelectionText, usePdfReaderStateMemory, type PdfCanvasViewerHandle, type PdfOutlineEntry, type PdfReaderState, type PdfRegionOverlay } from "@read/reader-pdf";
 import { ANNOTATION_COLORS, citationFor, useAnnotations } from "./annotations";
 import { NotesPanel, type NoteDraft } from "./NotesPanel";
+import { AgentPanel } from "./AgentPanel";
+import { hostLabel } from "./ArtifactLineage";
 import { SelectionToolbar, type SelectionCapture } from "./SelectionToolbar";
-import type { Annotation } from "../../shared/contracts";
+import type { AgentContext, Annotation } from "../../shared/contracts";
 import type { MaterialRecord } from "../../shared/contracts";
 import { read } from "./api";
 import { ReadingSettings } from "./ReadingSettings";
@@ -14,7 +16,7 @@ import { applyTheme, loadPrefs, savePrefs, type ReadingPrefs } from "./readingPr
 type Loaded = { status: "loading" } | { status: "ready"; url: string } | { status: "error"; message: string };
 
 /** PDF reading: the same toolbar contract as the article reader, the pages rendered by pdf.js. */
-export function PdfReaderView({ material, onBack, onProgress, embedded = false }: { material: MaterialRecord; onBack?: (() => void) | undefined; onProgress?: ((fraction: number) => void) | undefined; embedded?: boolean }) {
+export function PdfReaderView({ material, onBack, onOpenLink, onOpenMaterial, onProgress, embedded = false }: { material: MaterialRecord; onBack?: (() => void) | undefined; onOpenLink: (url: string) => void; onOpenMaterial: (id: string) => void; onProgress?: ((fraction: number) => void) | undefined; embedded?: boolean }) {
   const pdf = material.pdf;
   const [loaded, setLoaded] = useState<Loaded>({ status: "loading" });
   const [prefs, setPrefs] = useState<ReadingPrefs>(loadPrefs);
@@ -23,6 +25,8 @@ export function PdfReaderView({ material, onBack, onProgress, embedded = false }
   const { annotations, error: annotationsError, add, update, remove } = useAnnotations(material.id);
   const [noteDraft, setNoteDraft] = useState<NoteDraft | null>(null);
   const [activeAnnotation, setActiveAnnotation] = useState<string | undefined>(undefined);
+  const [asked, setAsked] = useState<SelectionCapture | null>(null);
+  const agentContext: AgentContext = asked ? { kind: "selection", materialId: material.id, quote: asked.quote, locator: asked.locator } : { kind: "material", materialId: material.id };
   const mainRef = useRef<HTMLElement>(null);
   const [outline, setOutline] = useState<readonly PdfOutlineEntry[]>([]);
   const [page, setPage] = useState(1);
@@ -53,6 +57,7 @@ export function PdfReaderView({ material, onBack, onProgress, embedded = false }
     };
   }, [material.id]);
 
+  // On `document`, not `window`: the shell's own ⌘J listens on the window and yields when a reader already handled it.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
@@ -62,8 +67,8 @@ export function PdfReaderView({ material, onBack, onProgress, embedded = false }
       if (event.key === "n" && !typing && !event.metaKey && !event.ctrlKey) { event.preventDefault(); setInspectorTab((tab) => (tab === "notes" ? null : "notes")); }
       if (event.key === "t" && !typing && !event.metaKey && !event.ctrlKey) { event.preventDefault(); setTocPinned((pinned) => !pinned); }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
   }, [inspectorTab, onBack]);
 
   // The current section is the last outline entry that starts on or before the visible page.
@@ -94,7 +99,7 @@ export function PdfReaderView({ material, onBack, onProgress, embedded = false }
   };
   const inspectorOpen = inspectorTab !== null;
 
-  const subtitle = [material.origin === "file" ? decodeURIComponent(material.url.replace("file:///", "")) : new URL(material.finalUrl).hostname, pdf ? `${pdf.pages} pages` : "", `${progress}%`].filter(Boolean).join(" · ");
+  const subtitle = [material.origin === "agent" ? "Agent" : hostLabel(material), pdf ? `${pdf.pages} pages` : "", `${progress}%`].filter(Boolean).join(" · ");
 
   return (
     <div className={`grid h-full ${inspectorOpen ? "grid-cols-[minmax(0,1fr)_360px]" : "grid-cols-[minmax(0,1fr)]"} grid-rows-[56px_minmax(0,1fr)] gap-3 ${embedded ? "p-0" : "p-3"}`}>
@@ -112,7 +117,7 @@ export function PdfReaderView({ material, onBack, onProgress, embedded = false }
 
       <main ref={mainRef} key={material.id} className="reader-enter relative grid min-h-0 grid-rows-[2px_minmax(0,1fr)] overflow-hidden rounded-panel bg-content shadow-[0_0_0_1px_var(--separator-soft),0_6px_20px_rgba(15,17,21,.04)]">
         <div className="bg-separator-soft"><i className="block h-full bg-accent opacity-80" style={{ width: `${progress}%` }} /></div>
-        <SelectionToolbar root={mainRef.current} viewport={mainRef.current} capture={captureSelection} onHighlight={(capture, color) => void add({ ...capture, kind: "highlight", color })} onNote={(capture) => void onNote(capture)} onCopy={(capture) => void navigator.clipboard.writeText(citationFor(material, { quote: capture.quote }))} />
+        <SelectionToolbar root={mainRef.current} viewport={mainRef.current} capture={captureSelection} onHighlight={(capture, color) => void add({ ...capture, kind: "highlight", color })} onNote={(capture) => void onNote(capture)} onCopy={(capture) => void navigator.clipboard.writeText(citationFor(material, { quote: capture.quote }))} onAsk={(capture) => { setAsked(capture); setInspectorTab("agent"); }} />
         {outline.length > 1 ? (
           <div className="pointer-events-none absolute inset-y-6 right-6 z-10 flex items-center">
             <TocRail aria-label="Contents" entries={tocEntries} activeId={activeEntry} pinned={tocPinned} onSelect={(id) => { const entry = outline.find((item) => item.id === id); if (entry) viewerRef.current?.goToPage(entry.page); }} />
@@ -149,7 +154,7 @@ export function PdfReaderView({ material, onBack, onProgress, embedded = false }
             <NotesPanel material={material} annotations={annotations} error={annotationsError} activeId={activeAnnotation} draft={noteDraft} onDraftChange={setNoteDraft}
               onJump={jumpTo} onUpdateNote={(id, note) => void update(id, { note })} onDelete={(id) => void remove(id)} sectionFor={sectionFor} />
           </InspectorPanel>
-          <InspectorPanel id="agent"><InspectorSection title="Context"><span className="inline-flex h-[26px] items-center rounded-pill bg-content px-2.5 text-[12.5px] font-medium shadow-[0_0_0_1px_var(--separator)]">this PDF</span></InspectorSection><p className="text-[11.5px] text-label-3">Connect Codex in Settings to use Ask.</p></InspectorPanel>
+          <InspectorPanel id="agent"><AgentPanel context={agentContext} subject="this PDF" onOpenMaterial={onOpenMaterial} onOpenLink={onOpenLink} onClearSelection={() => setAsked(null)} /></InspectorPanel>
         </Inspector>
       ) : null}
     </div>

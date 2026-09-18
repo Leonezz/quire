@@ -1,0 +1,126 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { PAGE_CHARS, agentTools, createToolHandler, type ToolDeps } from "./agent-tools";
+import { AnnotationStore } from "./annotations";
+import { openDatabase, type Database } from "./db";
+import type { Fetcher } from "./fetch";
+import { ItemStore } from "./items";
+import { MaterialStore } from "./materials";
+
+let root = "";
+let db: Database;
+beforeEach(async () => { root = await mkdtemp(join(tmpdir(), "read-agent-tools-")); db = openDatabase(join(root, "quire.sqlite")); });
+afterEach(async () => { db.close(); await rm(root, { recursive: true, force: true }); });
+
+const page = `<!doctype html><html><head><title>Imported page</title></head><body><article><h1>Imported page</h1>${"<p>Enough text for the extractor to accept the article as a real body of prose.</p>".repeat(10)}</article></body></html>`;
+const fetcher: Fetcher = async (url) => ({ bytes: new TextEncoder().encode(page), mediaType: "text/html", finalUrl: url.toString() });
+
+async function setup() {
+  const store = new MaterialStore(root, fetcher);
+  const annotations = new AnnotationStore(root);
+  const items = new ItemStore(db);
+  const saved = await store.openFile({ name: "momentum.md", mediaType: "", bytes: new TextEncoder().encode(`# Momentum, revisited\n\n${"Stochastic momentum keeps the direction of the last steps. ".repeat(600)}`) });
+  if (!saved.ok) throw new Error(saved.message);
+  items.upsert({ id: "src-a", title: "Systems Notes", kind: "feed" }, [
+    { externalId: "1", title: "Momentum in optimizers", link: "https://example.test/momentum", publishedAt: "2026-09-10T00:00:00.000Z", gist: "A gist.", readingMinutes: 4, signals: {}, summaryOnly: true },
+    { externalId: "2", title: "Unrelated post", link: "https://example.test/other", publishedAt: "2026-09-11T00:00:00.000Z", gist: "Other.", readingMinutes: 2, signals: {}, summaryOnly: true },
+  ]);
+  const changes: string[] = [];
+  const deps: ToolDeps = { store, items, annotations, onChanged: () => changes.push("changed"), onMaterialized: (record) => changes.push(`materialized ${record.title}`) };
+  return { store, annotations, items, handle: createToolHandler(deps), material: saved.material, changes };
+}
+
+const parse = (text: string) => JSON.parse(text) as Record<string, unknown>;
+
+describe("agentTools", () => {
+  it("declares closed object schemas and tells the model to cite by id and exact quote", () => {
+    for (const tool of agentTools) {
+      expect(tool.inputSchema.type).toBe("object");
+      expect(tool.inputSchema.additionalProperties).toBe(false);
+    }
+    expect(agentTools.map((t) => t.name)).toEqual(["library_search", "library_recent", "material_read", "material_annotations", "inbox_list", "library_import", "artifact_write"]);
+    expect(agentTools.find((t) => t.name === "material_read")?.description).toMatch(/exact words/);
+  });
+});
+
+describe("createToolHandler", () => {
+  it("searches materials and items, and lists the newest materials", async () => {
+    const { handle, material } = await setup();
+    const search = await handle({ tool: "library_search", arguments: { query: "momentum" }, callId: "c1" });
+    expect(search.success).toBe(true);
+    expect(search.summary).toBe('library_search "momentum" → 2 hits');
+    expect(parse(search.text)).toMatchObject({ ok: true, hits: [{ kind: "material", id: material.id, title: "Momentum, revisited" }, { kind: "item", title: "Momentum in optimizers" }] });
+    const recent = await handle({ tool: "library_recent", arguments: {}, callId: "c2" });
+    expect(parse(recent.text)).toMatchObject({ ok: true, materials: [{ id: material.id, title: "Momentum, revisited", origin: "file", readingMinutes: material.readingMinutes }] });
+    expect(recent.summary).toBe("library_recent → 1 material");
+  });
+
+  it("pages a material's markdown and refuses unknown ids and bad offsets", async () => {
+    const { handle, material } = await setup();
+    const first = parse((await handle({ tool: "material_read", arguments: { id: material.id }, callId: "c1" })).text);
+    expect(first).toMatchObject({ ok: true, id: material.id, title: "Momentum, revisited", offset: 0, nextOffset: PAGE_CHARS, totalCharacters: material.markdown!.length });
+    expect((first.content as string).length).toBe(PAGE_CHARS);
+    const second = parse((await handle({ tool: "material_read", arguments: { id: material.id, offset: PAGE_CHARS }, callId: "c2" })).text);
+    expect(second).toMatchObject({ offset: PAGE_CHARS, nextOffset: null });
+    expect((first.content as string) + (second.content as string)).toBe(material.markdown);
+    const unknown = await handle({ tool: "material_read", arguments: { id: "0123456789abcdef" }, callId: "c3" });
+    expect(unknown.success).toBe(false);
+    expect(parse(unknown.text)).toMatchObject({ ok: false, error: /not in the library/ });
+    const invalid = await handle({ tool: "material_read", arguments: { id: "nope", extra: 1 }, callId: "c4" });
+    expect(parse(invalid.text).error).toMatch(/Invalid arguments: Unknown argument\(s\): extra/);
+    const past = await handle({ tool: "material_read", arguments: { id: material.id, offset: 10_000_000 }, callId: "c5" });
+    expect(parse(past.text).error).toMatch(/past the end/);
+  });
+
+  it("returns the reader's annotations and the undecided inbox", async () => {
+    const { handle, material, annotations } = await setup();
+    await annotations.save({ id: "a1a1a1a1a1a1a1a1", materialId: material.id, locator: "loc", quote: "keeps the direction", note: "why?", kind: "comment", color: "#ffd400", createdAt: "", updatedAt: "" });
+    const marks = parse((await handle({ tool: "material_annotations", arguments: { id: material.id }, callId: "c1" })).text);
+    expect(marks).toMatchObject({ ok: true, annotations: [{ quote: "keeps the direction", note: "why?", kind: "comment", color: "#ffd400" }] });
+    expect((marks.annotations as unknown[]).length).toBe(1);
+    const inbox = await handle({ tool: "inbox_list", arguments: { limit: 1 }, callId: "c2" });
+    expect(parse(inbox.text)).toMatchObject({ ok: true, items: [{ title: "Unrelated post", sourceTitle: "Systems Notes", link: "https://example.test/other" }] });
+    expect(inbox.summary).toBe("inbox_list → 1 item");
+    expect(parse((await handle({ tool: "inbox_list", arguments: { limit: 0 }, callId: "c3" })).text).error).toMatch(/between 1 and 100/);
+  });
+
+  it("imports a page, notifies the library and prefetches its images", async () => {
+    const { handle, store, changes } = await setup();
+    const reply = await handle({ tool: "library_import", arguments: { url: "https://example.test/new-page" }, callId: "c1" });
+    expect(reply.success).toBe(true);
+    const value = parse(reply.text);
+    expect(value).toMatchObject({ ok: true, title: "Imported page" });
+    expect(await store.get(value.id as string)).toMatchObject({ origin: "web" });
+    expect(changes).toEqual(["materialized Imported page", "changed"]);
+    const refused = await handle({ tool: "library_import", arguments: { url: "http://localhost/x" }, callId: "c2" });
+    expect(refused.success).toBe(false);
+    expect(parse(refused.text).error).toMatch(/URL_PRIVATE/);
+    expect(changes).toHaveLength(2);
+  });
+
+  it("writes an artifact with its lineage and rejects unknown sources", async () => {
+    const { handle, store, material, changes } = await setup();
+    const reply = await handle({ tool: "artifact_write", arguments: { title: "On momentum", markdown: "# On momentum\n\nSee [" + material.id + "]: \"keeps the direction\".", sources: [material.id] }, callId: "c1" });
+    expect(reply.success).toBe(true);
+    const { id } = parse(reply.text) as { id: string };
+    const saved = await store.get(id);
+    expect(saved).toMatchObject({ origin: "agent", lineage: [material.id], title: "On momentum", mediaType: "text/markdown", url: `quire://artifact/${id}` });
+    expect(saved?.reader?.schema).toBe("reader.document.v2");
+    expect(saved?.quality).toMatchObject({ completeness: "declared_full", identityConfidence: "derived" });
+    expect((await store.list()).find((m) => m.id === id)?.lineage).toEqual([material.id]);
+    expect(changes).toEqual(["changed"]);
+    const bad = await handle({ tool: "artifact_write", arguments: { title: "x", markdown: "y", sources: [material.id, "0123456789abcdef"] }, callId: "c2" });
+    expect(bad.success).toBe(false);
+    expect(parse(bad.text).error).toMatch(/Unknown material ids in lineage: 0123456789abcdef/);
+    expect(changes).toHaveLength(1);
+  });
+
+  it("names an unknown tool and the tools that exist", async () => {
+    const { handle } = await setup();
+    const reply = await handle({ tool: "delete_everything", arguments: {}, callId: "c1" });
+    expect(reply.success).toBe(false);
+    expect(parse(reply.text).error).toMatch(/Unknown tool delete_everything\. Available: library_search/);
+  });
+});

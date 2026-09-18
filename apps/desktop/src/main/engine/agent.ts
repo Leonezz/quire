@@ -1,0 +1,104 @@
+import { mkdir } from "node:fs/promises";
+import { join } from "node:path";
+import type { AgentEvent, AgentRequest, AgentResult, AgentStatus, MaterialRecord, MaterialSummary } from "../../shared/contracts";
+import { buildPrompt } from "./agent-prompt";
+import { CodexError, type CodexAccount, type CodexClient, type DynamicTool, type ToolCall, type ToolReply } from "./codex-client";
+
+// The agent as the renderer sees it: a status, one question at a time, events while it runs.
+// Codex runs in <userData>/agent, an empty read-only directory; the library is reached only through the tools.
+
+export type AgentClient = Pick<CodexClient, "version" | "initialize" | "account" | "login" | "waitForAccount" | "runTurn" | "interrupt" | "busy">;
+
+export interface AgentServiceDeps {
+  client: AgentClient;
+  tools: readonly DynamicTool[];
+  toolHandler: (call: ToolCall) => Promise<ToolReply>;
+  store: { list: () => Promise<MaterialSummary[]>; get: (id: string) => Promise<MaterialRecord | undefined> };
+  userData: string;
+  onEvent: (event: AgentEvent) => void;
+  /** Opens the sign-in page; index.ts passes shell.openExternal. */
+  openExternal: (url: string) => Promise<void>;
+}
+
+type FailureCode = Extract<AgentResult, { ok: false }>["code"];
+const SIGN_IN = "Sign in to ChatGPT to use the agent.";
+
+function accountLabel(account: CodexAccount): string {
+  if (account.type === "chatgpt") { const { email, planType } = account as { email?: string | null; planType?: string }; return email ?? (planType ? `ChatGPT ${planType}` : "ChatGPT"); }
+  if (account.type === "apiKey") return "API key";
+  return account.type;
+}
+
+function failureOf(error: unknown): { code: FailureCode; message: string } {
+  const message = error instanceof Error ? error.message : String(error);
+  if (error instanceof CodexError) {
+    if (error.code === "AGENT_UNAVAILABLE" || error.code === "AUTH_REQUIRED" || error.code === "TURN_RUNNING" || error.code === "TURN_INTERRUPTED" || error.code === "TURN_TIMEOUT") return { code: error.code, message };
+  }
+  return { code: "TURN_FAILED", message };
+}
+
+export class AgentService {
+  constructor(private readonly deps: AgentServiceDeps) {}
+
+  private get cwd() { return join(this.deps.userData, "agent"); }
+
+  /** Never throws: whatever stops the agent is written into `reason`. */
+  async status(): Promise<AgentStatus> {
+    const { client } = this.deps;
+    const busy = client.busy;
+    let version: string;
+    try { version = await client.version(); }
+    catch (error) { return { available: false, busy, reason: error instanceof Error ? error.message : String(error) }; }
+    try { await client.initialize(); }
+    catch (error) { return { available: false, version, busy, reason: `codex app-server did not start: ${error instanceof Error ? error.message : String(error)}` }; }
+    try {
+      const { account } = await client.account();
+      return account ? { available: true, version, account: accountLabel(account), busy } : { available: true, version, busy, reason: SIGN_IN };
+    } catch (error) { return { available: true, version, busy, reason: `Could not read the account: ${error instanceof Error ? error.message : String(error)}` }; }
+  }
+
+  /** Browser sign-in; resolves with the status once the account is there, or with the reason it is not. */
+  async login(): Promise<AgentStatus> {
+    try {
+      const { authUrl } = await this.deps.client.login();
+      if (!authUrl.startsWith("https://")) throw new CodexError("AUTH_REQUIRED", `Refusing to open a non-https login URL (${authUrl.slice(0, 40)}).`);
+      await this.deps.openExternal(authUrl);
+      await this.deps.client.waitForAccount();
+      return this.status();
+    } catch (error) {
+      const base = await this.status();
+      return { ...base, reason: error instanceof Error ? error.message : String(error) };
+    }
+  }
+
+  async ask(request: AgentRequest): Promise<AgentResult> {
+    const { client, store, onEvent } = this.deps;
+    let material: MaterialRecord | undefined;
+    if (request.context.kind !== "library") {
+      material = await store.get(request.context.materialId);
+      if (!material) return { ok: false, code: "TURN_FAILED", message: `Material ${request.context.materialId} is not in the library.` };
+    }
+    const prompt = buildPrompt(request, { library: await store.list(), ...(material ? { material } : {}) });
+    await mkdir(this.cwd, { recursive: true });
+    let turnId: string | undefined;
+    try {
+      const outcome = await client.runTurn({
+        cwd: this.cwd, prompt, dynamicTools: this.deps.tools, onToolCall: this.deps.toolHandler,
+        ...(request.threadId ? { threadId: request.threadId } : {}),
+        onStarted: (turn) => { turnId = turn.turnId; onEvent({ type: "started", threadId: turn.threadId, turnId: turn.turnId }); },
+        onDelta: (delta) => { if (turnId) onEvent({ type: "delta", turnId, delta }); },
+        onTool: (progress) => { if (turnId) onEvent({ type: "tool", turnId, name: progress.tool, status: progress.status, ...(progress.summary ? { summary: progress.summary } : {}) }); },
+      });
+      onEvent({ type: "completed", turnId: outcome.turnId });
+      return { ok: true, ...outcome };
+    } catch (error) {
+      const failure = failureOf(error);
+      if (turnId) onEvent({ type: "failed", turnId, message: failure.message });
+      return { ok: false, ...failure };
+    }
+  }
+
+  async interrupt(): Promise<void> {
+    await this.deps.client.interrupt();
+  }
+}

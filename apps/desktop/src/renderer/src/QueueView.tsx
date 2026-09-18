@@ -45,7 +45,7 @@ function QueueGroup({ title, items, selectedId, onSelect, onAction, onReorder }:
   );
 }
 
-export function QueueView({ items, selectedId, onSelect, refresh, onOpenLink }: { items: ItemRecord[]; selectedId: string | undefined; onSelect: (id: string | undefined) => void; refresh: () => Promise<void>; onOpenLink: (url: string) => void }) {
+export function QueueView({ items, selectedId, onSelect, refresh, onOpenLink, onOpenMaterial }: { items: ItemRecord[]; selectedId: string | undefined; onSelect: (id: string | undefined) => void; refresh: () => Promise<void>; onOpenLink: (url: string) => void; onOpenMaterial: (id: string) => void }) {
   const continuing = useMemo(() => items.filter((item) => item.openedAt), [items]);
   const upNext = useMemo(() => items.filter((item) => !item.openedAt), [items]);
   const orderedIds = useMemo(() => [...continuing, ...upNext].map((item) => item.id), [continuing, upNext]);
@@ -78,7 +78,7 @@ export function QueueView({ items, selectedId, onSelect, refresh, onOpenLink }: 
       </div>
       <section className="flex min-h-0 flex-col overflow-hidden">
         {reading ? (
-          <ErrorBoundary key={reading.materialId} label="The reader" onReset={closeReader}><MaterialReader id={reading.materialId} onOpenLink={onOpenLink} onBack={closeReader} /></ErrorBoundary>
+          <ErrorBoundary key={reading.materialId} label="The reader" onReset={closeReader}><MaterialReader id={reading.materialId} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onBack={closeReader} /></ErrorBoundary>
         ) : current ? (
           <ItemPreview item={current} busy={busy !== undefined} failure={failure?.itemId === current.id ? failure.message : undefined} error={decisionError} onOpenLink={onOpenLink}
             actions={[

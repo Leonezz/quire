@@ -23,7 +23,7 @@ function groupItems(items: ItemRecord[], grouping: InboxGrouping): Group[] {
 
 const shortcuts = { q: "queue", e: "dismiss" } as const;
 
-export function InboxView({ items, grouping, selectedId, onSelect, refresh, onOpenLink }: { items: ItemRecord[]; grouping: InboxGrouping; selectedId: string | undefined; onSelect: (id: string | undefined) => void; refresh: () => Promise<void>; onOpenLink: (url: string) => void }) {
+export function InboxView({ items, grouping, selectedId, onSelect, refresh, onOpenLink, onOpenMaterial }: { items: ItemRecord[]; grouping: InboxGrouping; selectedId: string | undefined; onSelect: (id: string | undefined) => void; refresh: () => Promise<void>; onOpenLink: (url: string) => void; onOpenMaterial: (id: string) => void }) {
   const groups = useMemo(() => groupItems(items, grouping), [items, grouping]);
   const orderedIds = useMemo(() => groups.flatMap((group) => group.items.map((item) => item.id)), [groups]);
   const { reading, failure, decisionError, busy, listRef, select, readNow, decide, closeReader } = useItemReader({ orderedIds, selectedId, onSelect, refresh, leavesOnRead: true, shortcuts });
@@ -51,7 +51,7 @@ export function InboxView({ items, grouping, selectedId, onSelect, refresh, onOp
       </div>
       <section className="flex min-h-0 flex-col overflow-hidden">
         {reading ? (
-          <ErrorBoundary key={reading.materialId} label="The reader" onReset={closeReader}><MaterialReader id={reading.materialId} onOpenLink={onOpenLink} onBack={closeReader} /></ErrorBoundary>
+          <ErrorBoundary key={reading.materialId} label="The reader" onReset={closeReader}><MaterialReader id={reading.materialId} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onBack={closeReader} /></ErrorBoundary>
         ) : current ? (
           <ItemPreview item={current} busy={busy !== undefined} failure={failure?.itemId === current.id ? failure.message : undefined} error={decisionError} onOpenLink={onOpenLink}
             actions={[

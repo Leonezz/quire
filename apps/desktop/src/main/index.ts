@@ -5,7 +5,7 @@ import { MaterialStore } from "./engine/materials";
 import { ImageCache } from "./engine/images";
 import { AnnotationStore } from "./engine/annotations";
 import { imageUrlsOf } from "./engine/materials";
-import type { AddSourceResult, ItemDecision, MaterialRecord, OpenUrlResult, ReadingEventKind, SearchHit } from "../shared/contracts";
+import type { AddSourceResult, AgentContext, AgentEvent, AgentRequest, AgentTask, ItemDecision, MaterialRecord, OpenUrlResult, ReadingEventKind, SearchHit } from "../shared/contracts";
 import { MAX_BYTES, fetchPage } from "./engine/fetch";
 import { openDatabase } from "./engine/db";
 import { ItemStore } from "./engine/items";
@@ -15,6 +15,9 @@ import { syncDue, syncSource } from "./engine/sync";
 import { Scheduler } from "./engine/scheduler";
 import { readItem } from "./engine/inbox";
 import { itemHits, materialHits, mergeHits } from "./engine/search";
+import { AgentService } from "./engine/agent";
+import { agentTools, createToolHandler } from "./engine/agent-tools";
+import { CodexClient } from "./engine/codex-client";
 
 const store = new MaterialStore(app.getPath("userData"));
 const images = new ImageCache(app.getPath("userData"));
@@ -33,8 +36,8 @@ function boundedString(value: unknown, max: number, code: string): string {
   return value;
 }
 
-function broadcast(channel: "library:changed" | "sources:changed") {
-  for (const win of BrowserWindow.getAllWindows()) win.webContents.send(channel);
+function broadcast(channel: "library:changed" | "sources:changed" | "agent:event", payload?: AgentEvent) {
+  for (const win of BrowserWindow.getAllWindows()) win.webContents.send(channel, payload);
 }
 
 // One JSON-RPC-ish boundary; every handler validates its input before touching the store.
@@ -178,6 +181,42 @@ ipcMain.handle("search:query", async (_event, query: unknown): Promise<SearchHit
   return mergeHits(materialHits(text, await store.list()), itemHits(items.search(text)));
 });
 
+// --- M2: the agent. Codex app-server in the main process; the renderer sees text and events. -----
+const codex = new CodexClient({ onDiagnostic: (message) => console.warn(`[agent] ${message}`) });
+const agent = new AgentService({
+  client: codex, tools: agentTools, userData: app.getPath("userData"), store,
+  toolHandler: createToolHandler({ store, items, annotations, onChanged: () => broadcast("library:changed"), onMaterialized: (record) => void images.prefetch(imageUrlsOf(record)) }),
+  onEvent: (event) => broadcast("agent:event", event),
+  openExternal: (url) => shell.openExternal(url),
+});
+
+const AGENT_TASKS: readonly AgentTask[] = ["ask", "explain", "verify", "related", "summary", "synthesis"];
+const MAX_AGENT_TEXT = 20_000;
+
+function agentContext(value: unknown): AgentContext {
+  const context = value as { kind?: unknown; materialId?: unknown; quote?: unknown; locator?: unknown } | undefined;
+  if (context?.kind === "library") return { kind: "library" };
+  if (context?.kind === "material") return { kind: "material", materialId: boundedString(context.materialId, 64, "IPC_INVALID_ID") };
+  if (context?.kind === "selection") {
+    return { kind: "selection", materialId: boundedString(context.materialId, 64, "IPC_INVALID_ID"), quote: boundedString(context.quote, MAX_AGENT_TEXT, "IPC_INVALID_AGENT_QUOTE"), locator: boundedString(context.locator, MAX_AGENT_TEXT, "IPC_INVALID_AGENT_LOCATOR") };
+  }
+  throw new Error("IPC_INVALID_AGENT_CONTEXT");
+}
+
+function agentRequest(value: unknown): AgentRequest {
+  const request = value as { context?: unknown; task?: unknown; text?: unknown; threadId?: unknown } | undefined;
+  if (!request || typeof request !== "object") throw new Error("IPC_INVALID_AGENT_REQUEST");
+  if (!AGENT_TASKS.includes(request.task as AgentTask)) throw new Error("IPC_INVALID_AGENT_TASK");
+  if (typeof request.text !== "string" || request.text.length > MAX_AGENT_TEXT) throw new Error("IPC_INVALID_AGENT_TEXT");
+  if (request.threadId !== undefined) boundedString(request.threadId, 128, "IPC_INVALID_AGENT_THREAD");
+  return { context: agentContext(request.context), task: request.task as AgentTask, text: request.text, ...(typeof request.threadId === "string" ? { threadId: request.threadId } : {}) };
+}
+
+ipcMain.handle("agent:status", () => agent.status());
+ipcMain.handle("agent:ask", (_event, request: unknown) => agent.ask(agentRequest(request)));
+ipcMain.handle("agent:interrupt", () => agent.interrupt());
+ipcMain.handle("agent:login", () => agent.login());
+
 // One window. Native vibrancy behind a transparent page so the glass panels
 // in the renderer sit on the real desktop, not on a painted gradient.
 function createWindow() {
@@ -244,5 +283,5 @@ app.whenReady().then(() => {
   scheduler.start();
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
-app.on("before-quit", () => { scheduler.stop(); db.close(); });
+app.on("before-quit", () => { scheduler.stop(); codex.stop(); db.close(); });
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { ReadApi } from "../shared/contracts";
+import type { AgentEvent, ReadApi } from "../shared/contracts";
 
 // The only bridge. Method names mirror the main-process handlers one to one.
 const api: ReadApi = {
@@ -43,5 +43,15 @@ const api: ReadApi = {
   recordReadingEvent: (kind, ref) => ipcRenderer.invoke("event:record", kind, ref),
   readingStats: () => ipcRenderer.invoke("event:stats"),
   search: (query) => ipcRenderer.invoke("search:query", query),
+  // M2: the agent. Events stream on agent:event; the listener receives the event object as sent.
+  agentStatus: () => ipcRenderer.invoke("agent:status"),
+  agentAsk: (request) => ipcRenderer.invoke("agent:ask", request),
+  agentInterrupt: () => ipcRenderer.invoke("agent:interrupt"),
+  agentLogin: () => ipcRenderer.invoke("agent:login"),
+  onAgentEvent: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, payload: AgentEvent) => listener(payload);
+    ipcRenderer.on("agent:event", handler);
+    return () => ipcRenderer.removeListener("agent:event", handler);
+  },
 };
 contextBridge.exposeInMainWorld("read", api);

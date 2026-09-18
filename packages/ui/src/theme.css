@@ -67,3 +67,10 @@
 }
 
 @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+
+/* Agent transcript: a turn or a tool line appears with a short lift; nothing moves for reduced motion. */
+@keyframes agent-pop { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+@utility agent-pop {
+  animation: agent-pop .16s cubic-bezier(.2,.7,.2,1) both;
+  @media (prefers-reduced-motion: reduce) { animation: none; }
+}

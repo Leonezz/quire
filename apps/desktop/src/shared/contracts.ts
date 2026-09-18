@@ -9,9 +9,11 @@ export interface MaterialSummary {
   publishedAt?: string;
   fetchedAt: string;
   readingMinutes: number;
-  origin: "web" | "feed" | "file";
+  origin: "web" | "feed" | "file" | "agent";
   mediaType: string;
   quality: ContentNormalizationQuality;
+  /** Agent artifacts only: the materials the artifact was written from, so every claim has a trail. */
+  lineage?: string[];
 }
 
 /** Present when the material is a PDF; the bytes live next to the record and are read with getMaterialBytes. */
@@ -69,7 +71,7 @@ export interface CorpusImportResult {
   failed: { slug: string; message: string }[];
 }
 
-export interface ReadApi extends ReadApiM1 {
+export interface ReadApi extends ReadApiM1, ReadApiM2 {
   version: string;
   platform: string;
   /** Fires after the main process changed the library on its own (an import); the renderer reloads the list. */
@@ -232,4 +234,59 @@ export interface ReadApiM1 {
 
   /** Titles (and bylines / source titles) of materials and items matching every word of the query; at most 50 hits. */
   search: (query: string) => Promise<SearchHit[]>;
+}
+
+// ---------------------------------------------------------------------------
+// M2: the agent. Codex app-server in the main process; the renderer only sees text.
+// ---------------------------------------------------------------------------
+
+/** What the question is about. The main process turns this into the turn's preamble. */
+export type AgentContext =
+  | { kind: "library" }
+  | { kind: "material"; materialId: string }
+  | { kind: "selection"; materialId: string; quote: string; locator: string };
+
+/** Canned intents map to prompt templates; "ask" sends the text as written. */
+export type AgentTask = "ask" | "explain" | "verify" | "related" | "summary" | "synthesis";
+
+export interface AgentRequest {
+  context: AgentContext;
+  task: AgentTask;
+  /** The user's words; may be empty for a canned task. */
+  text: string;
+  /** Continue an earlier conversation in the same panel. */
+  threadId?: string;
+}
+
+export type AgentResult =
+  | { ok: true; threadId: string; turnId: string; text: string }
+  | { ok: false; code: "AGENT_UNAVAILABLE" | "AUTH_REQUIRED" | "TURN_RUNNING" | "TURN_FAILED" | "TURN_INTERRUPTED" | "TURN_TIMEOUT"; message: string };
+
+export interface AgentStatus {
+  /** The codex binary was found and answers `initialize`. */
+  available: boolean;
+  version?: string;
+  /** The signed-in account (email or plan label) when known. */
+  account?: string;
+  /** Why the agent cannot be used right now, in words the panel can show. */
+  reason?: string;
+  busy: boolean;
+}
+
+/** Streamed while a turn runs. `turnId` lets the panel ignore events from a turn it no longer shows. */
+export type AgentEvent =
+  | { type: "started"; threadId: string; turnId: string }
+  | { type: "delta"; turnId: string; delta: string }
+  | { type: "tool"; turnId: string; name: string; status: "running" | "done" | "failed"; summary?: string }
+  | { type: "completed"; turnId: string }
+  | { type: "failed"; turnId: string; message: string };
+
+export interface ReadApiM2 {
+  agentStatus: () => Promise<AgentStatus>;
+  /** Runs one turn; resolves with the final text. Progress arrives through onAgentEvent. */
+  agentAsk: (request: AgentRequest) => Promise<AgentResult>;
+  agentInterrupt: () => Promise<void>;
+  /** Starts the ChatGPT login flow in the browser; resolves once the account is available or with the failure reason. */
+  agentLogin: () => Promise<AgentStatus>;
+  onAgentEvent: (listener: (event: AgentEvent) => void) => () => void;
 }

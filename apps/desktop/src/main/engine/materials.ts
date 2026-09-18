@@ -27,6 +27,19 @@ function pick(materialization: ContentMaterialization) {
   return { reader, markdown: by("agent.gfm.v1"), plain: by("selection.text.v1") };
 }
 
+/** Reader representations, markdown and quality for Markdown content; shared by files, feeds and agent artifacts. */
+function markdownParts(content: string, baseUri: string): Pick<MaterialRecord, "reader" | "markdown" | "readingMinutes" | "quality" | "problems"> {
+  const { representations } = createMarkdownRepresentations({ baseUri, content, maxDepth: BUDGET.maxDepth, maxNodes: BUDGET.maxNodes, maxOutputBytes: BUDGET.maxOutputBytes, outputBudgetErrorCode: "MARKDOWN_TOO_LARGE" });
+  const by = (schema: string) => representations.find((r) => r.schema === schema)?.content;
+  const v2 = by("reader.document.v2"); const v1 = by("reader.document.v1");
+  return {
+    ...(v2 ? { reader: { schema: "reader.document.v2" as const, payload: v2 } } : v1 ? { reader: { schema: "reader.document.v1" as const, payload: v1 } } : {}),
+    markdown: content, readingMinutes: readingMinutes(content),
+    quality: { completeness: "declared_full", conformance: "conformant", identityConfidence: "derived", safety: "safe", warnings: [] },
+    problems: [],
+  };
+}
+
 export interface FeedMaterialInput {
   url: string;
   title: string;
@@ -119,19 +132,30 @@ export class MaterialStore {
     }
     if (mediaType === "text/markdown" || mediaType === "text/plain" || mediaType === "text/x-markdown") {
       const content = new TextDecoder("utf-8").decode(bytes);
-      const { representations } = createMarkdownRepresentations({ baseUri: finalUrl, content, maxDepth: BUDGET.maxDepth, maxNodes: BUDGET.maxNodes, maxOutputBytes: BUDGET.maxOutputBytes, outputBudgetErrorCode: "MARKDOWN_TOO_LARGE" });
-      const by = (schema: string) => representations.find((r) => r.schema === schema)?.content;
-      const v2 = by("reader.document.v2"); const v1 = by("reader.document.v1");
       const title = /^#\s+(.+)$/m.exec(content)?.[1]?.trim() ?? decodeURIComponent(new URL(finalUrl).pathname.split("/").pop() ?? finalUrl);
-      return {
-        ...base, title,
-        ...(v2 ? { reader: { schema: "reader.document.v2" as const, payload: v2 } } : v1 ? { reader: { schema: "reader.document.v1" as const, payload: v1 } } : {}),
-        markdown: content, readingMinutes: readingMinutes(content),
-        quality: { completeness: "declared_full", conformance: "conformant", identityConfidence: "derived", safety: "safe", warnings: [] },
-        problems: [],
-      };
+      return { ...base, title, ...markdownParts(content, finalUrl) };
     }
     throw new FetchError("UNSUPPORTED_TYPE", `This is ${mediaType}; only pages, PDFs, Markdown and plain text can be read in M0.`);
+  }
+
+  /**
+   * A material the agent wrote (a synthesis, a summary). `lineage` names the materials it was built
+   * from; every id must be in the library so each claim keeps its trail.
+   */
+  async saveArtifact(input: { title: string; markdown: string; lineage: readonly string[] }): Promise<MaterialRecord> {
+    const title = input.title.trim();
+    if (!title) throw new Error("An artifact needs a title.");
+    if (!input.markdown.trim()) throw new Error("An artifact needs content.");
+    const lineage = [...new Set(input.lineage)];
+    const present = await Promise.all(lineage.map((id) => this.get(id)));
+    const unknown = lineage.filter((_, index) => present[index] === undefined);
+    if (unknown.length > 0) throw new Error(`Unknown material ids in lineage: ${unknown.join(", ")}. Cite only materials that are in the library.`);
+    const fetchedAt = new Date().toISOString();
+    const id = createHash("sha256").update(`${title}\n${fetchedAt}`).digest("hex").slice(0, 16);
+    const url = `quire://artifact/${id}`;
+    const record: MaterialRecord = { id, url, finalUrl: url, mediaType: "text/markdown", fetchedAt, origin: "agent", lineage, title, ...markdownParts(input.markdown, url) };
+    await this.save(record);
+    return record;
   }
 
   private async save(record: MaterialRecord) {
@@ -203,7 +227,7 @@ export class MaterialStore {
     const records = await Promise.all(files.map(async (name) => JSON.parse(await readFile(join(this.dir, name), "utf8")) as MaterialRecord));
     return records
       .sort((a, b) => b.fetchedAt.localeCompare(a.fetchedAt))
-      .map(({ id, url, title, byline, publishedAt, fetchedAt, readingMinutes, origin, mediaType, quality }) => ({ id, url, title, fetchedAt, readingMinutes, origin, mediaType, quality, ...(byline ? { byline } : {}), ...(publishedAt ? { publishedAt } : {}) }));
+      .map(({ id, url, title, byline, publishedAt, fetchedAt, readingMinutes, origin, mediaType, quality, lineage }) => ({ id, url, title, fetchedAt, readingMinutes, origin, mediaType, quality, ...(byline ? { byline } : {}), ...(publishedAt ? { publishedAt } : {}), ...(lineage ? { lineage } : {}) }));
   }
 }
 
