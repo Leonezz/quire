@@ -1,22 +1,37 @@
 # Quire
 
-**Quire** — a quire is a gathering of folded sheets, the unit a book is bound from. Quire gathers what you read (blogs, newsletters, papers, PDFs) into one calm reading surface, keeps what you mark, and, later, lets an agent work across it.
+A quiet place to read everything you subscribe to.
 
-一个材料进来，得到同一种好的阅读体验；读完留下的东西，同样好读。
+Blogs, newsletters, papers, PDFs — whatever you bring in, Quire turns it into the same clean page, remembers where you were, keeps what you mark, and stays out of the way.
 
-- `packages/normalize` — 抽取与规范化引擎：任意页面 → `reader.document.v2`，附带来源与质量档位。
-- `packages/reader` / `packages/reader-pdf` — 文章与 PDF 的阅读表面：排版、查找、目录、锚定与标注。
-- `eval/` — 64 篇真实页面的渲染评测集与审过的 golden（`pnpm --filter @read/eval eval`）。
+*A quire is a gathering of folded sheets, the unit a book is bound from.*
 
-- `packages/ui` — 设计系统与交互基座：React Aria Components + Tailwind v4，令牌来自 `design/reading-first`。Storybook 承载组件契约与浏览器测试。
-- `packages/core` — 领域模型（materials, items, sources, annotations, reading events）。无 UI 依赖。
-- `apps/desktop` — Electron（electron-vite）壳：原生 vibrancy 窗口、隐藏标题栏、单一 JSON-RPC 边界。
+## What it does
+
+**One reading surface for every source.** Paste a link or drop a file. Web articles are extracted and re-typeset: title, author, date, body, code, math, tables, figures, footnotes. PDFs open in a proper viewer with page thumbnails, search, and pinch zoom. Everything is stored locally, pictures included, so it reads the same offline.
+
+**Typography you control once.** Typeface, size, measure, line height, light / paper / dark themes. Set it once and every material follows.
+
+**Find your way through long pieces.** A contents rail runs beside the text: one tick per heading, the current one dark. Hover it to see where you are; press `t` to open the full outline. `⌘F` searches the page.
+
+**Keep what matters.** Select any passage to highlight it in one of four colours, attach a note, or copy a citation with the title, author and link already filled in. Highlights work on PDFs too. Export everything you marked as Markdown.
+
+**Honest about quality.** Quire tells you where the text came from and when an extraction is partial, and always offers the original.
+
+## Where it is going
+
+- Feeds and arXiv subscriptions, with an inbox that answers one question per item: read it now, queue it, or let it go.
+- An agent that works across what you read: explain a passage, check a claim, find related material, or write a synthesis with every quote traceable to its source.
+
+## Run it
 
 ```bash
 pnpm install
-pnpm dev          # desktop app
-pnpm storybook    # component library
-pnpm typecheck && pnpm test
+pnpm dev
 ```
 
-决策记录见 `docs/adr/`。产品设计见 `../research/reading-first-mvp-*.md`（迁入前的位置）。
+macOS first. Requires Node 22 and pnpm.
+
+## Contributing
+
+`pnpm typecheck && pnpm test` runs every suite. Design decisions live in `docs/adr/`, the roadmap in `docs/plan.md`.
