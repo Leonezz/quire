@@ -48,7 +48,8 @@ function outlineOf(root: HTMLElement | null): OutlineEntry[] {
   return entries;
 }
 
-export function ReaderView({ material, onBack, onOpenLink }: { material: MaterialRecord; onBack: () => void; onOpenLink: (url: string) => void }) {
+/** `embedded`: rendered inside the Library pane (no back button, no title-bar drag region); Escape only closes the inspector. */
+export function ReaderView({ material, onBack, onOpenLink, embedded = false }: { material: MaterialRecord; onBack?: (() => void) | undefined; onOpenLink: (url: string) => void; embedded?: boolean }) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const bodyRef = useRef<HTMLDivElement>(null);
   const [inspectorTab, setInspectorTab] = useState<Key | null>(null);
@@ -155,7 +156,7 @@ export function ReaderView({ material, onBack, onOpenLink }: { material: Materia
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
-      if (event.key === "Escape") { event.preventDefault(); if (inspectorTab) setInspectorTab(null); else onBack(); }
+      if (event.key === "Escape") { event.preventDefault(); if (inspectorTab) setInspectorTab(null); else onBack?.(); }
       if (event.key === "t") { event.preventDefault(); setTocPinned((pinned) => !pinned); }
       if (event.key === "n" && !event.metaKey && !event.ctrlKey) { event.preventDefault(); setInspectorTab((tab) => (tab === "notes" ? null : "notes")); }
       if ((event.metaKey || event.ctrlKey) && event.key === "j") { event.preventDefault(); setInspectorTab((tab) => (tab === "agent" ? null : "agent")); }
@@ -171,8 +172,8 @@ export function ReaderView({ material, onBack, onOpenLink }: { material: Materia
 
   return (
     <div className={inspectorOpen ? "grid h-full grid-cols-[minmax(0,1fr)_360px] grid-rows-[56px_minmax(0,1fr)] gap-3 p-3" : "grid h-full grid-cols-[minmax(0,1fr)] grid-rows-[56px_minmax(0,1fr)] gap-3 p-3"}>
-      <Toolbar aria-label="Reader toolbar" className={`titlebar-drag col-span-full pl-[92px] transition-opacity ${reading ? "opacity-70 hover:opacity-100" : ""}`}>
-        <ToolbarGroup><ToolbarButton aria-label="Back" isSelected={false} onChange={onBack}><ChevronLeft /></ToolbarButton></ToolbarGroup>
+      <Toolbar aria-label="Reader toolbar" className={`${embedded ? "" : "titlebar-drag pl-[92px]"} col-span-full transition-opacity ${reading ? "opacity-70 hover:opacity-100" : ""}`}>
+        {embedded ? <span /> : <ToolbarGroup><ToolbarButton aria-label="Back" isSelected={false} onChange={() => onBack?.()}><ChevronLeft /></ToolbarButton></ToolbarGroup>}
         <ToolbarTitle title={material.title} subtitle={subtitle} />
         <ToolbarGroup>
           <span className={`mr-1.5 inline-flex h-[22px] items-center gap-1 rounded-pill px-2.5 text-[11.5px] font-medium ${quality.low ? "bg-orange-soft text-orange-text" : "bg-fill text-label-2"}`}>{quality.text}</span>

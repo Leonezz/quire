@@ -4,7 +4,7 @@ import { AskButton, Button, Inspector, InspectorPanel, InspectorSection, Inspect
 import { items, signalsOf, timeOf } from "./fixtures";
 import { ReaderView } from "./ReaderView";
 import { PdfReaderView } from "./PdfReaderView";
-import { ArticlePane } from "./ArticlePane";
+import { MaterialReader } from "./MaterialReader";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { AddSheet } from "./AddSheet";
 import type { MaterialRecord, MaterialSummary } from "../../shared/contracts";
@@ -22,7 +22,6 @@ export function App() {
   const unread = items.filter((item) => item.readState === "unread").length;
   const [library, setLibrary] = useState<MaterialSummary[]>([]);
   const [librarySelected, setLibrarySelected] = useState<Selection>(new Set());
-  const [reading, setReading] = useState<MaterialRecord | undefined>();
   const [addOpen, setAddOpen] = useState(false);
   const [addBusy, setAddBusy] = useState(false);
   const [addError, setAddError] = useState<string | undefined>();
@@ -44,7 +43,7 @@ export function App() {
     setAddOpen(false);
     await refreshLibrary();
     setView("library");
-    setReading(result.material);
+    setLibrarySelected(new Set([result.material.id]));
   };
   const submitFile = async (file: File) => {
     setAddBusy(true); setAddError(undefined);
@@ -55,7 +54,7 @@ export function App() {
     setAddOpen(false);
     await refreshLibrary();
     setView("library");
-    setReading(result.material);
+    setLibrarySelected(new Set([result.material.id]));
   };
   useEffect(() => {
     const over = (event: DragEvent) => { event.preventDefault(); };
@@ -68,15 +67,9 @@ export function App() {
     window.addEventListener("drop", drop);
     return () => { window.removeEventListener("dragover", over); window.removeEventListener("drop", drop); };
   });
-  const openMaterial = async (id: string) => {
-    const material = await read.getMaterial(id);
-    if (material) setReading(material);
-  };
   const openLink = (url: string) => { window.open(url, "_blank", "noopener"); };
 
-  // The sheet lives outside the view switch so a dropped file (and its error) is visible while reading too.
   const addSheet = <AddSheet open={addOpen} busy={addBusy} error={addError} onClose={() => { setAddOpen(false); setAddError(undefined); }} onSubmit={(url) => void submitUrl(url)} />;
-  if (reading) return <><ErrorBoundary key={reading.id} label="The reader" onReset={() => setReading(undefined)}>{reading.pdf ? <PdfReaderView material={reading} onBack={() => setReading(undefined)} /> : <ReaderView material={reading} onBack={() => setReading(undefined)} onOpenLink={openLink} />}</ErrorBoundary>{addSheet}</>;
 
   return (
     <div className={askOpen ? "grid h-full grid-cols-[236px_minmax(0,1fr)_360px] grid-rows-[56px_minmax(0,1fr)] gap-3 p-3" : "grid h-full grid-cols-[236px_minmax(0,1fr)] grid-rows-[56px_minmax(0,1fr)] gap-3 p-3"}>
@@ -105,7 +98,7 @@ export function App() {
           <div className="flex min-h-0 flex-col border-r border-separator-soft">
             <ItemGroup>Kept · {library.length}</ItemGroup>
             {library.length ? (
-              <ItemList aria-label="Library" items={library} selectionMode="single" selectionBehavior="replace" selectedKeys={librarySelected} onSelectionChange={setLibrarySelected} onAction={(key) => void openMaterial(String(key))} className="flex-1">
+              <ItemList aria-label="Library" items={library} selectionMode="single" selectionBehavior="replace" selectedKeys={librarySelected} onSelectionChange={setLibrarySelected} className="flex-1">
                 {(item) => <ItemRow id={item.id} title={item.title} source={(item.origin === "file" ? "Local file" : new URL(item.url).hostname)} time={timeOf(item.fetchedAt)} minutes={item.readingMinutes} state="read" signals={item.mediaType === "application/pdf" ? ["pdf"] : []} {...(item.quality.safety === "degraded_plaintext" ? { tag: "summary" as const } : {})} />}
               </ItemList>
             ) : (
@@ -136,7 +129,7 @@ export function App() {
           {view === "library" ? (() => {
             const chosen = library.find((item) => librarySelected !== "all" && librarySelected.has(item.id));
             return chosen ? (
-              <ArticlePane key={chosen.id} summary={chosen} onOpen={() => void openMaterial(chosen.id)} onOpenLink={openLink} />
+              <ErrorBoundary key={chosen.id} label="The reader"><MaterialReader id={chosen.id} onOpenLink={openLink} /></ErrorBoundary>
             ) : <div className="grid flex-1 place-items-center text-center text-label-2"><div><strong className="mb-1.5 block text-[18px] font-semibold text-label">Nothing selected</strong><span className="text-[13px]">Select something you kept.</span></div></div>;
           })() : current ? (
             <>

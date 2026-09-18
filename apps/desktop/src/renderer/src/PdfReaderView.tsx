@@ -14,7 +14,7 @@ import { applyTheme, loadPrefs, savePrefs, type ReadingPrefs } from "./readingPr
 type Loaded = { status: "loading" } | { status: "ready"; url: string } | { status: "error"; message: string };
 
 /** PDF reading: the same toolbar contract as the article reader, the pages rendered by pdf.js. */
-export function PdfReaderView({ material, onBack }: { material: MaterialRecord; onBack: () => void }) {
+export function PdfReaderView({ material, onBack, embedded = false }: { material: MaterialRecord; onBack?: (() => void) | undefined; embedded?: boolean }) {
   const pdf = material.pdf;
   const [loaded, setLoaded] = useState<Loaded>({ status: "loading" });
   const [prefs, setPrefs] = useState<ReadingPrefs>(loadPrefs);
@@ -57,7 +57,7 @@ export function PdfReaderView({ material, onBack }: { material: MaterialRecord; 
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       const typing = target?.tagName === "INPUT" || target?.tagName === "TEXTAREA";
-      if (event.key === "Escape" && !typing) { event.preventDefault(); if (inspectorTab) setInspectorTab(null); else onBack(); }
+      if (event.key === "Escape" && !typing) { event.preventDefault(); if (inspectorTab) setInspectorTab(null); else onBack?.(); }
       if ((event.metaKey || event.ctrlKey) && event.key === "j") { event.preventDefault(); setInspectorTab((tab) => (tab === "agent" ? null : "agent")); }
       if (event.key === "n" && !typing && !event.metaKey && !event.ctrlKey) { event.preventDefault(); setInspectorTab((tab) => (tab === "notes" ? null : "notes")); }
       if (event.key === "t" && !typing && !event.metaKey && !event.ctrlKey) { event.preventDefault(); setTocPinned((pinned) => !pinned); }
@@ -98,8 +98,8 @@ export function PdfReaderView({ material, onBack }: { material: MaterialRecord; 
 
   return (
     <div className={inspectorOpen ? "grid h-full grid-cols-[minmax(0,1fr)_360px] grid-rows-[56px_minmax(0,1fr)] gap-3 p-3" : "grid h-full grid-cols-[minmax(0,1fr)] grid-rows-[56px_minmax(0,1fr)] gap-3 p-3"}>
-      <Toolbar aria-label="Reader toolbar" className="titlebar-drag col-span-full pl-[92px]">
-        <ToolbarGroup><ToolbarButton aria-label="Back" isSelected={false} onChange={onBack}><ChevronLeft /></ToolbarButton></ToolbarGroup>
+      <Toolbar aria-label="Reader toolbar" className={`${embedded ? "" : "titlebar-drag pl-[92px]"} col-span-full`}>
+        {embedded ? <span /> : <ToolbarGroup><ToolbarButton aria-label="Back" isSelected={false} onChange={() => onBack?.()}><ChevronLeft /></ToolbarButton></ToolbarGroup>}
         <ToolbarTitle title={material.title} subtitle={subtitle} />
         <ToolbarGroup>
           <span className={`mr-1.5 inline-flex h-[22px] items-center gap-1 rounded-pill px-2.5 text-[11.5px] font-medium ${pdf?.textLayer === "absent" ? "bg-orange-soft text-orange-text" : "bg-fill text-label-2"}`}>{pdf?.textLayer === "absent" ? "scanned PDF" : "PDF"}</span>
