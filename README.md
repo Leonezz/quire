@@ -18,10 +18,14 @@ Blogs, newsletters, papers, PDFs — whatever you bring in, Quire turns it into 
 
 **Honest about quality.** Quire tells you where the text came from and when an extraction is partial, and always offers the original.
 
+**Subscribe, then decide.** Paste a feed, a site, or an arXiv category like `cs.CL`. New items land in an Inbox that asks one question per item: read it now (`↵`), queue it (`q`), or let it go (`e`). The Queue keeps what you saved in the order you want; Sources shows each subscription's health. `⌘K` finds anything by title.
+
+**An agent that reads with you.** Press `⌘J` to ask about the article, a selected passage, or the whole library: explain, verify, find related material, summarise, or write a synthesis. Answers cite the materials they draw on, and a synthesis is kept as its own artifact with its sources attached. Runs on the Codex CLI signed in on your Mac.
+
 ## Where it is going
 
-- Feeds and arXiv subscriptions, with an inbox that answers one question per item: read it now, queue it, or let it go.
-- An agent that works across what you read: explain a passage, check a claim, find related material, or write a synthesis with every quote traceable to its source.
+- Inbox items suggested by the agent, and syntheses across everything you have read.
+- Site-specific extraction profiles for the last stubborn layouts.
 
 ## Run it
 

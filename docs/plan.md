@@ -11,8 +11,8 @@
 | R3 阅读控制全局记忆 | 已有（缺"纸"主题） |
 | R4 目录、进度、页内搜索 | 已有 |
 | R5 阅读位置记忆 | HTML 与 PDF 已有 |
-| R6 来源与质量透明 | 头部质量标签 + 低质量横幅与打开原文；"获取完整正文"随 M1 来源 |
-| R7 安全 | CSP 已启用；图片仍是远程加载 |
+| R6 来源与质量透明 | 头部质量标签 + 低质量横幅与打开原文；feed 副本回退带 `FEED_CONTENT_FALLBACK` 标记 |
+| R7 安全 | CSP 已启用；图片由主进程缓存后以 data URL 交付 |
 | R8 不静默降级 | 错误走 Add 面板；阅读页内有低质量 / 纯文本横幅 |
 
 ## 步骤
@@ -53,8 +53,11 @@
 - 已验：桌面 app 订阅阮一峰 Atom（3 条）与 arXiv cs.CL（50 条），Read now 落库并内嵌打开，q 入队，Sync now 显示 +0 new，⌘K 命中库与收件箱。
 - 未做（推后）：OPML 导入；空格预览；100 篇评测集扩容（arXiv HTML / PDF 样本）留给 L3。
 
-### 第 6 刀：M2 Agent
-- ⌘J 面板三种位置上下文，CodexBridge + MCP 工具，移植 artifact skills；先做"阅读中解释 / 核查 / 找相关"。
+### 第 6 刀：M2 Agent — 首刀完成 2026-09-19（`25c1549`）
+- 主进程 `engine/codex-client.ts`：`codex app-server` 的 stdio JSON-RPC 客户端（initialize / account / thread / turn、流式 delta、`item/tool/call` 动态工具、interrupt、10 分钟超时、进程退出重启），只读 sandbox，审批一律拒绝；`agent-tools.ts` 七个库内工具（search / recent / read 分页 / annotations / inbox / import / artifact_write 带 lineage）；`agent.ts` 按上下文（Library / 材料 / 选区）拼前言，任务模板 explain / verify / related / summary / synthesis。协议细节已对 codex 0.144.1 实测（`dynamicTools` 需 `type:"function"`）。
+- 渲染端 `AgentPanel`：阅读器与外壳共用；上下文 pill、快捷动作、流式 Markdown 转录（工具行、`[材料 id]` 引用 pill 可打开来源）、多行输入、⌘. 停止、登录引导；选区浮动条加 Ask；agent 写的 artifact 以 origin `agent` 入库，Library 行标 artifact，阅读头部列出 lineage。
+- 已验：桌面 app 对阮一峰一期周刊 Summarise 与 Related，后者调用 library_search 引用了 7 篇库内材料。
+- 未做（推后）：MCP server 形态（现用实验性 dynamicTools）；artifact skills 移植；多文档综合的验收样例；面板关闭即丢转录（线程 id 可续，但未持久化）。
 
 ## 评测集导入 app
 - Developer 菜单 → Import Evaluation Corpus（⌘⇧I，仅开发检出可见）把 `eval/corpus` 全部快照按当前抽取器入库；2026-09-18 实测 64 篇导入、0 失败。浏览器预览也直接列出导出后的语料（`EXPORT=1`）。
