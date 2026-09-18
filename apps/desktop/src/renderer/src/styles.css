@@ -17,6 +17,13 @@ body { background: transparent; color: var(--label); font: 400 14px/20px var(--f
 ::highlight(read-find-current) { background: var(--orange); color: #fff; }
 .reader-body { text-align: var(--reading-align, start); }
 
+/* Motion: quiet, short, and only where something appears. */
+@keyframes reader-enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes toolbar-pop { from { opacity: 0; transform: translate(-50%, 4px) scale(.96); } to { opacity: 1; transform: translate(-50%, 0) scale(1); } }
+.reader-enter { animation: reader-enter .22s cubic-bezier(.2,.7,.2,1) both; }
+.toolbar-pop { animation: toolbar-pop .14s cubic-bezier(.2,.7,.2,1) both; }
+@media (prefers-reduced-motion: reduce) { .reader-enter, .toolbar-pop { animation: none; } }
+
 /* Scrollbars: the reader's position lives in the contents rail and the progress line, so its
    viewport hides the native bar; lists get a thin overlay thumb with no track or border. */
 .reader-viewport, .pdf-canvas-viewer__page-scroll { scrollbar-width: none; }

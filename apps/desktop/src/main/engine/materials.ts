@@ -180,6 +180,26 @@ export class MaterialStore {
   }
 }
 
+const MAX_PREFETCH_IMAGES = 80;
+
+/** Image sources referenced by the reader document, in reading order, for caching at save time. */
+export function imageUrlsOf(record: Pick<MaterialRecord, "reader">): string[] {
+  if (!record.reader) return [];
+  let root: unknown;
+  try { root = JSON.parse(record.reader.payload); } catch { return []; }
+  const urls: string[] = [];
+  const seen = new Set<string>();
+  const visit = (node: unknown) => {
+    if (urls.length >= MAX_PREFETCH_IMAGES || !node || typeof node !== "object") return;
+    if (Array.isArray(node)) { node.forEach(visit); return; }
+    const value = node as Record<string, unknown>;
+    if (value.type === "image" && typeof value.url === "string" && /^https?:/.test(value.url) && !seen.has(value.url)) { seen.add(value.url); urls.push(value.url); }
+    for (const key of ["children", "caption", "credit", "media", "bodies", "head", "foot"]) visit(value[key]);
+  };
+  visit(root);
+  return urls;
+}
+
 function looksLikePdf(bytes: Uint8Array): boolean {
   return bytes.length > 4 && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46; // %PDF
 }

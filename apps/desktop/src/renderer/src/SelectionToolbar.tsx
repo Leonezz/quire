@@ -48,9 +48,25 @@ export function SelectionToolbar({ root, viewport, capture, onHighlight, onNote,
         });
       });
     };
-    document.addEventListener("selectionchange", update);
+    // While the pointer is down the selection is still being made: hide, and place the bar on release.
+    let pointerDown = false;
+    const onPointerDown = () => { pointerDown = true; setPlacement(null); };
+    const onPointerUp = () => { pointerDown = false; update(); };
+    const onSelectionChange = () => { if (pointerDown) setPlacement(null); else update(); };
+    const onKeyUp = (event: KeyboardEvent) => { if (event.shiftKey || event.key === "Shift") update(); };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("pointerup", onPointerUp);
+    document.addEventListener("selectionchange", onSelectionChange);
+    document.addEventListener("keyup", onKeyUp);
     viewport.addEventListener("scroll", update, { passive: true });
-    return () => { cancelAnimationFrame(frame); document.removeEventListener("selectionchange", update); viewport.removeEventListener("scroll", update); };
+    return () => {
+      cancelAnimationFrame(frame);
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("pointerup", onPointerUp);
+      document.removeEventListener("selectionchange", onSelectionChange);
+      document.removeEventListener("keyup", onKeyUp);
+      viewport.removeEventListener("scroll", update);
+    };
   }, [root, viewport, capture]);
 
   if (!placement) return null;
@@ -59,7 +75,7 @@ export function SelectionToolbar({ root, viewport, capture, onHighlight, onNote,
     <div
       role="toolbar"
       aria-label="Selection"
-      className="glass-strong absolute z-20 flex -translate-x-1/2 items-center gap-0.5 rounded-pill p-1"
+      className="glass-strong toolbar-pop absolute z-20 flex -translate-x-1/2 items-center gap-0.5 rounded-pill p-1"
       style={{ top: placement.top, left: placement.left }}
       onMouseDown={(event) => event.preventDefault()}
     >

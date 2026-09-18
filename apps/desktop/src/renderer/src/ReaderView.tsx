@@ -166,6 +166,9 @@ export function ReaderView({ material, onBack, onOpenLink, embedded = false }: {
     return () => window.removeEventListener("keydown", onKey);
   }, [inspectorTab, onBack]);
 
+  // A stable resolver: the surface keys its image cache by resolver identity, so a new function per render
+  // would re-request every image on each scroll tick (flicker and layout jumps).
+  const resolveImage = useCallback((url: string) => read.resolveImage(url), []);
   const fallback = useMemo(() => (material.markdown ? { content: material.markdown, format: "gfm" as const } : { content: material.plain ?? "", format: "plain" as const }), [material]);
   const subtitle = [(material.origin === "file" ? decodeURIComponent(material.url.replace("file:///", "")) : new URL(material.finalUrl).hostname), `${progress}%`, `${material.readingMinutes} min`].join(" · ");
   const inspectorOpen = inspectorTab !== null && !prefs.focus;
@@ -184,7 +187,7 @@ export function ReaderView({ material, onBack, onOpenLink, embedded = false }: {
         </ToolbarGroup>
       </Toolbar>
 
-      <main className="relative grid min-h-0 grid-rows-[2px_minmax(0,1fr)] overflow-hidden rounded-panel bg-content shadow-[0_0_0_1px_var(--separator-soft),0_6px_20px_rgba(15,17,21,.04)]">
+      <main key={material.id} className="reader-enter relative grid min-h-0 grid-rows-[2px_minmax(0,1fr)] overflow-hidden rounded-panel bg-content shadow-[0_0_0_1px_var(--separator-soft),0_6px_20px_rgba(15,17,21,.04)]">
         <div className="bg-separator-soft">{prefs.focus ? null : <i className="block h-full bg-accent opacity-80" style={{ width: `${progress}%` }} />}</div>
         {findOpen ? <FindBar root={bodyRef.current} generation={bodyGeneration} onClose={() => setFindOpen(false)} /> : null}
         <SelectionToolbar root={bodyRef.current} viewport={viewportRef.current} capture={captureSelection} onHighlight={onHighlight} onNote={(capture) => void onNote(capture)} onCopy={onCopyCapture} />
@@ -213,8 +216,8 @@ export function ReaderView({ material, onBack, onOpenLink, embedded = false }: {
               payload={material.reader?.payload ?? ""}
               fallback={fallback}
               onOpenLink={onOpenLink}
-              resolveImageSource={(url) => read.resolveImage(url)}
-              resolveRemoteImageSource={(url) => read.resolveImage(url)}
+              resolveImageSource={resolveImage}
+              resolveRemoteImageSource={resolveImage}
               showFallbackNotice={false}
             />
           </article>

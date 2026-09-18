@@ -4,6 +4,8 @@ import { join, resolve } from "node:path";
 import { MaterialStore } from "./engine/materials";
 import { ImageCache } from "./engine/images";
 import { AnnotationStore } from "./engine/annotations";
+import { imageUrlsOf } from "./engine/materials";
+import type { MaterialRecord, OpenUrlResult } from "../shared/contracts";
 import { MAX_BYTES } from "./engine/fetch";
 
 const store = new MaterialStore(app.getPath("userData"));
@@ -16,13 +18,20 @@ function boundedString(value: unknown, max: number, code: string): string {
 }
 
 // One JSON-RPC-ish boundary; every handler validates its input before touching the store.
-ipcMain.handle("material:openUrl", (_event, url: unknown) => store.openUrl(boundedString(url, 4096, "IPC_INVALID_URL")));
+// A kept article keeps its pictures: the cache fills in the background right after the save.
+function withPrefetch(result: Promise<OpenUrlResult>): Promise<OpenUrlResult> {
+  return result.then((outcome) => { if (outcome.ok) void images.prefetch(imageUrlsOf(outcome.material)); return outcome; });
+}
+function prefetchAll(records: readonly MaterialRecord[]) {
+  void images.prefetch(records.flatMap((record) => imageUrlsOf(record)), 2);
+}
+ipcMain.handle("material:openUrl", (_event, url: unknown) => withPrefetch(store.openUrl(boundedString(url, 4096, "IPC_INVALID_URL"))));
 ipcMain.handle("material:openFile", (_event, input: unknown) => {
   const value = input as { name?: unknown; mediaType?: unknown; bytes?: unknown };
   const name = boundedString(value?.name, 255, "IPC_INVALID_FILE_NAME");
   const mediaType = typeof value?.mediaType === "string" ? value.mediaType.slice(0, 100) : "";
   if (!(value?.bytes instanceof Uint8Array) || value.bytes.byteLength === 0 || value.bytes.byteLength > MAX_BYTES) throw new Error("IPC_INVALID_FILE_BYTES");
-  return store.openFile({ name, mediaType, bytes: value.bytes });
+  return withPrefetch(store.openFile({ name, mediaType, bytes: value.bytes }));
 });
 ipcMain.handle("theme:set", (_event, theme: unknown) => {
   if (theme !== "system" && theme !== "light" && theme !== "dark") throw new Error("IPC_INVALID_THEME");
@@ -40,6 +49,8 @@ async function importCorpus() {
   if (!dir) throw new Error("No evaluation corpus next to this build (expected <repo>/eval/corpus).");
   const result = await store.importSnapshots(dir);
   for (const win of BrowserWindow.getAllWindows()) win.webContents.send("library:changed");
+  const all = await store.list();
+  prefetchAll((await Promise.all(all.map((item) => store.get(item.id)))).filter((record): record is MaterialRecord => record !== undefined));
   return result;
 }
 ipcMain.handle("material:importCorpus", () => importCorpus());

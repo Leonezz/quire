@@ -50,6 +50,18 @@ export class ImageCache {
     await writeFile(join(this.dir, `${key}.json`), JSON.stringify({ mediaType, url: rawUrl, fetchedAt: new Date().toISOString() }));
   }
 
+  /** Caches every source in the background, a few at a time; unresolvable ones are simply skipped. */
+  async prefetch(urls: readonly string[], concurrency = 3): Promise<{ cached: number; skipped: number }> {
+    const queue = [...urls];
+    let cached = 0; let skipped = 0;
+    await Promise.all(Array.from({ length: Math.min(concurrency, queue.length) }, async () => {
+      for (let url = queue.shift(); url !== undefined; url = queue.shift()) {
+        if (await this.resolve(url)) cached += 1; else skipped += 1;
+      }
+    }));
+    return { cached, skipped };
+  }
+
   /** Why a source could not be cached; for diagnostics and the placeholder's tooltip. */
   async explain(rawUrl: string): Promise<string | undefined> {
     if (await this.read(rawUrl)) return undefined;

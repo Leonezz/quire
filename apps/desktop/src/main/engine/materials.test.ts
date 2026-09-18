@@ -2,7 +2,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MaterialStore } from "./materials";
+import { MaterialStore, imageUrlsOf } from "./materials";
 
 let root = "";
 beforeEach(async () => { root = await mkdtemp(join(tmpdir(), "read-materials-")); });
@@ -111,5 +111,17 @@ describe("MaterialStore corpus import", () => {
     expect((await store.list())[0]?.fetchedAt).toBe("2026-09-17T00:00:00.000Z");
     const second = await store.importSnapshots(corpus);
     expect(second).toMatchObject({ imported: 0, skipped: 1 });
+  });
+});
+
+describe("imageUrlsOf", () => {
+  it("lists reader image sources in order, once each, http(s) only", () => {
+    const payload = JSON.stringify({ type: "root", children: [
+      { type: "paragraph", children: [{ type: "image", url: "https://x.test/a.png", alt: "" }, { type: "image", url: "https://x.test/a.png", alt: "" }] },
+      { type: "figure", media: [{ type: "image", url: "https://x.test/b.png", alt: "" }], caption: [], credit: [] },
+      { type: "paragraph", children: [{ type: "image", url: "data:image/png;base64,AAAA", alt: "" }] },
+    ] });
+    expect(imageUrlsOf({ reader: { schema: "reader.document.v2", payload } })).toEqual(["https://x.test/a.png", "https://x.test/b.png"]);
+    expect(imageUrlsOf({})).toEqual([]);
   });
 });
