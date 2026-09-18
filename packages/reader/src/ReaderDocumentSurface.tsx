@@ -386,10 +386,14 @@ function HostImage({
   alt,
   sourceUrl,
   title,
+  width,
+  height,
 }: {
   alt: string;
   sourceUrl: string;
   title?: string;
+  width?: number;
+  height?: number;
 }) {
   const {
     imageBudget,
@@ -554,6 +558,7 @@ function HostImage({
       alt={alt}
       data-reader-image="resolved"
       decoding="async"
+      {...(width !== undefined && height !== undefined ? { width, height } : {})}
       loading="lazy"
       referrerPolicy="no-referrer"
       src={resolvedSource}
@@ -711,6 +716,8 @@ function ReaderNodeView({ node }: { node: ReaderNode }): ReactNode {
           alt={node.alt}
           sourceUrl={node.url}
           title={node.title ?? undefined}
+          width={(node as { width?: number }).width}
+          height={(node as { height?: number }).height}
         />
       );
     case "code":
@@ -1193,6 +1200,8 @@ function ReaderV2NodeView({
           alt={node.alt}
           sourceUrl={node.url}
           title={node.title ?? undefined}
+          width={(node as { width?: number }).width}
+          height={(node as { height?: number }).height}
         />
       );
     case "code":

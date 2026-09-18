@@ -105,9 +105,11 @@ export function App() {
           <div className="flex min-h-0 flex-col border-r border-separator-soft">
             <ItemGroup>Kept · {library.length}</ItemGroup>
             {library.length ? (
-              <ItemList aria-label="Library" items={library} selectionMode="single" selectedKeys={librarySelected} onSelectionChange={setLibrarySelected} onAction={(key) => void openMaterial(String(key))} className="flex-1">
+              <div className="flex min-h-0 flex-1 flex-col" onKeyDown={(event) => { const chosen = librarySelected !== "all" ? [...librarySelected][0] : undefined; if (event.key === "Enter" && chosen) { event.preventDefault(); void openMaterial(String(chosen)); } }}>
+              <ItemList aria-label="Library" items={library} selectionMode="single" selectedKeys={librarySelected} onSelectionChange={setLibrarySelected} className="flex-1">
                 {(item) => <ItemRow id={item.id} title={item.title} source={(item.origin === "file" ? "Local file" : new URL(item.url).hostname)} time={timeOf(item.fetchedAt)} minutes={item.readingMinutes} state="read" signals={item.mediaType === "application/pdf" ? ["pdf"] : []} {...(item.quality.safety === "degraded_plaintext" ? { tag: "summary" as const } : {})} />}
               </ItemList>
+              </div>
             ) : (
               <div className="grid flex-1 place-items-center px-6 text-center text-label-2"><div><strong className="mb-1.5 block text-[16px] font-semibold text-label">Nothing kept yet.</strong><span className="text-[13px]">Press ⌘N and paste a page URL to read it here.</span></div></div>
             )}

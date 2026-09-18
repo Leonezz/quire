@@ -33,9 +33,12 @@ export type ReaderV2Link = {
 
 export type ReaderV2Image = {
   alt: string;
+  /** Intrinsic pixel size when the source declared one; lets the reader reserve space before the image loads. */
+  height?: number;
   title: string | null;
   type: "image";
   url: string;
+  width?: number;
 };
 
 export type ReaderV2Math = {
@@ -196,9 +199,11 @@ const readerV2NodeSchema: z.ZodType<unknown> = z.lazy(() =>
     z.object({ type: z.literal("inlineCode"), value: z.string() }).strict(),
     z.object({
       alt: z.string(),
+      height: z.number().int().min(1).max(20_000).optional(),
       title: titleSchema,
       type: z.literal("image"),
       url: z.string().refine((value) => isAllowedUrl(value, "image")),
+      width: z.number().int().min(1).max(20_000).optional(),
     }).strict(),
     z.object({
       children: z.array(readerV2NodeSchema),

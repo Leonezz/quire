@@ -966,12 +966,28 @@ function imageFromElement(
     });
     return undefined;
   }
+  const size = declaredImageSize(element);
   return {
     alt: bounded(context, propertyString(element, "alt") ?? ""),
+    ...(size ? { height: size.height } : {}),
     title: boundedNullable(context, propertyString(element, "title")),
     type: "image",
     url: bounded(context, url),
+    ...(size ? { width: size.width } : {}),
   };
+}
+
+/** Pixel width/height attributes (not percentages or "auto"); both are needed to reserve an aspect ratio. */
+function declaredImageSize(element: Element) {
+  const parse = (name: string) => {
+    const raw = propertyString(element, name)?.trim();
+    if (!raw || !/^\d+(?:px)?$/u.test(raw)) return undefined;
+    const value = Number.parseInt(raw, 10);
+    return value >= 1 && value <= 20_000 ? value : undefined;
+  };
+  const width = parse("width");
+  const height = parse("height");
+  return width !== undefined && height !== undefined ? { width, height } : undefined;
 }
 
 function languageFromCode(element: Element) {

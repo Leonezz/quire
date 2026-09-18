@@ -41,7 +41,7 @@ export function ItemRow({ title, source, time, gist, minutes, signals = [], stat
       {...props}
       textValue={title}
       className={composeRenderProps(className, (cls) => cx(
-        "group grid w-full grid-cols-[16px_minmax(0,1fr)] gap-x-2.5 rounded-xl py-[11px] pl-2.5 pr-3 text-left outline-none transition-colors duration-100",
+        "group grid w-full max-w-full grid-cols-[16px_minmax(0,1fr)] gap-x-2.5 overflow-hidden rounded-xl py-[11px] pl-2.5 pr-3 text-left outline-none transition-colors duration-100",
         "data-[hovered]:bg-fill data-[selected]:bg-accent-soft data-[selected]:shadow-[inset_0_0_0_1px_rgba(52,103,224,.18)]",
         "data-[focus-visible]:ring-[3px] data-[focus-visible]:ring-accent-ring data-[dragging]:opacity-60",
         cls,
