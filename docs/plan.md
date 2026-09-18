@@ -47,11 +47,11 @@
 - 纸色主题。
 - 到此 M0 完成，打 tag。
 
-### 第 5 刀：M1 来源与列表
-- RSS / Atom 与 arXiv 类别订阅，抓取调度在主进程；Sources 显示健康度与产量。
-- Inbox 三键决定（Enter / q / e）、Queue 排序与"继续阅读"、Library 全文搜索、⌘K。
-- 阅读事件（opened / finished / kept）落库，北极星本地可统计。
-- 验收：100 篇评测集 ≥ 90%；100 条未读 5 分钟内可决定完。
+### 第 5 刀：M1 来源与列表 — 已完成 2026-09-19（`9132c12`）
+- 主进程：`node:sqlite` 落库（`userData/quire.sqlite`：sources / items / reading_events，`user_version` 迁移）；RSS / Atom 走 `normalizeFeedCapture`，arXiv 类别走 export API 的 Atom；`sync.ts` 记录健康度（最近成功 / 最近错误 / 连续失败数 / 暂停），`scheduler.ts` 每 15 分钟跑一次到期来源，手动 Sync 与调度共用一次运行；Read now 先取原页（arXiv：HTML 渲染，再 PDF），失败且 feed 带全文时才用 feed 副本并以 `FEED_CONTENT_FALLBACK` 标记。阅读时长按 CJK 字符计。
+- 渲染端：Inbox 按日 / 按来源分组，Enter / q / e 三键，右栏预览即阅读（内嵌阅读器，Esc 返回）；Queue 分"继续 / 接下来"，键盘与拖拽排序；Sources 健康度、Sync now、Pause、Disconnect；Add 面板识别 feed / 站点 alternate link / arXiv 类别；⌘K 搜索标题与署名（库 + 收件箱）；阅读进度 ≥ 95% 记 finished 事件并盖到条目上。浏览器预览用 localStorage 种子数据。
+- 已验：桌面 app 订阅阮一峰 Atom（3 条）与 arXiv cs.CL（50 条），Read now 落库并内嵌打开，q 入队，Sync now 显示 +0 new，⌘K 命中库与收件箱。
+- 未做（推后）：OPML 导入；空格预览；100 篇评测集扩容（arXiv HTML / PDF 样本）留给 L3。
 
 ### 第 6 刀：M2 Agent
 - ⌘J 面板三种位置上下文，CodexBridge + MCP 工具，移植 artifact skills；先做"阅读中解释 / 核查 / 找相关"。
