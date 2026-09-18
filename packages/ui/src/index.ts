@@ -31,5 +31,5 @@ export { TocRail } from "./primitives/TocRail";
 export type { TocEntry, TocRailProps } from "./primitives/TocRail";
 export { CommandPalette } from "./primitives/CommandPalette";
 export type { CommandPaletteItem, CommandPaletteProps } from "./primitives/CommandPalette";
-export { AgentTurn, AgentToolLine, CitationPill } from "./primitives/AgentTranscript";
+export { AgentTurn, AgentToolLine, CitationPill, UNVERIFIED_CITATION_TITLE } from "./primitives/AgentTranscript";
 export type { AgentToolStatus, CitationPillProps } from "./primitives/AgentTranscript";

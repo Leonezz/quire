@@ -7,7 +7,7 @@ import type { Database } from "./db";
 
 const TITLE_LENGTH = 60;
 type SessionRow = { id: string; title: string; context: string; thread_id: string | null; created_at: string; updated_at: string; turn_count: number };
-type TurnRow = { id: string; role: string; text: string; task: string | null; tools: string | null; status: string | null; at: string };
+type TurnRow = { id: string; role: string; text: string; task: string | null; tools: string | null; sources: string | null; status: string | null; at: string };
 
 export type TurnInput = Omit<AgentTurnRecord, "id" | "at">;
 
@@ -28,6 +28,7 @@ function toTurn(row: TurnRow): AgentTurnRecord {
     id: row.id, role: row.role as AgentTurnRecord["role"], text: row.text, at: row.at,
     ...(row.task ? { task: row.task as AgentTurnRecord["task"] } : {}),
     ...(row.tools ? { tools: JSON.parse(row.tools) as AgentTurnRecord["tools"] } : {}),
+    ...(row.sources ? { sources: JSON.parse(row.sources) as string[] } : {}),
     ...(row.status ? { status: row.status as AgentTurnRecord["status"] } : {}),
   };
 }
@@ -52,7 +53,7 @@ export class SessionStore {
   get(id: string): AgentSession | undefined {
     const row = this.db.prepare(`SELECT ${SESSION_COLUMNS} FROM agent_sessions s WHERE s.id = ?`).get(id) as unknown as SessionRow | undefined;
     if (!row) return undefined;
-    const turns = (this.db.prepare("SELECT id, role, text, task, tools, status, at FROM agent_turns WHERE session_id = ? ORDER BY at, rowid").all(id) as unknown as TurnRow[]).map(toTurn);
+    const turns = (this.db.prepare("SELECT id, role, text, task, tools, sources, status, at FROM agent_turns WHERE session_id = ? ORDER BY at, rowid").all(id) as unknown as TurnRow[]).map(toTurn);
     return { ...toSummary(row), ...(row.thread_id ? { threadId: row.thread_id } : {}), turns };
   }
 
@@ -61,8 +62,8 @@ export class SessionStore {
     const record: AgentTurnRecord = { ...turn, id: randomBytes(8).toString("hex"), at: this.now().toISOString() };
     this.db.exec("BEGIN");
     try {
-      this.db.prepare("INSERT INTO agent_turns (id, session_id, role, text, task, tools, status, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)")
-        .run(record.id, sessionId, record.role, record.text, record.task ?? null, record.tools ? JSON.stringify(record.tools) : null, record.status ?? null, record.at);
+      this.db.prepare("INSERT INTO agent_turns (id, session_id, role, text, task, tools, sources, status, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .run(record.id, sessionId, record.role, record.text, record.task ?? null, record.tools ? JSON.stringify(record.tools) : null, record.sources ? JSON.stringify(record.sources) : null, record.status ?? null, record.at);
       this.db.prepare("UPDATE agent_sessions SET updated_at = ? WHERE id = ?").run(record.at, sessionId);
       this.db.exec("COMMIT");
     } catch (error) {

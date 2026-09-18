@@ -349,6 +349,8 @@ export interface AgentTurnRecord {
   text: string;
   task?: AgentTask;
   tools?: { name: string; status: "done" | "failed"; summary?: string }[];
+  /** Agent turns: the material ids retrieved during that turn; citations outside this set are unverified. */
+  sources?: string[];
   status?: "completed" | "failed" | "interrupted";
   at: string;
 }

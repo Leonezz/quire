@@ -1,7 +1,7 @@
-import { ArrowRight } from "lucide-react";
 import { InspectorSection } from "@read/ui";
 import type { MaterialRecord } from "../../shared/contracts";
 import { ArtifactLineage } from "./ArtifactLineage";
+import { RebuildAction, type RebuildProps } from "./RebuildBanner";
 
 const originLabel: Record<MaterialRecord["origin"], string> = { web: "Web page", feed: "From a feed", file: "Local file", agent: "Written by the agent" };
 
@@ -24,7 +24,7 @@ function Fact({ label, children }: { label: string; children: React.ReactNode })
 }
 
 /** What is known about the material and cannot be edited: where it came from, when, how well it extracted, what it became. */
-export function InfoFacts({ material, onOpenLink, onOpenMaterial }: { material: MaterialRecord; onOpenLink: (url: string) => void; onOpenMaterial: (id: string) => void }) {
+export function InfoFacts({ material, onOpenLink, onOpenMaterial, onRebuild, rebuild = "idle" }: { material: MaterialRecord; onOpenLink: (url: string) => void; onOpenMaterial: (id: string) => void } & Partial<RebuildProps>) {
   const url = material.finalUrl || material.url;
   return (
     <InspectorSection title="About">
@@ -40,10 +40,8 @@ export function InfoFacts({ material, onOpenLink, onOpenMaterial }: { material: 
         {material.pdf ? <Fact label="Size">{bytesLabel(material.pdf.byteLength)}</Fact> : null}
         {material.capture ? <Fact label="Capture">{bytesLabel(material.capture.byteLength)} · {material.capture.mediaType}</Fact> : null}
         {material.lang ? <Fact label="Language">{material.lang}{material.dir === "rtl" ? " · right to left" : ""}</Fact> : null}
-        {material.rebuiltAs ? (
-          <Fact label="Rebuilt">
-            <button type="button" className="inline-flex cursor-default items-center gap-1 border-0 bg-transparent p-0 text-[12.5px] text-accent-text hover:underline" onClick={() => onOpenMaterial(material.rebuiltAs!)}>Rebuilt version <ArrowRight className="size-3" /></button>
-          </Fact>
+        {material.rebuiltAs || onRebuild ? (
+          <Fact label="Rebuilt"><RebuildAction material={material} onRebuild={onRebuild} rebuild={rebuild} onOpenMaterial={onOpenMaterial} /></Fact>
         ) : null}
       </dl>
       {material.origin === "agent" && material.lineage?.length ? (

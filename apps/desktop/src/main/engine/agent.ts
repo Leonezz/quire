@@ -137,7 +137,7 @@ export class AgentService {
       const sources = [...(this.deps.scope?.seen ?? [])];
       onEvent({ type: "completed", turnId: outcome.turnId, sources });
       sessions.setThread(session.id, outcome.threadId);
-      sessions.appendTurn(session.id, { role: "agent", text: outcome.text, task: request.task, status: "completed", tools });
+      sessions.appendTurn(session.id, { role: "agent", text: outcome.text, task: request.task, status: "completed", tools, sources });
       this.deps.onSessionsChanged?.();
       if (request.task === "rebuild" && material) await this.markRebuilt(material, outcome.text, tools);
       return { ok: true, ...outcome, sessionId: session.id, sources };

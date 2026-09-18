@@ -1,15 +1,21 @@
-import type { AgentContext, AgentEvent, AgentRequest, AgentResult, AgentStatus, AgentTask, MaterialRecord, MaterialSummary, ReadApiM2 } from "../../shared/contracts";
+import type { AgentContext, AgentEvent, AgentRequest, AgentResult, AgentStatus, AgentTask, AgentTurnRecord, MaterialRecord, MaterialSummary, ReadApiM2 } from "../../shared/contracts";
+import { rebuiltArtifactOf } from "./previewRebuild";
+import { appendTurn, createSession, getSession, setThread, titleFor } from "./previewSessions";
 
 // The M2 half of the browser preview. There is no Codex in a browser, so the agent reports
 // itself unavailable — unless the demo switch is set, in which case a scripted answer streams
 // through the same events the desktop bridge emits, so the panel can be exercised end to end.
 //   localStorage["read:preview-agent"] = "demo"   → available, scripted streaming answers
 //   localStorage["read:preview-agent"] = "auth"   → not signed in (exercises the sign-in path)
+// Turns are appended to a stored session (see previewSessions.ts) the way the engine does, and a
+// "rebuild" writes an artifact and marks the material (see previewRebuild.ts).
 
 export const PREVIEW_AGENT_SWITCH = "read:preview-agent";
 const UNAVAILABLE_REASON = "The agent runs in the desktop app with Codex installed.";
 const AUTH_REASON = "Sign in to Codex to use the agent.";
 const CHUNK_MS = 70;
+/** A citation the scripted answer fabricates on purpose: it is never retrieved, so the pill must show as unverified. */
+const FABRICATED_ID = "deadbeefdeadbeef";
 
 type Mode = "off" | "demo" | "auth";
 function mode(): Mode {
@@ -62,10 +68,11 @@ function scriptedAnswer(request: AgentRequest, subject: string, citation: string
   const about = request.context.kind === "selection" ? `the passage “${request.context.quote.slice(0, 60)}${request.context.quote.length > 60 ? "…" : ""}”` : subject;
   const asked = request.text.trim() ? `You asked: *${request.text.trim()}*\n\n` : "";
   const cite = citation ? ` A second source in your library agrees [${citation}].` : "";
+  const fabricated = ` A claim about Safari cites [${FABRICATED_ID}], which was never retrieved.`;
   return [
     taskIntro[request.task],
     "",
-    `${asked}This is a **scripted preview answer** about ${about}; the desktop app streams a real one from Codex. The registry keeps \`Highlight\` objects by name, and \`::highlight()\` styles them without touching the DOM.${cite}`,
+    `${asked}This is a **scripted preview answer** about ${about}; the desktop app streams a real one from Codex. The registry keeps \`Highlight\` objects by name, and \`::highlight()\` styles them without touching the DOM.${cite}${fabricated}`,
     "",
     "```js",
     "const range = new Range();",
@@ -85,6 +92,17 @@ function scriptedAnswer(request: AgentRequest, subject: string, citation: string
     "2. Replace its ranges as the text changes.",
     "",
     "Want me to go deeper on any of these? [Read the spec](https://drafts.csswg.org/css-highlight-api-1/) for the details.",
+  ].join("\n");
+}
+
+/** The scripted rebuild reply: what was done and the artifact it produced, cited so the pill resolves. */
+function rebuildAnswer(material: MaterialRecord, artifactId: string): string {
+  return [
+    taskIntro.rebuild,
+    "",
+    `I rebuilt **${material.title}** from the captured page: the navigation, footer and cookie notice are gone and the article body is Markdown with its headings restored.`,
+    "",
+    `The rebuilt version is [${artifactId}]; the original stays as [${material.id}] for comparison.`,
   ].join("\n");
 }
 
@@ -108,7 +126,14 @@ function chunksOf(text: string, size = 18): string[] {
   return out;
 }
 
-export function createPreviewM2(deps: { listMaterials: () => Promise<MaterialSummary[]> }): ReadApiM2 {
+export interface PreviewM2Deps {
+  listMaterials: () => Promise<MaterialSummary[]>;
+  getMaterial: (id: string) => Promise<MaterialRecord | undefined>;
+  /** Stores the rebuilt artifact and marks the material, then fires library:changed. */
+  markRebuilt: (materialId: string, artifact: MaterialRecord) => void;
+}
+
+export function createPreviewM2(deps: PreviewM2Deps): ReadApiM2 {
   const listeners = new Set<(event: AgentEvent) => void>();
   const emit = (event: AgentEvent) => { for (const listener of listeners) listener(event); };
   let running: { timers: number[]; finish: (result: AgentResult) => void } | undefined;
@@ -140,24 +165,48 @@ export function createPreviewM2(deps: { listMaterials: () => Promise<MaterialSum
       if (running) return { ok: false, code: "TURN_RUNNING", message: "The agent is still answering; stop it first." };
       const materials = await deps.listMaterials();
       const contextId = request.context.kind === "library" ? undefined : request.context.materialId;
-      const citation = materials.find((material) => material.id !== contextId && /^[a-f0-9]{16}$/.test(material.id))?.id;
-      // What the scripted turn "retrieved": the material asked about and the one it cites.
-      const sources = [contextId, citation].filter((id): id is string => id !== undefined);
-      const text = scriptedAnswer(request, subjectOf(request.context, materials), citation);
-      const threadId = request.threadId ?? newId("thread");
-      const sessionId = request.sessionId ?? newId("session");
+      const material = contextId ? await deps.getMaterial(contextId) : undefined;
+      if (contextId && !material) return { ok: false, code: "TURN_FAILED", message: `Material ${contextId} is not in the library.` };
+      const session = request.sessionId ? getSession(request.sessionId) : createSession(request.context, titleFor(request, material?.title));
+      if (!session) return { ok: false, code: "TURN_FAILED", message: `Session ${request.sessionId} no longer exists; start a new one.` };
+      appendTurn(session.id, { role: "user", text: request.text, task: request.task });
+      const rebuild = request.task === "rebuild" && material ? { material, artifact: rebuiltArtifactOf(material) } : undefined;
+      const citation = materials.find((candidate) => candidate.id !== contextId && /^[a-f0-9]{16}$/.test(candidate.id))?.id;
+      // What the scripted turn "retrieved": the material asked about and the one it cites (or wrote).
+      const sources = rebuild ? [rebuild.material.id, rebuild.artifact.id] : [contextId, citation].filter((id): id is string => id !== undefined);
+      const text = rebuild ? rebuildAnswer(rebuild.material, rebuild.artifact.id) : scriptedAnswer(request, subjectOf(request.context, materials), citation);
+      const threadId = request.threadId ?? session.threadId ?? newId("thread");
       const turnId = newId("turn");
       const chunks = chunksOf(text);
+      const tools: NonNullable<AgentTurnRecord["tools"]> = [];
       return new Promise<AgentResult>((resolve) => {
         const timers: number[] = [];
-        const finish = (result: AgentResult) => { running = undefined; resolve(result); };
+        const finish = (result: AgentResult) => {
+          running = undefined;
+          if (result.ok) { setThread(session.id, threadId); appendTurn(session.id, { role: "agent", text, task: request.task, status: "completed", tools }); }
+          else appendTurn(session.id, { role: "agent", text: result.message, task: request.task, status: result.code === "TURN_INTERRUPTED" ? "interrupted" : "failed", tools });
+          if (result.ok && rebuild) deps.markRebuilt(rebuild.material.id, rebuild.artifact);
+          resolve(result);
+        };
         running = { timers, finish };
         const at = (ms: number, step: () => void) => { timers.push(window.setTimeout(step, ms)); };
+        const tool = (ms: number, name: string, status: "running" | "done", summary: string) => at(ms, () => {
+          if (status === "done") tools.push({ name, status, summary });
+          emit({ type: "tool", turnId, name, status, summary });
+        });
         emit({ type: "started", threadId, turnId });
-        at(120, () => emit({ type: "tool", turnId, name: "library_search", status: "running", summary: `"${request.context.kind === "library" ? "recent" : "highlight"}"` }));
-        at(480, () => emit({ type: "tool", turnId, name: "library_search", status: "done", summary: `"${request.context.kind === "library" ? "recent" : "highlight"}" → ${Math.min(4, materials.length)} hits` }));
-        chunks.forEach((delta, index) => at(300 + index * CHUNK_MS, () => emit({ type: "delta", turnId, delta })));
-        at(300 + chunks.length * CHUNK_MS + 60, () => { emit({ type: "completed", turnId, sources }); finish({ ok: true, threadId, turnId, text, sessionId, sources }); });
+        if (rebuild) {
+          tool(120, "material_source", "running", rebuild.material.title);
+          tool(600, "material_source", "done", `${rebuild.material.title} → ${rebuild.material.capture?.byteLength ?? 0} bytes`);
+          tool(700, "artifact_write", "running", `"${rebuild.artifact.title}"`);
+          tool(1300, "artifact_write", "done", `"${rebuild.artifact.title}" → ${rebuild.artifact.id}`);
+        } else {
+          tool(120, "library_search", "running", `"${request.context.kind === "library" ? "recent" : "highlight"}"`);
+          tool(480, "library_search", "done", `"${request.context.kind === "library" ? "recent" : "highlight"}" → ${Math.min(4, materials.length)} hits`);
+        }
+        const start = rebuild ? 1400 : 300;
+        chunks.forEach((delta, index) => at(start + index * CHUNK_MS, () => emit({ type: "delta", turnId, delta })));
+        at(start + chunks.length * CHUNK_MS + 60, () => { emit({ type: "completed", turnId, sources }); finish({ ok: true, threadId, turnId, text, sessionId: session.id, sources }); });
       });
     },
   };

@@ -1,26 +1,15 @@
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import { Bookmark } from "lucide-react";
 import { ItemGroup, ItemList, ItemRow, SplitGroup, SplitPanel, SplitSeparator, useDragAndDrop, useSplitSizes, type Key } from "@read/ui";
 import type { ItemRecord } from "../../shared/contracts";
-import { read } from "./api";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { MaterialReader } from "./MaterialReader";
 import { EmptyState, InlineError, ItemPreview, KeptNoticeLine, panelClass } from "./ItemPreview";
 import { signalsOf, timeOf } from "./format";
 import { useItemReader } from "./useItemReader";
+import { useQueueOrder, type Reorder } from "./useQueueOrder";
 
 const shortcuts = { e: "unqueue" } as const;
-
-/** `moved` placed before or after `target` in `ids`; the rest keeps its order. */
-export function reorderIds(ids: readonly string[], moved: readonly string[], target: string, position: "before" | "after"): string[] {
-  const rest = ids.filter((id) => !moved.includes(id));
-  const at = rest.indexOf(target);
-  if (at < 0) return [...rest, ...moved];
-  const index = position === "before" ? at : at + 1;
-  return [...rest.slice(0, index), ...moved, ...rest.slice(index)];
-}
-
-type Reorder = (moved: string[], target: string, position: "before" | "after") => void;
 
 /**
  * One group of the queue as its own flat list: RAC renders drop indicators only for flat
@@ -47,23 +36,12 @@ function QueueGroup({ title, items, selectedId, onSelect, onAction, onReorder }:
 }
 
 export function QueueView({ items, selectedId, onSelect, refresh, onOpenLink, onOpenMaterial }: { items: ItemRecord[]; selectedId: string | undefined; onSelect: (id: string | undefined) => void; refresh: () => Promise<void>; onOpenLink: (url: string) => void; onOpenMaterial: (id: string) => void }) {
-  const continuing = useMemo(() => items.filter((item) => item.openedAt), [items]);
-  const upNext = useMemo(() => items.filter((item) => !item.openedAt), [items]);
+  const { continuing, upNext, reorderContinuing, reorderUpNext, error: reorderError } = useQueueOrder(items, refresh);
   const orderedIds = useMemo(() => [...continuing, ...upNext].map((item) => item.id), [continuing, upNext]);
   const { reading, failure, decisionError, busy, kept, listRef, select, readNow, keep, decide, closeReader } = useItemReader({ orderedIds, selectedId, onSelect, refresh, leavesOnRead: false, leavesOnKeep: false, shortcuts });
-  const [reorderError, setReorderError] = useState<string | undefined>(undefined);
   const current = items.find((item) => item.id === selectedId);
   const sizes = useSplitSizes("queue");
   const keptLine = kept ? <KeptNoticeLine title={kept.title} onOpen={() => onOpenMaterial(kept.materialId)} /> : undefined;
-
-  const persist = (order: string[]) => {
-    setReorderError(undefined);
-    read.reorderQueue(order)
-      .catch((cause: unknown) => { setReorderError(cause instanceof Error ? cause.message : "Could not save the new order."); })
-      .finally(() => { void refresh(); });
-  };
-  const reorderContinuing: Reorder = (moved, target, position) => persist([...reorderIds(continuing.map((item) => item.id), moved, target, position), ...upNext.map((item) => item.id)]);
-  const reorderUpNext: Reorder = (moved, target, position) => persist([...continuing.map((item) => item.id), ...reorderIds(upNext.map((item) => item.id), moved, target, position)]);
   const onAction = (id: string) => void readNow(id);
 
   return (
@@ -87,7 +65,7 @@ export function QueueView({ items, selectedId, onSelect, refresh, onOpenLink, on
         {reading ? (
           <ErrorBoundary key={reading.materialId} label="The reader" onReset={closeReader}><MaterialReader id={reading.materialId} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onBack={closeReader} /></ErrorBoundary>
         ) : current ? (
-          <ItemPreview item={current} busy={busy !== undefined} failure={failure?.itemId === current.id ? failure : undefined} error={decisionError} kept={keptLine} onOpenLink={onOpenLink}
+          <ItemPreview item={current} busy={busy !== undefined} failure={failure?.itemId === current.id ? failure : undefined} error={decisionError?.itemId === current.id ? decisionError.message : undefined} kept={keptLine} onOpenLink={onOpenLink}
             actions={[
               { label: busy === "read" ? "Opening…" : current.openedAt ? "Continue" : "Read now", kbd: "↵", onPress: () => void readNow(current.id) },
               { label: busy === "keep" ? "Keeping…" : current.keptAt ? "Kept" : "Keep", kbd: "k", icon: <Bookmark className="size-3.5" />, onPress: () => void keep(current.id) },

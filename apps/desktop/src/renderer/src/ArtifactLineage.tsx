@@ -1,7 +1,6 @@
-import { useEffect, useState } from "react";
 import { ChevronRight } from "lucide-react";
-import type { MaterialRecord, MaterialSummary } from "../../shared/contracts";
-import { read } from "./api";
+import type { MaterialRecord } from "../../shared/contracts";
+import { useMaterialTitles } from "./useMaterialTitles";
 
 /** "Written by the agent from 3 materials" for an artifact, otherwise the host (or the file path) the material came from. */
 export function hostLabel(material: Pick<MaterialRecord, "origin" | "url" | "finalUrl" | "lineage">): string {
@@ -18,15 +17,7 @@ export function hostLabel(material: Pick<MaterialRecord, "origin" | "url" | "fin
  * it is a collapsed line under the title; in the Info panel (`defaultOpen`) the list is shown at once.
  */
 export function ArtifactLineage({ lineage, onOpenMaterial, defaultOpen = false }: { lineage: readonly string[]; onOpenMaterial: (id: string) => void; defaultOpen?: boolean }) {
-  const [titles, setTitles] = useState<Map<string, string> | undefined>(undefined);
-  const [error, setError] = useState<string | undefined>(undefined);
-  useEffect(() => {
-    let cancelled = false;
-    read.listMaterials()
-      .then((list: MaterialSummary[]) => { if (!cancelled) setTitles(new Map(list.map((material) => [material.id, material.title]))); })
-      .catch((cause: unknown) => { if (!cancelled) setError(cause instanceof Error ? cause.message : "Could not load the sources."); });
-    return () => { cancelled = true; };
-  }, []);
+  const { titles, error } = useMaterialTitles();
   if (lineage.length === 0) return null;
   return (
     <details open={defaultOpen} className={`group text-[12.5px] text-label-2 ${defaultOpen ? "" : "mb-8 -mt-5"}`}>

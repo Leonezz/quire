@@ -19,7 +19,7 @@ function input(overrides: Partial<ItemInput> & { externalId: string }): ItemInpu
 
 describe("ItemStore", () => {
   it("opens the schema once and keeps its version", () => {
-    expect((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(2);
+    expect((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(3);
     const again = openDatabase(join(root, "quire.sqlite"));
     expect(again.prepare("SELECT COUNT(*) AS n FROM items").get()).toEqual({ n: 0 });
     again.close();

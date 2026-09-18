@@ -1,9 +1,12 @@
 import type { LibraryFilter, MaterialMeta, MaterialRecord, MaterialSummary, ReadApiM3, Settings, TagCount } from "../../shared/contracts";
 import { keepPreviewItem } from "./previewM1";
+import { rebuiltAsOf, recordRebuild } from "./previewRebuild";
+import { deleteSession, getSession, listSessions, onPreviewSessionsChanged } from "./previewSessions";
 
 // The M3 half of the browser preview: metadata overrides, tags, the Library query, deletion,
 // keep and settings — all in localStorage, mirroring what the engine does with its stores.
-// Agent sessions need Codex, so they read as empty.
+// Agent sessions come from previewSessions.ts (the demo agent writes them); a rebuild's artifact
+// and the `rebuiltAs` mark come from previewRebuild.ts.
 
 const META_KEY = "read:preview-meta";
 const DELETED_KEY = "read:preview-deleted";
@@ -56,13 +59,15 @@ function mergeMeta(current: MaterialMeta, patch: MaterialMeta): MaterialMeta {
   return { ...(title ? { title } : {}), ...(byline ? { byline } : {}), ...(publishedAt ? { publishedAt } : {}), ...(tags && tags.length ? { tags } : {}), ...(note ? { note } : {}) };
 }
 
-/** The effective summary: the extracted values with the overrides laid over, and the tags. */
+/** The effective summary: the extracted values with the overrides laid over, the tags, and the rebuilt mark. */
 export function overlaySummary<T extends MaterialSummary>(material: T, meta: MaterialMeta | undefined): T {
+  const rebuiltAs = rebuiltAsOf(material.id);
   return {
     ...material,
     ...(meta?.title ? { title: meta.title } : {}),
     ...(meta?.byline ? { byline: meta.byline } : {}),
     ...(meta?.publishedAt ? { publishedAt: meta.publishedAt } : {}),
+    ...(rebuiltAs ? { rebuiltAs } : {}),
     tags: meta?.tags ?? [],
   };
 }
@@ -122,6 +127,8 @@ export interface PreviewM3 extends ReadApiM3 {
   getMaterial: (id: string) => Promise<MaterialRecord | undefined>;
   listMaterials: () => Promise<MaterialSummary[]>;
   onLibraryChanged: (listener: () => void) => () => void;
+  /** The demo agent rebuilt a material: the artifact is stored, the material marked, and library:changed fires. */
+  markRebuilt: (materialId: string, artifact: MaterialRecord) => void;
 }
 
 export function createPreviewM3(deps: { getMaterial: (id: string) => Promise<MaterialRecord | undefined>; listMaterials: () => Promise<MaterialSummary[]> }): PreviewM3 {
@@ -144,6 +151,7 @@ export function createPreviewM3(deps: { getMaterial: (id: string) => Promise<Mat
     getMaterial,
     listMaterials,
     onLibraryChanged: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    markRebuilt: (materialId, artifact) => { recordRebuild(materialId, artifact); notify(); },
 
     queryLibrary: async (filter) => queryLibrary(await listMaterials(), filter),
     updateMaterialMeta: async (id, patch) => {
@@ -185,10 +193,10 @@ export function createPreviewM3(deps: { getMaterial: (id: string) => Promise<Mat
       return settings();
     },
 
-    // Sessions are written by the Codex bridge; the browser has none.
-    listAgentSessions: async () => [],
-    getAgentSession: async () => undefined,
-    deleteAgentSession: async (id) => { throw new Error(`No agent session ${id} in the browser preview; sessions need the desktop app.`); },
-    onAgentSessionsChanged: () => () => undefined,
+    // Sessions the demo agent wrote (previewSessions.ts); none until it has answered once.
+    listAgentSessions: async () => listSessions(),
+    getAgentSession: async (id) => getSession(id),
+    deleteAgentSession: async (id) => { deleteSession(id); },
+    onAgentSessionsChanged: onPreviewSessionsChanged,
   };
 }

@@ -6,8 +6,10 @@ import { ANNOTATION_COLORS, citationFor, useAnnotations } from "./annotations";
 import type { NoteDraft } from "./NotesPanel";
 import { ReaderInspector, type ReaderTab } from "./ReaderInspector";
 import { hostLabel } from "./ArtifactLineage";
+import { QualityBanner, canRebuild, type RebuildState } from "./RebuildBanner";
+import type { PendingTask } from "./AgentPanel";
 import { SelectionToolbar, type SelectionCapture } from "./SelectionToolbar";
-import type { AgentContext, Annotation } from "../../shared/contracts";
+import type { AgentContext, AgentTask, Annotation } from "../../shared/contracts";
 import { FindBar } from "./FindBar";
 import { ReadingSettings } from "./ReadingSettings";
 import { prefsStyle, useReadingPrefs } from "./readingPrefs";
@@ -87,6 +89,18 @@ export function ReaderView({ material, onBack, onOpenLink, onOpenMaterial, onPro
   // "Ask about this" narrows the agent's context to the selected passage until it is dropped.
   const [asked, setAsked] = useState<SelectionCapture | null>(null);
   const agentContext: AgentContext = asked ? { kind: "selection", materialId: material.id, quote: asked.quote, locator: asked.locator } : { kind: "material", materialId: material.id };
+  // "Rebuild with the agent": the Agent tab opens with the material context and sends the rebuild; the banner follows the turn.
+  const [rebuild, setRebuild] = useState<RebuildState>("idle");
+  const [pendingTask, setPendingTask] = useState<PendingTask | undefined>(undefined);
+  const startRebuild = useCallback(() => {
+    setAsked(null); setRebuild("running"); setPendingTask({ task: "rebuild", text: "" }); setInspectorTab("agent");
+    // Focus mode hides the inspector, and the rebuild is sent from the Agent tab: leave it.
+    if (prefs.focus) setPrefs({ ...prefs, focus: false });
+  }, [prefs, setPrefs]);
+  const onPendingTaskSent = useCallback((accepted: boolean) => { setPendingTask(undefined); if (!accepted) setRebuild("failed"); }, []);
+  const onTaskSettled = useCallback((task: AgentTask, status: "done" | "failed" | "interrupted") => { if (task === "rebuild") setRebuild(status === "done" ? "idle" : "failed"); }, []);
+  useEffect(() => { if (material.rebuiltAs) setRebuild("idle"); }, [material.rebuiltAs]);
+  const onRebuild = canRebuild(material) ? startRebuild : undefined;
   useEffect(() => { if (prefs.focus) setInspectorTab(null); }, [prefs.focus]);
   const quality = qualityLabel(material);
   const identity = material.reader ? `${material.id}:${material.reader.schema}` : material.id;
@@ -238,11 +252,7 @@ export function ReaderView({ material, onBack, onOpenLink, onOpenMaterial, onPro
               {material.origin === "agent" ? null : <a href={material.finalUrl} onClick={(event) => { event.preventDefault(); onOpenLink(material.finalUrl); }}>Open original ↗</a>}
             </div>
             {lineageCount ? <p className="-mt-5 mb-8 text-[12.5px] text-label-2">Written from {lineageCount} {lineageCount === 1 ? "material" : "materials"} · <button type="button" className="cursor-default border-0 bg-transparent p-0 text-[12.5px] text-accent-text hover:underline" onClick={() => setInspectorTab("info")}>see the sources in Info</button></p> : null}
-            {material.quality.safety === "degraded_plaintext" ? (
-              <div className="mb-6 grid gap-2 rounded-card bg-content-2 p-4 text-[13px] text-label-2"><strong className="text-[16px] text-label">Could not extract an article from this page.</strong><span>What the page returned is shown below as plain text. <a href={material.finalUrl} onClick={(event) => { event.preventDefault(); onOpenLink(material.finalUrl); }}>Open the original</a> for the full page.</span></div>
-            ) : quality.low ? (
-              <div className="mb-6 grid gap-1.5 rounded-card bg-orange-soft p-4 text-[13px] text-label-2"><strong className="text-[14px] text-label">{material.quality.completeness === "summary" ? "Only a summary was available." : "The extraction may be incomplete."}</strong><span>{material.quality.completeness === "summary" ? "The full text is fetched when the source allows it. " : `The extractors disagreed about this page (${material.problems.length} notes). `}<a href={material.finalUrl} onClick={(event) => { event.preventDefault(); onOpenLink(material.finalUrl); }}>Open the original ↗</a></span></div>
-            ) : null}
+            <QualityBanner material={material} low={quality.low} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onRebuild={onRebuild} rebuild={rebuild} />
             <ReaderDocumentSurface
               schema={material.reader?.schema ?? "none"}
               payload={material.reader?.payload ?? ""}
@@ -260,7 +270,8 @@ export function ReaderView({ material, onBack, onOpenLink, onOpenMaterial, onPro
         <>
           <SplitSeparator aria-label="Resize inspector" hit={12} footprint={12} line="hover" />
           <SplitPanel id="inspector" defaultSize={sizes.sizeOf("inspector", 360)} minSize={300} maxSize={520} onResize={sizes.onResize("inspector")}>
-            <ReaderInspector material={material} tab={inspectorTab} onTabChange={setInspectorTab} subject="this article" agentContext={agentContext} onClearSelection={() => setAsked(null)}
+            <ReaderInspector material={material} tab={inspectorTab} onTabChange={setInspectorTab} subject={material.title} agentContext={agentContext} onClearSelection={() => setAsked(null)}
+              pendingTask={pendingTask} onPendingTaskSent={onPendingTaskSent} onTaskSettled={onTaskSettled} onRebuild={onRebuild} rebuild={rebuild}
               annotations={annotations} annotationsError={annotationsError} activeAnnotation={activeAnnotation} noteDraft={noteDraft} onNoteDraftChange={setNoteDraft}
               onJump={jumpTo} onUpdateNote={(id, note) => void update(id, { note })} onDeleteAnnotation={(id) => void remove(id)}
               sectionFor={(annotation) => sectionOf(bodyRef.current ? resolveTextQuoteRange(bodyRef.current, annotation.locator, annotation.quote) : undefined)}

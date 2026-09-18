@@ -151,7 +151,7 @@ export function PdfReaderView({ material, onBack, onOpenLink, onOpenMaterial, on
         <>
           <SplitSeparator aria-label="Resize inspector" hit={12} footprint={12} line="hover" />
           <SplitPanel id="inspector" defaultSize={sizes.sizeOf("inspector", 360)} minSize={300} maxSize={520} onResize={sizes.onResize("inspector")}>
-            <ReaderInspector material={material} tab={inspectorTab} onTabChange={setInspectorTab} subject="this PDF" agentContext={agentContext} onClearSelection={() => setAsked(null)}
+            <ReaderInspector material={material} tab={inspectorTab} onTabChange={setInspectorTab} subject={material.title} agentContext={agentContext} onClearSelection={() => setAsked(null)}
               annotations={annotations} annotationsError={annotationsError} activeAnnotation={activeAnnotation} noteDraft={noteDraft} onNoteDraftChange={setNoteDraft}
               onJump={jumpTo} onUpdateNote={(id, note) => void update(id, { note })} onDeleteAnnotation={(id) => void remove(id)} sectionFor={sectionFor}
               onMaterialSaved={onMaterialSaved} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onOpenSettings={onOpenSettings} />

@@ -17,6 +17,8 @@ export function SourcesView({ sources, selectedId, onSelect, refresh, onOpenLink
   const [outcome, setOutcome] = useState<SyncOutcome | undefined>(undefined);
   const [actionError, setActionError] = useState<string | undefined>(undefined);
   const [confirming, setConfirming] = useState(false);
+  // A failed Disconnect is shown inside the still-open confirm sheet, never behind it.
+  const [removeError, setRemoveError] = useState<string | undefined>(undefined);
   const current = sources.find((source) => source.id === selectedId);
   const sizes = useSplitSizes("sources");
   const messageOf = (cause: unknown, fallback: string) => (cause instanceof Error ? cause.message : fallback);
@@ -37,13 +39,13 @@ export function SourcesView({ sources, selectedId, onSelect, refresh, onOpenLink
     finally { setBusy(undefined); }
   };
   const remove = async (source: SourceRecord) => {
-    setBusy("remove"); setActionError(undefined);
+    setBusy("remove"); setRemoveError(undefined);
     try {
       await read.removeSource(source.id);
       setConfirming(false);
       onSelect(neighbourOf(sources.map((candidate) => candidate.id), source.id));
       await refresh();
-    } catch (cause: unknown) { setActionError(messageOf(cause, "Could not disconnect the source.")); }
+    } catch (cause: unknown) { setRemoveError(messageOf(cause, "Could not disconnect the source.")); }
     finally { setBusy(undefined); }
   };
 
@@ -85,7 +87,7 @@ export function SourcesView({ sources, selectedId, onSelect, refresh, onOpenLink
               <div className="flex flex-wrap items-center gap-2 py-[18px]">
                 <Button variant="primary" onPress={() => void sync(current)} isDisabled={busy !== undefined || Boolean(current.pausedAt)}>{busy === "sync" ? "Syncing…" : "Sync now"}</Button>
                 <Button onPress={() => void pause(current)} isDisabled={busy !== undefined}>{current.pausedAt ? "Resume" : "Pause"}</Button>
-                <Button variant="quiet" onPress={() => setConfirming(true)} isDisabled={busy !== undefined}>Disconnect</Button>
+                <Button variant="quiet" onPress={() => { setRemoveError(undefined); setConfirming(true); }} isDisabled={busy !== undefined}>Disconnect</Button>
                 {outcome?.id === current.id ? <span role={outcome.isError ? "alert" : "status"} className={`text-[12.5px] ${outcome.isError ? "text-red-text" : "text-label-2"}`}>{outcome.text}</span> : null}
               </div>
               {actionError ? <div className="mb-4 max-w-[560px]"><InlineError title="That did not go through." message={actionError} /></div> : null}
@@ -101,7 +103,7 @@ export function SourcesView({ sources, selectedId, onSelect, refresh, onOpenLink
                 <Detail label="Added">{new Date(current.addedAt).toLocaleDateString()}</Detail>
               </dl>
               <ConfirmSheet isOpen={confirming} title={`Disconnect ${current.title}?`} message="Undecided items from this source are removed; read and kept material stays."
-                confirmLabel="Disconnect" busyLabel="Disconnecting…" busy={busy === "remove"} onConfirm={() => void remove(current)} onCancel={() => setConfirming(false)} />
+                confirmLabel="Disconnect" busyLabel="Disconnecting…" busy={busy === "remove"} error={removeError} onConfirm={() => void remove(current)} onCancel={() => setConfirming(false)} />
             </div>
           );
         })() : (

@@ -1,9 +1,11 @@
 import type { Annotation, MaterialRecord, MaterialSummary, OpenUrlResult, ReadApi } from "../../shared/contracts";
 import sample from "./dev/sample-material.json";
 import samplePdf from "./dev/sample-pdf.json";
+import samplePlain from "./dev/sample-plaintext.json";
 import { createPreviewM1 } from "./previewM1";
 import { createPreviewM2, previewArtifacts } from "./previewM2";
 import { createPreviewM3 } from "./previewM3";
+import { rebuiltArtifacts } from "./previewRebuild";
 
 // In Electron the preload bridge provides window.read. In a plain browser (Vite dev
 // server, Storybook) there is no engine, so reading works against one sample material
@@ -11,7 +13,9 @@ import { createPreviewM3 } from "./previewM3";
 const sampleMaterial = sample as unknown as MaterialRecord;
 // The PDF sample's bytes are served from public/dev/sample.pdf (not committed; any PDF placed there works).
 const samplePdfMaterial = samplePdf as unknown as MaterialRecord;
-const samples = [sampleMaterial, samplePdfMaterial];
+// A page the extractor could not read: plain text with a capture, so the rebuild flow has something to rebuild.
+const samplePlainMaterial = samplePlain as unknown as MaterialRecord;
+const samples = [sampleMaterial, samplePdfMaterial, samplePlainMaterial];
 function summaryOf({ id, url, title, byline, publishedAt, fetchedAt, readingMinutes, origin, mediaType, quality, lineage, tags, rebuiltAs }: MaterialRecord): MaterialSummary {
   return { id, url, title, fetchedAt, readingMinutes, origin, mediaType, quality, tags: tags ?? [], ...(byline ? { byline } : {}), ...(publishedAt ? { publishedAt } : {}), ...(lineage ? { lineage } : {}), ...(rebuiltAs ? { rebuiltAs } : {}) };
 }
@@ -44,8 +48,8 @@ function writePreviewAnnotations(materialId: string, annotations: Annotation[]) 
   localStorage.setItem(`read:preview-annotations:${materialId}`, JSON.stringify(annotations));
 }
 
-const baseGetMaterial = async (id: string) => [...samples, ...previewArtifacts()].find((material) => material.id === id) ?? (await corpusMaterial(id));
-const baseListMaterials = async () => [...samples.map(summaryOf), ...previewArtifacts().map(summaryOf), ...(await corpusIndex())];
+const baseGetMaterial = async (id: string) => [...samples, ...previewArtifacts(), ...rebuiltArtifacts()].find((material) => material.id === id) ?? (await corpusMaterial(id));
+const baseListMaterials = async () => [...samples.map(summaryOf), ...previewArtifacts().map(summaryOf), ...rebuiltArtifacts().map(summaryOf), ...(await corpusIndex())];
 // Metadata overrides, tags, deletion, keep and settings: localStorage (see previewM3.ts). Its list and record
 // carry the overrides and hide what was deleted, so everything else reads through it.
 const previewM3 = createPreviewM3({ getMaterial: baseGetMaterial, listMaterials: baseListMaterials });
@@ -56,7 +60,7 @@ const browserPreview: ReadApi = {
   // Sources, Inbox, Queue, events and search: seeded into localStorage (see previewM1.ts).
   ...createPreviewM1({ getMaterial: previewGetMaterial, listMaterials: previewListMaterials }),
   // The agent: unavailable in a browser, or a scripted stream behind the demo switch (see previewM2.ts).
-  ...createPreviewM2({ listMaterials: previewListMaterials }),
+  ...createPreviewM2({ listMaterials: previewListMaterials, getMaterial: previewGetMaterial, markRebuilt: previewM3.markRebuilt }),
   ...previewM3,
   version: "preview",
   platform: "browser",

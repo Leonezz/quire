@@ -29,7 +29,7 @@ export function AgentToolLine({ name, status, summary, className }: { name: stri
         {status === "done" ? <Check className="size-3.5 text-green" /> : null}
         {status === "failed" ? <X className="size-3.5 text-red" /> : null}
       </span>
-      <span className="truncate"><code className="font-mono text-[11.5px] text-label-2">{name}</code>{summary ? <span> {summary}</span> : null}</span>
+      <span className="truncate"><code className="font-mono text-[11.5px] text-label-2">{name}</code>{summary ? <span> {summary.startsWith(name) ? summary.slice(name.length).trimStart() : summary}</span> : null}</span>
     </div>
   );
 }
@@ -38,21 +38,30 @@ export interface CitationPillProps extends Omit<AriaButtonProps, "children"> {
   /** The cited material's id; shown when there is no `label`. */
   id: string;
   label?: string | undefined;
+  /** The agent named this id without retrieving it: a dashed, uncoloured pill that says so, still openable. */
+  unverified?: boolean | undefined;
 }
 
+export const UNVERIFIED_CITATION_TITLE = "Not retrieved in that turn — the agent named this id without reading it";
+
 /** A citation inside an answer: a small button that opens the cited material. Enter and Space activate it. */
-export function CitationPill({ id, label, className, ...props }: CitationPillProps) {
+export function CitationPill({ id, label, unverified = false, className, ...props }: CitationPillProps) {
   return (
     <AriaButton
       {...props}
-      aria-label={`Open ${label ?? `material ${id}`}`}
+      aria-label={`Open ${label ?? `material ${id}`}${unverified ? " (unverified citation)" : ""}`}
+      data-unverified={unverified || undefined}
       className={composeRenderProps(className, (cls) => cx(
-        "mx-0.5 inline-flex h-[18px] max-w-[220px] cursor-default items-center gap-1 rounded-pill bg-accent-soft px-1.5 align-[2px] text-[11px] font-medium leading-none text-accent-text outline-none transition-[background-color,transform] duration-100",
-        "data-[hovered]:bg-accent data-[hovered]:text-on-accent data-[pressed]:scale-[.97] data-[focus-visible]:ring-[3px] data-[focus-visible]:ring-accent-ring",
+        "mx-0.5 inline-flex h-[18px] max-w-[220px] cursor-default items-center gap-1 rounded-pill px-1.5 align-[2px] text-[11px] font-medium leading-none outline-none transition-[background-color,transform] duration-100",
+        unverified
+          ? "bg-transparent text-label-3 outline-dashed outline-1 -outline-offset-1 outline-label-4 data-[hovered]:bg-fill data-[hovered]:text-label-2 data-[focus-visible]:outline-none"
+          : "bg-accent-soft text-accent-text data-[hovered]:bg-accent data-[hovered]:text-on-accent",
+        "data-[pressed]:scale-[.97] data-[focus-visible]:ring-[3px] data-[focus-visible]:ring-accent-ring",
         cls,
       ))}
     >
-      <span className="truncate">{label ?? <span className="font-mono">{id.slice(0, 8)}</span>}</span>
+      {/* The tooltip sits on the span: react-aria's Button keeps only aria-* and data-* DOM props. */}
+      <span className="truncate" {...(unverified ? { title: UNVERIFIED_CITATION_TITLE } : {})}>{label ?? <span className="font-mono">{id.slice(0, 8)}</span>}</span>
     </AriaButton>
   );
 }

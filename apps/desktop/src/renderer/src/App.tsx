@@ -9,14 +9,17 @@ import { LibraryView } from "./LibraryView";
 import { SearchPalette } from "./SearchPalette";
 import { SettingsSheet, type SettingsSection } from "./SettingsSheet";
 import { AgentPanel } from "./AgentPanel";
+import { AgentView } from "./AgentView";
 import { InlineError } from "./ItemPreview";
+import { selectedIds } from "./LibraryView";
 import { useLists } from "./useLists";
 import { useLibrary } from "./useLibrary";
+import { useAgentSessions } from "./useAgentSessions";
 import { loadPrefs, applyTheme } from "./readingPrefs";
 import { read } from "./api";
 
-type View = "inbox" | "queue" | "library" | "sources";
-const titles: Record<View, string> = { inbox: "Inbox", queue: "Queue", library: "Library", sources: "Sources" };
+type View = "inbox" | "queue" | "library" | "sources" | "agent";
+const titles: Record<View, string> = { inbox: "Inbox", queue: "Queue", library: "Library", sources: "Sources", agent: "Agent" };
 const SIDEBAR_KEY = "read:layout:sidebar-collapsed";
 
 function loadSidebarCollapsed(): boolean {
@@ -31,6 +34,7 @@ export function App() {
   const [askOpen, setAskOpen] = useState(false);
   const lists = useLists();
   const library = useLibrary();
+  const agentSessions = useAgentSessions();
   const [grouping, setGrouping] = useState<InboxGrouping>("date");
   const [inboxSelected, setInboxSelected] = useState<string | undefined>(undefined);
   const [queueSelected, setQueueSelected] = useState<string | undefined>(undefined);
@@ -63,16 +67,18 @@ export function App() {
       if (event.key === "k") { event.preventDefault(); setSearchOpen(true); }
       if (event.key === ",") { event.preventDefault(); openSettings(); }
       if (event.key === "\\") { event.preventDefault(); toggleSidebar(); }
+      if (event.key.toLowerCase() === "j" && event.shiftKey) { event.preventDefault(); setView("agent"); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [openSettings, toggleSidebar]);
-  // ⌘J toggles the shell's Agent panel outside the Library; an open reader (listening on `document`, which fires first) takes it instead.
+  // ⌘J toggles the shell's Agent panel (the Library context); an open reader (listening on `document`, which fires
+  // first) takes it for its material instead. In the Agent view the conversation is the whole pane: ⌘J focuses its composer.
   useEffect(() => {
-    if (view === "library") return;
     const onKey = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || event.key !== "j" || event.defaultPrevented) return;
+      if (!(event.metaKey || event.ctrlKey) || event.key !== "j" || event.shiftKey || event.defaultPrevented) return;
       event.preventDefault();
+      if (view === "agent") { document.querySelector<HTMLTextAreaElement>('section[aria-label="Conversation"] textarea')?.focus(); return; }
       setAskOpen((open) => !open);
     };
     window.addEventListener("keydown", onKey);
@@ -135,9 +141,13 @@ export function App() {
   // The orange dot on Sources: a source is failing right now; it clears with the next successful sync.
   const attention = lists.sources.some((source) => source.failureCount > 0);
   const sourcesLabel = `${lists.sources.length} ${lists.sources.length === 1 ? "source" : "sources"}`;
-  const subtitle = view === "inbox" ? `${lists.inbox.length} unread · ${sourcesLabel}` : view === "queue" ? `${lists.queue.length} queued` : view === "sources" ? sourcesLabel : `${library.materials.length} ${library.materials.length === 1 ? "material" : "materials"}`;
+  const conversationsLabel = `${agentSessions.sessions.length} ${agentSessions.sessions.length === 1 ? "conversation" : "conversations"}`;
+  const subtitle = view === "inbox" ? `${lists.inbox.length} unread · ${sourcesLabel}` : view === "queue" ? `${lists.queue.length} queued` : view === "sources" ? sourcesLabel : view === "agent" ? conversationsLabel : `${library.materials.length} ${library.materials.length === 1 ? "material" : "materials"}`;
   const shellError = lists.error ?? routeError;
-  const inspectorOpen = askOpen && view !== "library";
+  // The shell's Ask (Library context) stands wherever no reader with its own panel is open: every view but the Agent view, and the Library with nothing (or several things) selected.
+  const readerOpen = view === "library" && selectedIds(librarySelected, library.materials).length === 1;
+  const shellAsk = view !== "agent" && !readerOpen;
+  const inspectorOpen = askOpen && shellAsk;
 
   return (
     <SplitGroup id="shell" aria-label="Window" className="h-full p-3">
@@ -156,6 +166,7 @@ export function App() {
             <SidebarItem id="queue" icon={<ListOrdered />} label="Queue" count={lists.queue.length} />
             <SidebarItem id="library" icon={<BookOpen />} label="Library" />
             <SidebarItem id="sources" icon={<Radio />} label="Sources" attention={attention} />
+            <SidebarItem id="agent" icon={<Sparkles />} label="Agent" count={agentSessions.sessions.length} />
           </SidebarSection>
         </Sidebar>
       </SplitPanel>
@@ -170,7 +181,7 @@ export function App() {
               {view === "library" ? <Search aria-label="Filter the library" placeholder="Filter titles, authors, tags…" value={library.state.query} onChange={library.setQuery} className="h-8 w-[220px] text-[13px]" /> : null}
               <ToolbarButton aria-label="Add (⌘N)" isSelected={addOpen} onChange={(on) => setAddOpen(on)}><Plus /></ToolbarButton>
               <ToolbarButton aria-label="Search (⌘K)" isSelected={searchOpen} onChange={(on) => setSearchOpen(on)}><SearchIcon /></ToolbarButton>
-              {view !== "library" ? <AskButton aria-label="Ask" isSelected={askOpen} onChange={setAskOpen}><Sparkles />Ask<Kbd>⌘J</Kbd></AskButton> : null}
+              {shellAsk ? <AskButton aria-label="Ask" isSelected={askOpen} onChange={setAskOpen}><Sparkles />Ask<Kbd>⌘J</Kbd></AskButton> : null}
               <ToolbarButton aria-label="Settings (⌘,)" isSelected={settings.open} onChange={(on) => { if (on) openSettings(); else setSettings({ open: false }); }}><SettingsIcon /></ToolbarButton>
             </ToolbarGroup>
           </Toolbar>
@@ -179,6 +190,8 @@ export function App() {
             <SplitPanel id="view" minSize={480}>
               {view === "library" ? (
                 <LibraryView library={library} selected={librarySelected} onSelectionChange={setLibrarySelected} onOpenLink={openLink} onOpenMaterial={showMaterial} onOpenSettings={() => openSettings("agent")} />
+              ) : view === "agent" ? (
+                <AgentView sessions={agentSessions} onOpenMaterial={showMaterial} onOpenLink={openLink} onOpenSettings={() => openSettings("agent")} />
               ) : (
                 <div className="flex h-full min-h-0 flex-col gap-3">
                   {shellError ? <InlineError title="The lists could not be loaded." message={shellError} /> : null}

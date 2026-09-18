@@ -116,7 +116,7 @@ describe("AgentService", () => {
     expect(session).toMatchObject({ title: "briefly", context: { kind: "material", materialId: material.id }, threadId: "t1", turnCount: 2 });
     expect(session.turns.map(({ id: _id, at: _at, ...turn }) => turn)).toEqual([
       { role: "user", text: "briefly", task: "explain" },
-      { role: "agent", text: "Two things.", task: "explain", status: "completed", tools: [{ name: "library_recent", status: "done", summary: "library_recent → 1 material" }] },
+      { role: "agent", text: "Two things.", task: "explain", status: "completed", tools: [{ name: "library_recent", status: "done", summary: "library_recent → 1 material" }], sources: [] },
     ]);
     expect(changes).toEqual(["sessions", "sessions"]);
     expect(turns[0]!.prompt).toContain("Momentum, revisited");

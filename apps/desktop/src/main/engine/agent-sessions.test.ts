@@ -54,3 +54,14 @@ describe("SessionStore", () => {
     expect(sessions.get("nope")).toBeUndefined();
   });
 });
+
+describe("SessionStore sources", () => {
+  it("keeps the ids an agent turn retrieved", () => {
+    const db = openDatabase(":memory:");
+    const store = new SessionStore(db);
+    const session = store.create({ kind: "library" }, "t");
+    store.appendTurn(session.id, { role: "agent", text: "x", status: "completed", sources: ["0123456789abcdef"] });
+    expect(store.get(session.id)?.turns[0]?.sources).toEqual(["0123456789abcdef"]);
+    db.close();
+  });
+});

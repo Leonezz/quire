@@ -5,6 +5,8 @@ import { isTypingTarget } from "./format";
 
 export interface ReaderTarget { itemId: string; materialId: string }
 export interface ReadFailure { itemId: string; message: string; action: "read" | "keep" }
+/** A decision (queue / dismiss / …) that did not go through, tied to its item so it never shows on another. */
+export interface DecisionError { itemId: string; message: string }
 /** The last item kept from this list: the preview pane says so and offers the Library. */
 export interface KeptNotice { itemId: string; materialId: string; title: string }
 export type ItemBusy = "read" | "keep" | ItemDecision;
@@ -40,14 +42,14 @@ export function useItemReader({ orderedIds, selectedId, onSelect, refresh, leave
   const [reading, setReading] = useState<ReaderTarget | undefined>(undefined);
   const [failure, setFailure] = useState<ReadFailure | undefined>(undefined);
   const [kept, setKept] = useState<KeptNotice | undefined>(undefined);
-  const [decisionError, setDecisionError] = useState<string | undefined>(undefined);
+  const [decisionError, setDecisionError] = useState<DecisionError | undefined>(undefined);
   const [busy, setBusy] = useState<ItemBusy | undefined>(undefined);
   const listRef = useRef<HTMLDivElement>(null);
   const focusPending = useRef(false);
 
   const closeReader = useCallback(() => { setReading(undefined); setFailure(undefined); }, []);
-  /** A selection made by the user: the reader gives way to the preview, and the kept notice is over. */
-  const select = useCallback((id: string | undefined) => { onSelect(id); closeReader(); setKept(undefined); }, [onSelect, closeReader]);
+  /** A selection made by the user: the reader gives way to the preview, the kept notice and any decision error are over. */
+  const select = useCallback((id: string | undefined) => { onSelect(id); closeReader(); setKept(undefined); setDecisionError(undefined); }, [onSelect, closeReader]);
 
   const readNow = useCallback(async (id: string) => {
     setBusy("read"); setFailure(undefined); setDecisionError(undefined);
@@ -84,7 +86,7 @@ export function useItemReader({ orderedIds, selectedId, onSelect, refresh, leave
       onSelect(neighbourOf(orderedIds, id));
       await refresh();
     } catch (cause: unknown) {
-      setDecisionError(cause instanceof Error ? cause.message : `Could not ${decision} this item.`);
+      setDecisionError({ itemId: id, message: cause instanceof Error ? cause.message : `Could not ${decision} this item.` });
     } finally { setBusy(undefined); }
   }, [closeReader, onSelect, orderedIds, reading, refresh]);
 

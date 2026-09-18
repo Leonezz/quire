@@ -19,10 +19,13 @@ export function MaterialReader({ id, onOpenLink, onOpenMaterial, onBack, onOpenS
   useEffect(() => {
     let cancelled = false;
     setMaterial(undefined); setError(undefined); setEventError(undefined);
-    read.getMaterial(id)
+    const load = () => read.getMaterial(id)
       .then((record) => { if (cancelled) return; if (record) setMaterial(record); else setError("This material is no longer in the library."); })
       .catch((cause: unknown) => { if (!cancelled) setError(cause instanceof Error ? cause.message : "Could not load the material."); });
-    return () => { cancelled = true; };
+    void load();
+    // The record is reloaded in place when the library changes (a rebuild set `rebuiltAs`, an import touched it): no "Opening…" flash.
+    const unsubscribe = read.onLibraryChanged(() => { void load(); });
+    return () => { cancelled = true; unsubscribe(); };
   }, [id]);
 
   const onProgress = useCallback((fraction: number) => {

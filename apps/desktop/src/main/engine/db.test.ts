@@ -15,8 +15,8 @@ const tables = (db: Database) => (db.prepare("SELECT name FROM sqlite_master WHE
 describe("openDatabase", () => {
   it("creates a fresh database at the current version with the M3 tables", () => {
     const db = openDatabase(":memory:");
-    expect(SCHEMA_VERSION).toBe(2);
-    expect(version(db)).toBe(2);
+    expect(SCHEMA_VERSION).toBe(3);
+    expect(version(db)).toBe(3);
     expect(tables(db)).toEqual(["agent_sessions", "agent_turns", "items", "material_meta", "reading_events", "sources"]);
     expect(columns(db, "items")).toContain("kept_at");
     db.close();
@@ -31,14 +31,14 @@ describe("openDatabase", () => {
     old.close();
 
     const db = openDatabase(path);
-    expect(version(db)).toBe(2);
+    expect(version(db)).toBe(3);
     expect(columns(db, "items")).toContain("kept_at");
     expect(tables(db)).toContain("material_meta");
     expect(db.prepare("SELECT id, kept_at FROM items").all()).toEqual([{ id: "i1", kept_at: null }]);
     db.close();
 
     const again = openDatabase(path);
-    expect(version(again)).toBe(2);
+    expect(version(again)).toBe(3);
     expect(again.prepare("SELECT COUNT(*) AS n FROM items").get()).toEqual({ n: 1 });
     again.close();
   });
@@ -48,6 +48,6 @@ describe("openDatabase", () => {
     const db = openDatabase(path);
     db.exec("PRAGMA user_version = 99");
     db.close();
-    expect(() => openDatabase(path)).toThrow(/schema version 99, newer than this build understands \(2\)/);
+    expect(() => openDatabase(path)).toThrow(/schema version 99, newer than this build understands \(3\)/);
   });
 });

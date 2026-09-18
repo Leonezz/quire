@@ -60,7 +60,7 @@ export function InboxView({ items, grouping, selectedId, onSelect, refresh, onOp
         {reading ? (
           <ErrorBoundary key={reading.materialId} label="The reader" onReset={closeReader}><MaterialReader id={reading.materialId} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onBack={closeReader} /></ErrorBoundary>
         ) : current ? (
-          <ItemPreview item={current} busy={busy !== undefined} failure={failure?.itemId === current.id ? failure : undefined} error={decisionError} kept={keptLine} onOpenLink={onOpenLink}
+          <ItemPreview item={current} busy={busy !== undefined} failure={failure?.itemId === current.id ? failure : undefined} error={decisionError?.itemId === current.id ? decisionError.message : undefined} kept={keptLine} onOpenLink={onOpenLink}
             actions={[
               { label: busy === "read" ? "Opening…" : "Read now", kbd: "↵", onPress: () => void readNow(current.id) },
               { label: busy === "keep" ? "Keeping…" : "Keep", kbd: "k", icon: <Bookmark className="size-3.5" />, onPress: () => void keep(current.id) },

@@ -6,6 +6,8 @@ import { isArxivCategory } from "./format";
 // Anything that needs the network (subscribing, syncing) reports itself unavailable.
 
 const STORAGE_KEY = "read:preview-m1";
+/** Demo hook: `localStorage["read:preview-fail-decide"] = <item id>` makes deciding that one item fail, to exercise the error path. */
+const FAIL_DECIDE_KEY = "read:preview-fail-decide";
 const PREVIEW_CODE = "PREVIEW_MODE";
 const HOUR = 3_600_000;
 const DAY = 24 * HOUR;
@@ -141,6 +143,7 @@ export function createPreviewM1(deps: { getMaterial: (id: string) => Promise<Mat
       return { ok: true, material };
     },
     decideItem: async (id, decision) => {
+      if (localStorage.getItem(FAIL_DECIDE_KEY) === id) throw new Error(`Preview: deciding item ${id} is set to fail (localStorage ${FAIL_DECIDE_KEY}).`);
       const now = new Date().toISOString();
       const state = update((current) => {
         const item = requireItem(current, id);

@@ -60,6 +60,12 @@ export function sourceHealth(source: SourceRecord, now = Date.now()): SourceHeal
   return { tone: "ok", text: stale ? (source.lastSuccessAt ? "waiting for the next sync" : "not synced yet") : "healthy" };
 }
 
+/** At most `max` characters, ending in an ellipsis when cut; whitespace collapsed. */
+export function truncate(text: string, max = 40): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat;
+}
+
 /** Everything that is neither a text field nor a control: where list shortcuts apply. */
 export function isTypingTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;

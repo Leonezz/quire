@@ -9,7 +9,7 @@ export type Database = DatabaseSync;
  * files in MaterialStore). The schema is versioned with PRAGMA user_version so later
  * milestones can migrate in place instead of guessing what an old file holds.
  */
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 const SCHEMA_V1 = `
 CREATE TABLE IF NOT EXISTS sources (
@@ -109,6 +109,11 @@ function migrateToV2(db: Database) {
   db.exec(SCHEMA_V2);
 }
 
+/** V3: an agent turn remembers which materials it retrieved, so reopened conversations keep the strict citation rule. */
+function migrateToV3(db: Database) {
+  if (!hasColumn(db, "agent_turns", "sources")) db.exec("ALTER TABLE agent_turns ADD COLUMN sources TEXT");
+}
+
 /** The version-1 schema as M1 shipped it; tests build old databases from it to exercise the migration. */
 export function createV1Database(path: string): Database {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
@@ -128,6 +133,7 @@ export function openDatabase(path: string): Database {
   if (version > SCHEMA_VERSION) throw new Error(`The library database is schema version ${version}, newer than this build understands (${SCHEMA_VERSION}). Update Quire or restore an older database.`);
   if (version < 1) db.exec(SCHEMA_V1);
   if (version < 2) migrateToV2(db);
+  if (version < 3) migrateToV3(db);
   if (version < SCHEMA_VERSION) db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
   return db;
 }

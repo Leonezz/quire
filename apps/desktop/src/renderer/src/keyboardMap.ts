@@ -8,7 +8,8 @@ export const KEYBOARD_MAP: ShortcutGroup[] = [
   { title: "Everywhere", shortcuts: [
     { keys: "⌘N", action: "Add a page, feed or arXiv category" },
     { keys: "⌘K", action: "Search titles across the library and inbox" },
-    { keys: "⌘J", action: "Toggle the Agent panel" },
+    { keys: "⌘J", action: "Toggle the Agent panel (the Library context when nothing is open)" },
+    { keys: "⌘⇧J", action: "The Agent view: every conversation" },
     { keys: "⌘,", action: "Settings" },
     { keys: "⌘\\", action: "Hide or show the sidebar" },
     { keys: "⌘.", action: "Stop the agent's current answer" },
@@ -24,6 +25,10 @@ export const KEYBOARD_MAP: ShortcutGroup[] = [
   { title: "Library", shortcuts: [
     { keys: "⇧ click · ⌘ click", action: "Select several materials" },
     { keys: "⌫", action: "Delete the selected materials (asks first)" },
+  ] },
+  { title: "Agent", shortcuts: [
+    { keys: "⌫", action: "Delete the selected conversation (asks first)" },
+    { keys: "↵", action: "Send · Shift+Enter for a new line" },
   ] },
   { title: "Reader", shortcuts: [
     { keys: "t", action: "Pin the contents rail" },

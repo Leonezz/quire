@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, within } from "storybook/test";
-import { AgentToolLine, AgentTurn, CitationPill } from "../primitives/AgentTranscript";
+import { AgentToolLine, AgentTurn, CitationPill, UNVERIFIED_CITATION_TITLE } from "../primitives/AgentTranscript";
 
 const meta = { title: "Primitives/AgentTranscript", parameters: { layout: "padded" } } satisfies Meta;
 export default meta;
@@ -21,6 +21,7 @@ function Transcript() {
         <p className="m-0">
           <code className="rounded-[4px] bg-fill px-1 font-mono text-[12px]">CSS.highlights</code> is a map from a name to a <strong>Highlight</strong>, a set of ranges styled through <code className="rounded-[4px] bg-fill px-1 font-mono text-[12px]">::highlight()</code>.
           The registry lives on the document, so styling survives re-renders <CitationPill id="526130b61f003c33" label="CSS Custom Highlight API" onPress={() => onOpen("526130b61f003c33")} /> and a second source agrees <CitationPill id="63d7dedf6dd9973c" onPress={() => onOpen("63d7dedf6dd9973c")} />.
+          A claim the agent never retrieved cites <CitationPill id="deadbeefdeadbeef" unverified onPress={() => onOpen("deadbeefdeadbeef")} /> — dashed, so the reader knows.
         </p>
       </AgentTurn>
     </div>
@@ -50,5 +51,14 @@ export const Turns: Story = {
     await expect(onOpen).toHaveBeenLastCalledWith("63d7dedf6dd9973c");
     await userEvent.click(pill);
     await expect(onOpen).toHaveBeenCalledTimes(3);
+    // An unverified citation says so in its name and tooltip, is styled apart, and still opens on Enter.
+    const unverified = canvas.getByRole("button", { name: "Open material deadbeefdeadbeef (unverified citation)" });
+    await expect(unverified).toHaveAttribute("data-unverified", "true");
+    await expect(within(unverified).getByTitle(UNVERIFIED_CITATION_TITLE)).toBeInTheDocument();
+    await userEvent.tab();
+    await userEvent.tab();
+    await expect(unverified).toHaveFocus();
+    await userEvent.keyboard("{Enter}");
+    await expect(onOpen).toHaveBeenLastCalledWith("deadbeefdeadbeef");
   },
 };

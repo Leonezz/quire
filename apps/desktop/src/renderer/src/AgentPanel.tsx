@@ -1,10 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { Square, X } from "lucide-react";
-import { AgentToolLine, AgentTurn, Button, InspectorSection, Kbd, TextField } from "@read/ui";
-import type { AgentContext, AgentTask, MaterialSummary } from "../../shared/contracts";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ArrowUpRight, Plus, X } from "lucide-react";
+import { AgentToolLine, AgentTurn, Button, InspectorSection } from "@read/ui";
+import type { AgentContext, AgentTask } from "../../shared/contracts";
+import { AgentComposer, taskLabel } from "./AgentComposer";
 import { AgentMarkdown } from "./AgentMarkdown";
-import { useAgent } from "./useAgent";
-import { read } from "./api";
+import { SessionsMenu } from "./AgentSessions";
+import { truncate } from "./format";
+import { useAgent, type AgentTurnState } from "./useAgent";
+import { useAgentSessions } from "./useAgentSessions";
+import { useMaterialTitles } from "./useMaterialTitles";
 
 interface QuickAction { label: string; task: AgentTask; /** Needs the user's words: arms the composer instead of sending. */ prompts?: boolean }
 const materialActions: QuickAction[] = [
@@ -18,55 +22,64 @@ const libraryActions: QuickAction[] = [
   { label: "Find related to…", task: "related", prompts: true },
   { label: "Synthesise", task: "synthesis" },
 ];
-const taskLabel: Record<AgentTask, string> = { ask: "Ask", explain: "Explain", verify: "Verify", related: "Find related", summary: "Summarise", synthesis: "Synthesise", rebuild: "Rebuild" };
 
 function contextLabel(context: AgentContext, subject: string): string {
   if (context.kind === "library") return "Library";
   if (context.kind === "material") return subject;
-  const quote = context.quote.replace(/\s+/g, " ").trim();
-  return `selection: «${quote.length > 40 ? `${quote.slice(0, 40)}…` : quote}»`;
+  return `selection: «${truncate(context.quote, 40)}»`;
 }
 
 /** What the user bubble says: the words as typed, or the canned task and its subject. */
-function promptLabel(task: AgentTask, text: string, context: AgentContext, subject: string): string {
+export function promptLabel(task: AgentTask, text: string, context: AgentContext, subject: string): string {
   if (text.trim()) return task === "ask" ? text.trim() : `${taskLabel[task]}: ${text.trim()}`;
   const about = context.kind === "library" ? "the library" : context.kind === "selection" ? "this selection" : subject;
   return `${taskLabel[task]} ${about}`;
 }
 
-/**
- * The Agent inspector panel. `context` is decided by the caller: the shell passes the library,
- * a reader its material or, after "Ask about this" on a selection, the selected passage.
- * `subject` names the material for the pill and the canned prompts ("this article", "this PDF").
- */
-export function AgentPanel({ context, subject = "this material", onOpenMaterial, onOpenLink, onClearSelection, onOpenSettings }: {
+export interface PendingTask { task: AgentTask; text: string }
+export type SettledStatus = Exclude<AgentTurnState["status"], "running">;
+
+export interface AgentPanelProps {
+  /** Decided by the caller: the shell passes the library, a reader its material or the selected passage. */
   context: AgentContext;
-  subject?: string;
+  /** The material's title, for the pill and the canned prompts (truncated to ~40 characters here). */
+  subject?: string | undefined;
+  /** Open this stored conversation instead of the context's most recent one. */
+  sessionId?: string | undefined;
+  onSessionChange?: ((sessionId: string | undefined) => void) | undefined;
+  /** A canned task to send as soon as the agent is available (the reader's "Rebuild with the agent"). */
+  pendingTask?: PendingTask | undefined;
+  /** The pending task was sent (`ok`), or could not be (the agent is unavailable). */
+  onPendingTaskSent?: ((accepted: boolean) => void) | undefined;
+  /** A turn of `task` finished — done, failed or stopped. */
+  onTaskSettled?: ((task: AgentTask, status: SettledStatus) => void) | undefined;
+  /** Offers "Open material" in the context row (the Agent view, where the material is not on screen). */
+  openMaterialButton?: boolean | undefined;
+  /** Wider transcript for a full-pane layout. */
+  wide?: boolean | undefined;
   onOpenMaterial: (id: string) => void;
   onOpenLink: (url: string) => void;
   onClearSelection?: (() => void) | undefined;
   /** Opens the Settings sheet at the Agent section (Codex path, model), offered when the agent is unavailable. */
   onOpenSettings?: (() => void) | undefined;
-}) {
-  const { status, statusError, turns, running, ask, stop, login } = useAgent(context);
-  const [draft, setDraft] = useState("");
+}
+
+/** The Agent panel: context row (pill, canned actions, new conversation, history), the transcript, the composer. */
+export function AgentPanel({ context, subject: rawSubject, sessionId, onSessionChange, pendingTask, onPendingTaskSent, onTaskSettled, openMaterialButton = false, wide = false, onOpenMaterial, onOpenLink, onClearSelection, onOpenSettings }: AgentPanelProps) {
+  const { titles, error: titlesError, titleOf } = useMaterialTitles();
+  const subject = truncate(rawSubject ?? (context.kind === "library" ? "the library" : (titles?.get(context.materialId) ?? "this material")), 40);
+  const labelOf = useCallback((task: AgentTask, text: string) => promptLabel(task, text, context, subject), [context, subject]);
+  const agent = useAgent(context, { sessionId, labelOf, onSessionChange });
+  const { status, statusError, turns, running, busyElsewhere, sessionError, loadingSession, ask, retry, stop, login, loadSession, newConversation } = agent;
+  const sessions = useAgentSessions();
   const [armedTask, setArmedTask] = useState<AgentTask>("ask");
-  const [titles, setTitles] = useState<Map<string, string>>(new Map());
-  const [titlesError, setTitlesError] = useState<string | undefined>(undefined);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLDivElement>(null);
   const actions = context.kind === "library" ? libraryActions : materialActions;
   const available = status?.available === true;
+  const canSend = available && !running && !busyElsewhere;
   const authRequired = turns.some((turn) => turn.authRequired) || (!available && /sign in|log in|login/i.test(status?.reason ?? ""));
-
-  // Titles for citation pills: resolved once from the library list.
-  useEffect(() => {
-    let cancelled = false;
-    read.listMaterials()
-      .then((list: MaterialSummary[]) => { if (!cancelled) setTitles(new Map(list.map((material) => [material.id, material.title]))); })
-      .catch((cause: unknown) => { if (!cancelled) setTitlesError(cause instanceof Error ? cause.message : "Could not load material titles."); });
-    return () => { cancelled = true; };
-  }, []);
+  const contextSessions = useMemo(() => sessions.forContext(context), [sessions, context]);
 
   // Follow the stream: the transcript stays pinned to its end unless the reader scrolled up.
   const lastLength = useMemo(() => turns.reduce((sum, turn) => sum + turn.answer.length + turn.tools.length, 0), [turns]);
@@ -85,78 +98,94 @@ export function AgentPanel({ context, subject = "this material", onOpenMaterial,
     return () => window.removeEventListener("keydown", onKey);
   }, [running, stop]);
 
-  const send = (task: AgentTask, text: string) => {
-    if (!available || running) return;
+  const send = useCallback((task: AgentTask, text: string) => {
     void ask(task, text.trim(), promptLabel(task, text, context, subject));
-    setDraft(""); setArmedTask("ask");
-  };
-  const submitDraft = () => { if (draft.trim()) send(armedTask, draft); };
+    setArmedTask("ask");
+  }, [ask, context, subject]);
+
+  // A task handed in by the reader goes out once the agent is known to be available (or is refused once it is known not to be).
+  useEffect(() => {
+    if (!pendingTask || status === undefined || loadingSession) return;
+    if (canSend) { send(pendingTask.task, pendingTask.text); onPendingTaskSent?.(true); }
+    else if (!available) onPendingTaskSent?.(false);
+  }, [pendingTask, status, loadingSession, canSend, available, send, onPendingTaskSent]);
+
+  // The owner learns when a turn this panel watched running settles (the reader's banner leaves "Rebuilding…"); stored turns arrive settled and are not reported.
+  const watched = useRef(new Set<string>());
+  useEffect(() => {
+    for (const turn of turns) {
+      if (turn.status === "running") { watched.current.add(turn.id); continue; }
+      if (!watched.current.delete(turn.id)) continue;
+      onTaskSettled?.(turn.task, turn.status);
+    }
+  }, [turns, onTaskSettled]);
+
   const focusComposer = () => composerRef.current?.querySelector("textarea")?.focus();
   const quick = (action: QuickAction) => {
     if (action.prompts) { setArmedTask(action.task); focusComposer(); return; }
     send(action.task, "");
   };
-  const titleOf = (id: string) => titles.get(id);
   const placeholder = !available ? "The agent is not available" : armedTask !== "ask" ? `${taskLabel[armedTask]}…` : context.kind === "library" ? "Ask about your library…" : `Ask about ${context.kind === "selection" ? "this selection" : subject}…`;
+  const emptyHint = context.kind === "library" ? "Ask across everything you kept, or pick an action above." : `Ask about ${context.kind === "selection" ? "the selected passage" : subject}, or pick an action above.`;
+  const iconButton = "size-7 min-w-0 shrink-0 px-0";
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
       <InspectorSection title="Context">
         <div className="flex min-w-0 items-center gap-1.5">
           <span className="inline-flex h-[26px] min-w-0 items-center rounded-pill bg-content px-2.5 text-[12.5px] font-medium shadow-[0_0_0_1px_var(--separator)]"><span className="truncate">{contextLabel(context, subject)}</span></span>
-          {context.kind === "selection" && onClearSelection ? <Button variant="quiet" size="sm" aria-label="Drop the selection" className="size-7 min-w-0 shrink-0 px-0" onPress={onClearSelection}><X className="size-3.5" /></Button> : null}
+          {context.kind === "selection" && onClearSelection ? <Button variant="quiet" size="sm" aria-label="Drop the selection" className={iconButton} onPress={onClearSelection}><X className="size-3.5" /></Button> : null}
+          {openMaterialButton && context.kind !== "library" ? <Button variant="quiet" size="sm" className="h-7 gap-1 px-2 text-[12px]" onPress={() => onOpenMaterial(context.materialId)}>Open material<ArrowUpRight className="size-3.5" /></Button> : null}
+          <span className="ml-auto flex shrink-0 items-center gap-0.5">
+            <Button variant="quiet" size="sm" aria-label="New conversation" className={iconButton} isDisabled={running || turns.length === 0} onPress={newConversation}><Plus className="size-3.5" /></Button>
+            <SessionsMenu sessions={contextSessions} currentId={agent.sessionId} onOpen={(id) => void loadSession(id)} onDelete={async (id) => { await sessions.remove(id); if (id === agent.sessionId) newConversation(); }} />
+          </span>
         </div>
         <div className="mt-2.5 flex flex-wrap gap-1.5">
-          {actions.map((action) => <Button key={action.label} size="sm" isDisabled={!available || running} onPress={() => quick(action)}>{action.label}</Button>)}
+          {actions.map((action) => <Button key={action.label} size="sm" isDisabled={!canSend} onPress={() => quick(action)}>{action.label}</Button>)}
         </div>
       </InspectorSection>
 
-      <div ref={transcriptRef} className="list-scroll -mx-1 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overflow-x-hidden px-1 pb-1">
-        {turns.length === 0 ? (
-          <p className="text-[13px] text-label-2">{context.kind === "library" ? "Ask across everything you kept, or pick an action above." : `Ask about ${context.kind === "selection" ? "the selected passage" : subject}, or pick an action above.`}</p>
-        ) : null}
-        {titlesError ? <p role="alert" className="text-[12.5px] text-red-text">{titlesError}</p> : null}
-        {turns.map((turn) => (
-          <div key={turn.id} className="grid gap-2">
-            <AgentTurn role="user">{turn.label}</AgentTurn>
-            {turn.tools.length ? <div className="grid gap-1">{turn.tools.map((tool) => <AgentToolLine key={tool.key} name={tool.name} status={tool.status} summary={tool.summary} />)}</div> : null}
-            {turn.answer || turn.status === "running" ? (
-              <AgentTurn role="agent">
-                {turn.answer ? <AgentMarkdown text={turn.answer} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} titleOf={titleOf} /> : null}
-                {turn.status === "running" ? <span role="status" aria-label="Answering" className="mt-1 inline-block h-[15px] w-[7px] animate-pulse rounded-[2px] bg-label-3 align-text-bottom" /> : null}
-              </AgentTurn>
-            ) : null}
-            {turn.status === "interrupted" ? <p className="text-[12.5px] text-label-3">Stopped{turn.error ? ` · ${turn.error}` : "."}</p> : null}
-            {turn.status === "failed" || (turn.error && turn.status === "running") ? <p role="alert" className="text-[12.5px] text-red-text">{turn.error ?? "The agent did not answer."}</p> : null}
-          </div>
-        ))}
+      <div ref={transcriptRef} className="list-scroll -mx-1 flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden px-1 pb-1">
+        <div className={`flex flex-col gap-3 ${wide ? "mx-auto w-full max-w-[760px]" : ""}`}>
+          {loadingSession ? <p className="text-[12px] text-label-3">Opening the conversation…</p> : turns.length === 0 ? <p className="text-[13px] text-label-2">{emptyHint}</p> : null}
+          {sessions.error ? <p role="alert" className="text-[12.5px] text-red-text">{sessions.error}</p> : null}
+          {sessionError ? <p role="alert" className="text-[12.5px] text-red-text">{sessionError}</p> : null}
+          {titlesError ? <p role="alert" className="text-[12.5px] text-red-text">{titlesError}</p> : null}
+          {turns.map((turn) => <TurnView key={turn.id} turn={turn} titleOf={titleOf} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onRetry={canSend ? () => void retry(turn) : undefined} />)}
+        </div>
       </div>
 
-      <div ref={composerRef} className="grid gap-2">
-        {statusError ? <p role="alert" className="text-[12.5px] text-red-text">{statusError}</p> : null}
-        {status === undefined && !statusError ? <p className="text-[12px] text-label-3">Checking the agent…</p> : null}
-        {status && !available ? (
-          <div className="grid gap-2 rounded-card bg-content-2 p-3 text-[12.5px] text-label-2">
-            <span>{status.reason ?? "The agent is not available."}</span>
-            <div className="flex flex-wrap gap-1.5">
-              {authRequired ? <Button size="sm" variant="primary" onPress={() => void login()}>Sign in to Codex</Button> : null}
-              {onOpenSettings ? <Button size="sm" onPress={onOpenSettings}>Agent settings…</Button> : null}
-            </div>
-          </div>
-        ) : null}
-        {available && authRequired ? <Button size="sm" variant="primary" className="justify-self-start" onPress={() => void login()}>Sign in to Codex</Button> : null}
-        <div className="flex items-end gap-1.5">
-          {armedTask !== "ask" ? <button type="button" className="mb-1.5 inline-flex h-[22px] shrink-0 cursor-default items-center gap-1 rounded-pill border-0 bg-purple-soft px-2 text-[11.5px] font-medium text-purple-text" aria-label={`${taskLabel[armedTask]} — press to clear`} onClick={() => setArmedTask("ask")}>{taskLabel[armedTask]}<X className="size-3" /></button> : null}
-          <TextField multiline aria-label="Ask the agent" placeholder={placeholder} value={draft} onChange={setDraft} isDisabled={!available} className="min-w-0 flex-1"
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); submitDraft(); }
-              if (event.key === "Escape" && armedTask !== "ask") { event.stopPropagation(); setArmedTask("ask"); }
-            }} />
-          {running ? <Button size="sm" aria-label="Stop (⌘.)" className="mb-0.5 shrink-0" onPress={() => void stop()}><Square className="size-3 fill-current" />Stop <Kbd>⌘.</Kbd></Button>
-            : <Button size="sm" variant="primary" className="mb-0.5 shrink-0" isDisabled={!available || !draft.trim()} onPress={submitDraft}>Send <Kbd>↵</Kbd></Button>}
-        </div>
-        {available ? <p className="text-[11px] text-label-3">Enter sends · Shift+Enter for a new line{status?.account ? ` · ${status.account}` : ""}</p> : null}
+      <div className={wide ? "mx-auto w-full max-w-[760px]" : ""}>
+        <AgentComposer status={status} statusError={statusError} authRequired={authRequired} running={running} busyElsewhere={busyElsewhere} placeholder={placeholder}
+          armedTask={armedTask} onArmedTaskChange={setArmedTask} onSend={send} onStop={() => void stop()} onLogin={login} onOpenSettings={onOpenSettings} composerRef={composerRef} />
       </div>
+    </div>
+  );
+}
+
+/** One exchange: the user bubble, the tool lines, the answer (streaming or final), and how it ended. */
+function TurnView({ turn, titleOf, onOpenLink, onOpenMaterial, onRetry }: { turn: AgentTurnState; titleOf: (id: string) => string | undefined; onOpenLink: (url: string) => void; onOpenMaterial: (id: string) => void; onRetry: (() => void) | undefined }) {
+  const timedOut = turn.status === "failed" && turn.code === "TURN_TIMEOUT";
+  return (
+    <div className="grid gap-2">
+      <AgentTurn role="user">{turn.label}</AgentTurn>
+      {turn.tools.length ? <div className="grid gap-1">{turn.tools.map((tool) => <AgentToolLine key={tool.key} name={tool.name} status={tool.status} summary={tool.summary} />)}</div> : null}
+      {turn.answer || turn.status === "running" ? (
+        <AgentTurn role="agent">
+          {turn.answer ? <AgentMarkdown text={turn.answer} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} titleOf={titleOf} sources={turn.sources} /> : null}
+          {turn.status === "running" ? <span role="status" aria-label="Answering" className="mt-1 inline-block h-[15px] w-[7px] animate-pulse rounded-[2px] bg-label-3 align-text-bottom" /> : null}
+        </AgentTurn>
+      ) : null}
+      {turn.status === "interrupted" ? <p className="text-[12.5px] text-label-3">Stopped{turn.error ? ` · ${turn.error}` : "."}</p> : null}
+      {timedOut ? (
+        <p role="alert" className="flex flex-wrap items-center gap-2 text-[12.5px] text-label-2">
+          <span>The agent took too long to answer.</span>
+          {onRetry ? <Button size="sm" onPress={onRetry}>Retry</Button> : null}
+        </p>
+      ) : turn.status === "failed" || (turn.error && turn.status === "running") ? (
+        <p role="alert" className="text-[12.5px] text-red-text">{turn.code === "AGENT_UNAVAILABLE" ? "The agent is not available — see below." : (turn.error ?? "The agent did not answer.")}</p>
+      ) : null}
     </div>
   );
 }
