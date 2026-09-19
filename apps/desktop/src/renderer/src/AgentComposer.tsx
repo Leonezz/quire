@@ -10,9 +10,8 @@ export interface AgentComposerProps {
   statusError: string | undefined;
   /** The agent is signed out (a turn said so, or the status reason reads like it). */
   authRequired: boolean;
+  /** This conversation's turn is in flight: the field waits and the button stops it; other conversations are not held. */
   running: boolean;
-  /** A turn is in flight in another panel: the composer waits rather than failing. */
-  busyElsewhere: boolean;
   /** "Ask about X…" when nothing is armed. */
   placeholder: string;
   armedTask: AgentTask;
@@ -25,14 +24,14 @@ export interface AgentComposerProps {
 }
 
 /**
- * The bottom of the agent panel: what stands in the way (unavailable, sign-in, busy elsewhere),
- * then the text field with its armed task and the Send / Stop button.
+ * The bottom of the agent panel: what stands in the way (unavailable, sign-in), then the text
+ * field with its armed task and the Send / Stop button.
  */
-export function AgentComposer({ status, statusError, authRequired, running, busyElsewhere, placeholder, armedTask, onArmedTaskChange, onSend, onStop, onLogin, onOpenSettings, composerRef }: AgentComposerProps) {
+export function AgentComposer({ status, statusError, authRequired, running, placeholder, armedTask, onArmedTaskChange, onSend, onStop, onLogin, onOpenSettings, composerRef }: AgentComposerProps) {
   const [draft, setDraft] = useState("");
   const [signingIn, setSigningIn] = useState(false);
   const available = status?.available === true;
-  const canSend = available && !running && !busyElsewhere;
+  const canSend = available && !running;
   const submit = () => { if (draft.trim() && canSend) { onSend(armedTask, draft); setDraft(""); } };
   const login = async () => { setSigningIn(true); try { await onLogin(); } finally { setSigningIn(false); } };
   const signIn = <Button size="sm" variant="primary" isDisabled={signingIn} onPress={() => void login()}>{signingIn ? "Waiting for the browser…" : "Sign in to Codex"}</Button>;
@@ -51,10 +50,9 @@ export function AgentComposer({ status, statusError, authRequired, running, busy
         </div>
       ) : null}
       {available && authRequired ? <div className="justify-self-start">{signIn}</div> : null}
-      {available && busyElsewhere ? <p role="status" className="text-[12.5px] text-label-2">Still answering in another panel… the composer opens when it is done.</p> : null}
       <div className="flex items-end gap-1.5">
         {armedTask !== "ask" ? <button type="button" className="mb-1.5 inline-flex h-[22px] shrink-0 cursor-default items-center gap-1 rounded-pill border-0 bg-purple-soft px-2 text-[11.5px] font-medium text-purple-text" aria-label={`${taskLabel[armedTask]} — press to clear`} onClick={() => onArmedTaskChange("ask")}>{taskLabel[armedTask]}<X className="size-3" /></button> : null}
-        <TextField multiline aria-label="Ask the agent" placeholder={busyElsewhere ? "Still answering…" : placeholder} value={draft} onChange={setDraft} isDisabled={!available || busyElsewhere} className="min-w-0 flex-1"
+        <TextField multiline aria-label="Ask the agent" placeholder={running ? "Still answering…" : placeholder} value={draft} onChange={setDraft} isDisabled={!available || running} className="min-w-0 flex-1"
           onKeyDown={(event) => {
             if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); submit(); }
             if (event.key === "Escape" && armedTask !== "ask") { event.stopPropagation(); onArmedTaskChange("ask"); }

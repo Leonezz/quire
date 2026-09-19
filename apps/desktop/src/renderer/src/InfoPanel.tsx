@@ -59,7 +59,7 @@ function TagsField({ editor }: { editor: MaterialMetaEditor }) {
  * (blur or Enter) through updateMaterialMeta and shows what was extracted when it differs. `onSaved`
  * hands the updated record back so the header, the reader body and the Library row follow at once.
  */
-export function InfoPanel({ material, onSaved, onOpenLink, onOpenMaterial, onRebuild, rebuild = "idle" }: { material: MaterialRecord; onSaved: (record: MaterialRecord) => void; onOpenLink: (url: string) => void; onOpenMaterial: (id: string) => void } & Partial<RebuildProps>) {
+export function InfoPanel({ material, onSaved, onOpenLink, onOpenMaterial, onRebuild, rebuild = "idle", rebuildError }: { material: MaterialRecord; onSaved: (record: MaterialRecord) => void; onOpenLink: (url: string) => void; onOpenMaterial: (id: string) => void } & Partial<RebuildProps>) {
   const editor = useMaterialMeta(material, onSaved);
   const kind = editor.meta.kind ?? "webpage";
   return (
@@ -80,7 +80,7 @@ export function InfoPanel({ material, onSaved, onOpenLink, onOpenMaterial, onReb
         </div>
       </InspectorSection>
       <InfoActions material={material} onSaved={onSaved} />
-      <InfoFacts material={material} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onRebuild={onRebuild} rebuild={rebuild} />
+      <InfoFacts material={material} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError} />
     </>
   );
 }

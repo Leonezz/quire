@@ -6,7 +6,7 @@ import { AgentComposer, taskLabel } from "./AgentComposer";
 import { AgentMarkdown } from "./AgentMarkdown";
 import { SessionsMenu } from "./AgentSessions";
 import { truncate } from "./format";
-import { useAgent, type AgentTurnState } from "./useAgent";
+import { useAgent, type AgentTurnState, type AskFailure } from "./useAgent";
 import { useAgentSessions } from "./useAgentSessions";
 import { useMaterialTitles } from "./useMaterialTitles";
 
@@ -36,23 +36,14 @@ export function promptLabel(task: AgentTask, text: string, context: AgentContext
   return `${taskLabel[task]} ${about}`;
 }
 
-export interface PendingTask { task: AgentTask; text: string }
-export type SettledStatus = Exclude<AgentTurnState["status"], "running">;
-
 export interface AgentPanelProps {
   /** Decided by the caller: the shell passes the library, a reader its material or the selected passage. */
   context: AgentContext;
   /** The material's title, for the pill and the canned prompts (truncated to ~40 characters here). */
   subject?: string | undefined;
-  /** Open this stored conversation instead of the context's most recent one. */
+  /** Open this stored conversation instead of the context's most recent one; a new value opens that one (a reader's rebuild names its session). */
   sessionId?: string | undefined;
   onSessionChange?: ((sessionId: string | undefined) => void) | undefined;
-  /** A canned task to send as soon as the agent is available (the reader's "Rebuild with the agent"). */
-  pendingTask?: PendingTask | undefined;
-  /** The pending task was sent (`ok`), or could not be (the agent is unavailable). */
-  onPendingTaskSent?: ((accepted: boolean) => void) | undefined;
-  /** A turn of `task` finished — done, failed or stopped. */
-  onTaskSettled?: ((task: AgentTask, status: SettledStatus) => void) | undefined;
   /** Offers "Open material" in the context row (the Agent view, where the material is not on screen). */
   openMaterialButton?: boolean | undefined;
   /** Wider transcript for a full-pane layout. */
@@ -65,20 +56,19 @@ export interface AgentPanelProps {
 }
 
 /** The Agent panel: context row (pill, canned actions, new conversation, history), the transcript, the composer. */
-export function AgentPanel({ context, subject: rawSubject, sessionId, onSessionChange, pendingTask, onPendingTaskSent, onTaskSettled, openMaterialButton = false, wide = false, onOpenMaterial, onOpenLink, onClearSelection, onOpenSettings }: AgentPanelProps) {
+export function AgentPanel({ context, subject: rawSubject, sessionId, onSessionChange, openMaterialButton = false, wide = false, onOpenMaterial, onOpenLink, onClearSelection, onOpenSettings }: AgentPanelProps) {
   const { titles, error: titlesError, titleOf } = useMaterialTitles();
   const subject = truncate(rawSubject ?? (context.kind === "library" ? "the library" : (titles?.get(context.materialId) ?? "this material")), 40);
   const labelOf = useCallback((task: AgentTask, text: string) => promptLabel(task, text, context, subject), [context, subject]);
   const agent = useAgent(context, { sessionId, labelOf, onSessionChange });
-  const { status, statusError, turns, running, busyElsewhere, sessionError, loadingSession, ask, retry, stop, login, loadSession, newConversation } = agent;
+  const { status, statusError, turns, running, sessionError, loadingSession, askFailure, stopError, authRequired, ask, retry, stop, login, loadSession, newConversation } = agent;
   const sessions = useAgentSessions();
   const [armedTask, setArmedTask] = useState<AgentTask>("ask");
   const transcriptRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLDivElement>(null);
   const actions = context.kind === "library" ? libraryActions : materialActions;
   const available = status?.available === true;
-  const canSend = available && !running && !busyElsewhere;
-  const authRequired = turns.some((turn) => turn.authRequired) || (!available && /sign in|log in|login/i.test(status?.reason ?? ""));
+  const canSend = available && !running;
   const contextSessions = useMemo(() => sessions.forContext(context), [sessions, context]);
 
   // Follow the stream: the transcript stays pinned to its end unless the reader scrolled up.
@@ -99,26 +89,9 @@ export function AgentPanel({ context, subject: rawSubject, sessionId, onSessionC
   }, [running, stop]);
 
   const send = useCallback((task: AgentTask, text: string) => {
-    void ask(task, text.trim(), promptLabel(task, text, context, subject));
+    void ask(task, text.trim());
     setArmedTask("ask");
-  }, [ask, context, subject]);
-
-  // A task handed in by the reader goes out once the agent is known to be available (or is refused once it is known not to be).
-  useEffect(() => {
-    if (!pendingTask || status === undefined || loadingSession) return;
-    if (canSend) { send(pendingTask.task, pendingTask.text); onPendingTaskSent?.(true); }
-    else if (!available) onPendingTaskSent?.(false);
-  }, [pendingTask, status, loadingSession, canSend, available, send, onPendingTaskSent]);
-
-  // The owner learns when a turn this panel watched running settles (the reader's banner leaves "Rebuilding…"); stored turns arrive settled and are not reported.
-  const watched = useRef(new Set<string>());
-  useEffect(() => {
-    for (const turn of turns) {
-      if (turn.status === "running") { watched.current.add(turn.id); continue; }
-      if (!watched.current.delete(turn.id)) continue;
-      onTaskSettled?.(turn.task, turn.status);
-    }
-  }, [turns, onTaskSettled]);
+  }, [ask]);
 
   const focusComposer = () => composerRef.current?.querySelector("textarea")?.focus();
   const quick = (action: QuickAction) => {
@@ -153,14 +126,30 @@ export function AgentPanel({ context, subject: rawSubject, sessionId, onSessionC
           {sessionError ? <p role="alert" className="text-[12.5px] text-red-text">{sessionError}</p> : null}
           {titlesError ? <p role="alert" className="text-[12.5px] text-red-text">{titlesError}</p> : null}
           {turns.map((turn) => <TurnView key={turn.id} turn={turn} titleOf={titleOf} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onRetry={canSend ? () => void retry(turn) : undefined} />)}
+          {askFailure ? <AskFailureLine failure={askFailure} onRetry={canSend ? () => void retry({ task: askFailure.task, prompt: askFailure.text }) : undefined} /> : null}
+          {stopError ? <p role="alert" className="text-[12.5px] text-red-text">{stopError}</p> : null}
         </div>
       </div>
 
       <div className={wide ? "mx-auto w-full max-w-[760px]" : ""}>
-        <AgentComposer status={status} statusError={statusError} authRequired={authRequired} running={running} busyElsewhere={busyElsewhere} placeholder={placeholder}
+        <AgentComposer status={status} statusError={statusError} authRequired={authRequired} running={running} placeholder={placeholder}
           armedTask={armedTask} onArmedTaskChange={setArmedTask} onSend={send} onStop={() => void stop()} onLogin={login} onOpenSettings={onOpenSettings} composerRef={composerRef} />
       </div>
     </div>
+  );
+}
+
+/** The bridge would not start the question: why, in one line, and Retry once it can. "Still answering" is this session's own turn, which the composer already shows. */
+function AskFailureLine({ failure, onRetry }: { failure: AskFailure; onRetry: (() => void) | undefined }) {
+  const text = failure.code === "TURN_RUNNING" ? "Still answering — wait for this conversation's turn to finish, or stop it."
+    : failure.code === "AGENT_UNAVAILABLE" ? "The agent is not available — see below."
+    : failure.code === "AUTH_REQUIRED" ? "Sign in first — see below."
+    : failure.message;
+  return (
+    <p role="alert" className="flex flex-wrap items-center gap-2 text-[12.5px] text-red-text">
+      <span>{text}</span>
+      {onRetry && failure.code !== "AGENT_UNAVAILABLE" && failure.code !== "AUTH_REQUIRED" ? <Button size="sm" onPress={onRetry}>Retry</Button> : null}
+    </p>
   );
 }
 
@@ -183,8 +172,8 @@ function TurnView({ turn, titleOf, onOpenLink, onOpenMaterial, onRetry }: { turn
           <span>The agent took too long to answer.</span>
           {onRetry ? <Button size="sm" onPress={onRetry}>Retry</Button> : null}
         </p>
-      ) : turn.status === "failed" || (turn.error && turn.status === "running") ? (
-        <p role="alert" className="text-[12.5px] text-red-text">{turn.code === "AGENT_UNAVAILABLE" ? "The agent is not available — see below." : (turn.error ?? "The agent did not answer.")}</p>
+      ) : turn.status === "failed" ? (
+        <p role="alert" className="text-[12.5px] text-red-text">{turn.error ?? "The agent did not answer."}</p>
       ) : null}
     </div>
   );

@@ -56,11 +56,22 @@ function harness(script: (message: Json, fake: FakeProcess) => void, options: { 
 
 const noTools = { cwd: "/tmp/agent", prompt: "hello", dynamicTools: [], onToolCall: async (call: ToolCall) => ({ success: true, text: `unexpected ${call.tool}` }) };
 
-function completeTurn(fake: FakeProcess, turnId: string, text: string) {
-  for (const delta of text.split(" ")) fake.send({ method: "item/agentMessage/delta", params: { threadId: "thread-1", turnId, itemId: "m1", delta: `${delta} ` } });
-  fake.send({ method: "item/completed", params: { threadId: "thread-1", turnId, item: { type: "agentMessage", id: "m1", text } } });
-  fake.send({ method: "turn/completed", params: { threadId: "thread-1", turn: { id: turnId, status: "completed", items: [] } } });
+function completeTurn(fake: FakeProcess, turnId: string, text: string, threadId = "thread-1") {
+  for (const delta of text.split(" ")) fake.send({ method: "item/agentMessage/delta", params: { threadId, turnId, itemId: "m1", delta: `${delta} ` } });
+  fake.send({ method: "item/completed", params: { threadId, turnId, item: { type: "agentMessage", id: "m1", text } } });
+  fake.send({ method: "turn/completed", params: { threadId, turn: { id: turnId, status: "completed", items: [] } } });
 }
+
+/** Every thread/start answers with a fresh thread id, and every turn/start with a turn id naming its thread: two callers get two threads. */
+function multiThreadScript() {
+  let threads = 0;
+  return basicScript((fake, turnRequest) => {
+    const threadId = String((turnRequest.params as Json).threadId);
+    fake.send(ok(idOf(turnRequest), { turn: { id: `turn-${threadId}`, status: "inProgress", items: [] } }));
+  }, { "thread/start": (fake, m) => fake.send(ok(idOf(m), { thread: { id: `thread-${++threads}` } })) });
+}
+
+const tick = () => new Promise((r) => setTimeout(r, 5));
 
 describe("resolveCodexBinary", () => {
   it("prefers CODEX_PATH, then the install locations, then PATH, and explains what to install", () => {
@@ -124,7 +135,7 @@ describe("CodexClient", () => {
     expect(outcome).toEqual({ threadId: "thread-1", turnId: "turn-1", text: "Two new pieces." });
     expect(deltas.join("")).toBe("Two new pieces. ");
     expect(progress).toEqual(["library_recent:running:", "library_recent:done:library_recent → 0 materials"]);
-    expect(h.client.busy).toBe(false);
+    expect(h.client.running).toBe(0);
   });
 
   it("buffers a tool call and deltas that arrive before the turn/start ACK", async () => {
@@ -159,17 +170,75 @@ describe("CodexClient", () => {
     expect((await outcome).text).toBe("ok");
   });
 
-  it("refuses a second turn while one runs, and interrupts settle as TURN_INTERRUPTED", async () => {
+  it("refuses a second turn on the same thread while one runs, and interrupts settle as TURN_INTERRUPTED", async () => {
     const h = harness(basicScript((fake, turnRequest) => fake.send(ok(idOf(turnRequest), { turn: { id: "turn-4", status: "inProgress", items: [] } }))));
     const first = h.client.runTurn(noTools);
-    await new Promise((r) => setTimeout(r, 5));
+    await tick();
+    expect(h.client.running).toBe(1);
+    // Named explicitly (no thread/resume is sent) and by way of the server handing out the same id again.
+    await expect(h.client.runTurn({ ...noTools, threadId: "thread-1" })).rejects.toMatchObject({ code: "TURN_RUNNING" });
     await expect(h.client.runTurn(noTools)).rejects.toMatchObject({ code: "TURN_RUNNING" });
-    await h.client.interrupt();
+    expect(h.server().requests("thread/resume")).toHaveLength(0);
+    await h.client.interrupt("thread-1");
+    await h.client.interrupt("thread-nobody");
     const server = h.server();
+    expect(server.requests("turn/interrupt")).toHaveLength(1);
     expect(server.requests("turn/interrupt")[0]!.params).toEqual({ threadId: "thread-1", turnId: "turn-4" });
     server.send({ method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-4", status: "interrupted", items: [] } } });
     await expect(first).rejects.toMatchObject({ code: "TURN_INTERRUPTED" });
-    expect(h.client.busy).toBe(false);
+    expect(h.client.running).toBe(0);
+  });
+
+  it("runs turns on two threads at once, routing interleaved deltas and tool calls by thread", async () => {
+    const deltas: Record<string, string[]> = { a: [], b: [] };
+    const calls: Record<string, string[]> = { a: [], b: [] };
+    const h = harness(multiThreadScript());
+    const a = h.client.runTurn({ ...noTools, prompt: "A?", onDelta: (d) => deltas.a!.push(d), onToolCall: async (call) => { calls.a!.push(call.tool); return { success: true, text: "a" }; } });
+    await tick();
+    const b = h.client.runTurn({ ...noTools, prompt: "B?", onDelta: (d) => deltas.b!.push(d), onToolCall: async (call) => { calls.b!.push(call.tool); return { success: true, text: "b" }; } });
+    await tick();
+    expect(h.client.running).toBe(2);
+    const server = h.server();
+    expect(server.requests("thread/start")).toHaveLength(2);
+    server.send({ method: "item/agentMessage/delta", params: { threadId: "thread-1", turnId: "turn-thread-1", itemId: "m", delta: "one " } });
+    server.send({ method: "item/agentMessage/delta", params: { threadId: "thread-2", turnId: "turn-thread-2", itemId: "m", delta: "two " } });
+    server.send({ id: 910, method: "item/tool/call", params: { threadId: "thread-2", turnId: "turn-thread-2", callId: "c", tool: "inbox_list", arguments: {} } });
+    server.send({ method: "item/agentMessage/delta", params: { threadId: "thread-1", turnId: "turn-thread-1", itemId: "m", delta: "more" } });
+    server.send({ id: 911, method: "item/tool/call", params: { threadId: "thread-9", turnId: "turn-x", callId: "c", tool: "inbox_list", arguments: {} } });
+    await tick();
+    expect(deltas).toEqual({ a: ["one ", "more"], b: ["two "] });
+    expect(calls).toEqual({ a: [], b: ["inbox_list"] });
+    expect(server.written.find((m) => m.id === 910)?.result).toMatchObject({ success: true, contentItems: [{ type: "inputText", text: "b" }] });
+    expect(server.written.find((m) => m.id === 911)?.result).toMatchObject({ success: false });
+    completeTurn(server, "turn-thread-2", "B done", "thread-2");
+    expect(await b).toEqual({ threadId: "thread-2", turnId: "turn-thread-2", text: "B done" });
+    expect(h.client.running).toBe(1);
+    completeTurn(server, "turn-thread-1", "A done", "thread-1");
+    expect(await a).toEqual({ threadId: "thread-1", turnId: "turn-thread-1", text: "A done" });
+    expect(h.client.running).toBe(0);
+  });
+
+  it("interrupts one thread and leaves the other running; a server exit fails both", async () => {
+    const h = harness(multiThreadScript());
+    const a = h.client.runTurn({ ...noTools, prompt: "A?" });
+    await tick();
+    const b = h.client.runTurn({ ...noTools, prompt: "B?" });
+    await tick();
+    await h.client.interrupt("thread-2");
+    const server = h.server();
+    expect(server.requests("turn/interrupt").map((m) => m.params)).toEqual([{ threadId: "thread-2", turnId: "turn-thread-2" }]);
+    server.send({ method: "turn/completed", params: { threadId: "thread-2", turn: { id: "turn-thread-2", status: "interrupted", items: [] } } });
+    await expect(b).rejects.toMatchObject({ code: "TURN_INTERRUPTED" });
+    expect(h.client.running).toBe(1);
+    server.send({ method: "item/agentMessage/delta", params: { threadId: "thread-1", turnId: "turn-thread-1", itemId: "m", delta: "still " } });
+
+    const c = h.client.runTurn({ ...noTools, prompt: "C?" });
+    await tick();
+    expect(h.client.running).toBe(2);
+    server.exit(1);
+    await expect(a).rejects.toMatchObject({ code: "APP_SERVER_EXITED" });
+    await expect(c).rejects.toMatchObject({ code: "APP_SERVER_EXITED" });
+    expect(h.client.running).toBe(0);
   });
 
   it("fails the turn when the server exits mid-turn and starts a fresh process afterwards", async () => {

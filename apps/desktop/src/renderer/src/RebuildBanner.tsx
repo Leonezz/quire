@@ -8,6 +8,8 @@ export interface RebuildProps {
   /** Present when the material has a capture to rebuild from and no rebuilt version yet. */
   onRebuild?: (() => void) | undefined;
   rebuild: RebuildState;
+  /** Why the last rebuild did not finish, when the bridge said. */
+  rebuildError?: string | undefined;
 }
 
 /** Whether the agent can rebuild this material: there is a raw capture and it has not been rebuilt already. */
@@ -16,7 +18,7 @@ export function canRebuild(material: Pick<MaterialRecord, "capture" | "rebuiltAs
 }
 
 /** "Rebuild with the agent" / "Rebuilding…" / "A rebuilt version exists · Open", as one line for the banner and the Info panel. */
-export function RebuildAction({ material, onRebuild, rebuild, onOpenMaterial, size = "sm" }: RebuildProps & { material: MaterialRecord; onOpenMaterial: (id: string) => void; size?: "sm" | "md" }) {
+export function RebuildAction({ material, onRebuild, rebuild, rebuildError, onOpenMaterial, size = "sm" }: RebuildProps & { material: MaterialRecord; onOpenMaterial: (id: string) => void; size?: "sm" | "md" }) {
   if (material.rebuiltAs) {
     const id = material.rebuiltAs;
     return <span className="inline-flex items-center gap-1.5">A rebuilt version exists · <Button variant="plain" size={size} className="h-6 px-1.5 text-[12.5px]" onPress={() => onOpenMaterial(id)}>Open<ArrowRight className="size-3" /></Button></span>;
@@ -26,7 +28,7 @@ export function RebuildAction({ material, onRebuild, rebuild, onOpenMaterial, si
   return (
     <span className="inline-flex flex-wrap items-center gap-1.5">
       <Button size={size} className="gap-1" onPress={onRebuild}><Sparkles className="size-3.5" />Rebuild with the agent</Button>
-      {rebuild === "failed" ? <span className="text-red-text">The rebuild did not finish — see the Agent panel.</span> : null}
+      {rebuild === "failed" ? <span role="alert" className="text-red-text">The rebuild did not finish{rebuildError ? ` — ${rebuildError}` : " — see the Agent panel."}</span> : null}
     </span>
   );
 }
@@ -35,11 +37,11 @@ export function RebuildAction({ material, onRebuild, rebuild, onOpenMaterial, si
  * The reader's quality banner: why the page reads badly, the way to the original, and — when
  * there is a capture — the agent's rebuild (or the rebuilt version once it exists).
  */
-export function QualityBanner({ material, low, onOpenLink, onOpenMaterial, onRebuild, rebuild }: RebuildProps & { material: MaterialRecord; low: boolean; onOpenLink: (url: string) => void; onOpenMaterial: (id: string) => void }) {
+export function QualityBanner({ material, low, onOpenLink, onOpenMaterial, onRebuild, rebuild, rebuildError }: RebuildProps & { material: MaterialRecord; low: boolean; onOpenLink: (url: string) => void; onOpenMaterial: (id: string) => void }) {
   const plain = material.quality.safety === "degraded_plaintext";
   if (!plain && !low) return null;
   const original = <a href={material.finalUrl} onClick={(event) => { event.preventDefault(); onOpenLink(material.finalUrl); }}>Open the original ↗</a>;
-  const action = <RebuildAction material={material} onRebuild={onRebuild} rebuild={rebuild} onOpenMaterial={onOpenMaterial} />;
+  const action = <RebuildAction material={material} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError} onOpenMaterial={onOpenMaterial} />;
   if (plain) {
     return (
       <div className="mb-6 grid gap-2 rounded-card bg-content-2 p-4 text-[13px] text-label-2">

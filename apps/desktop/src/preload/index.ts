@@ -46,12 +46,19 @@ const api: ReadApi = {
   // M2: the agent. Events stream on agent:event; the listener receives the event object as sent.
   agentStatus: () => ipcRenderer.invoke("agent:status"),
   agentAsk: (request) => ipcRenderer.invoke("agent:ask", request),
-  agentInterrupt: () => ipcRenderer.invoke("agent:interrupt"),
+  agentInterrupt: (sessionId) => ipcRenderer.invoke("agent:interrupt", sessionId),
+  listAgentRuns: () => ipcRenderer.invoke("agent:runs"),
   agentLogin: () => ipcRenderer.invoke("agent:login"),
   onAgentEvent: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, payload: AgentEvent) => listener(payload);
     ipcRenderer.on("agent:event", handler);
     return () => ipcRenderer.removeListener("agent:event", handler);
+  },
+  // A clicked notification names the session to show.
+  onAgentOpenSession: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, sessionId: string) => listener(sessionId);
+    ipcRenderer.on("agent:open-session", handler);
+    return () => ipcRenderer.removeListener("agent:open-session", handler);
   },
   // M3: metadata, library management, settings, agent sessions.
   queryLibrary: (filter) => ipcRenderer.invoke("library:query", filter),

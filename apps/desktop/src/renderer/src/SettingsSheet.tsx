@@ -36,7 +36,7 @@ function Row({ label, hint, children }: { label: string; hint?: string | undefin
 function agentLine(status: AgentStatus | undefined, error: string | undefined): string {
   if (error) return error;
   if (!status) return "Checking the agent…";
-  if (status.available) return `Codex ${status.version ?? ""}${status.account ? ` · ${status.account}` : ""}${status.busy ? " · answering" : ""}`.replace(/\s+/g, " ").trim();
+  if (status.available) return `Codex ${status.version ?? ""}${status.account ? ` · ${status.account}` : ""}${status.running === 1 ? " · answering" : status.running > 1 ? ` · answering ${status.running}` : ""}`.replace(/\s+/g, " ").trim();
   return status.reason ?? "The agent is not available.";
 }
 

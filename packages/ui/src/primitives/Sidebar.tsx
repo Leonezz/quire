@@ -35,6 +35,8 @@ export interface SidebarItemProps extends ListBoxItemProps {
   icon?: React.ReactNode;
   label: string;
   count?: number | string;
+  /** Something is running behind this scope: a small spinner before the count (the count then says how many). */
+  busy?: boolean | undefined;
   attention?: boolean;
   health?: SidebarHealth | undefined;
   /** Quieter type for an entry that opens something rather than naming a scope ("All tags…", "Manage sources…"). */
@@ -42,7 +44,7 @@ export interface SidebarItemProps extends ListBoxItemProps {
   ref?: Ref<HTMLDivElement> | undefined;
 }
 
-export function SidebarItem({ icon, label, count, attention, health, quiet, className, ...props }: SidebarItemProps) {
+export function SidebarItem({ icon, label, count, busy = false, attention, health, quiet, className, ...props }: SidebarItemProps) {
   return (
     <ListBoxItem
       {...props}
@@ -58,7 +60,8 @@ export function SidebarItem({ icon, label, count, attention, health, quiet, clas
       {health ? <span role="img" aria-label={healthLabel[health]} className={cx("size-[7px] shrink-0 rounded-full", health === "ok" && "bg-green", health === "paused" && "bg-orange", health === "failing" && "bg-red")} /> : null}
       <span className={cx("min-w-0 flex-1 truncate text-[13px] leading-5", quiet ? "text-label-3" : "font-medium text-label")}>{label}</span>
       {attention ? <i aria-label="needs attention" className="size-[7px] rounded-full bg-orange" /> : null}
-      {count !== undefined ? <small className="text-[12px] font-medium tabular-nums text-label-3">{count}</small> : null}
+      {busy ? <i role="status" aria-label="running" className="block size-3 shrink-0 animate-spin rounded-full border-[1.5px] border-label-4 border-t-label-2" /> : null}
+      {count !== undefined ? <small className={cx("text-[12px] font-medium tabular-nums", busy ? "text-label-2" : "text-label-3")}>{count}</small> : null}
     </ListBoxItem>
   );
 }

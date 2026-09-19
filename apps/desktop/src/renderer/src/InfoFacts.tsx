@@ -24,7 +24,7 @@ function Fact({ label, children }: { label: string; children: React.ReactNode })
 }
 
 /** What is known about the material and cannot be edited: where it came from, when, how well it extracted, what it became. Collapsed by default. */
-export function InfoFacts({ material, onOpenLink, onOpenMaterial, onRebuild, rebuild = "idle" }: { material: MaterialRecord; onOpenLink: (url: string) => void; onOpenMaterial: (id: string) => void } & Partial<RebuildProps>) {
+export function InfoFacts({ material, onOpenLink, onOpenMaterial, onRebuild, rebuild = "idle", rebuildError }: { material: MaterialRecord; onOpenLink: (url: string) => void; onOpenMaterial: (id: string) => void } & Partial<RebuildProps>) {
   const url = material.finalUrl || material.url;
   return (
     <details className="group">
@@ -42,7 +42,7 @@ export function InfoFacts({ material, onOpenLink, onOpenMaterial, onRebuild, reb
         {material.capture ? <Fact label="Capture">{bytesLabel(material.capture.byteLength)} · {material.capture.mediaType}</Fact> : null}
         {material.lang ? <Fact label="Language">{material.lang}{material.dir === "rtl" ? " · right to left" : ""}</Fact> : null}
         {material.rebuiltAs || onRebuild ? (
-          <Fact label="Rebuilt"><RebuildAction material={material} onRebuild={onRebuild} rebuild={rebuild} onOpenMaterial={onOpenMaterial} /></Fact>
+          <Fact label="Rebuilt"><RebuildAction material={material} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError} onOpenMaterial={onOpenMaterial} /></Fact>
         ) : null}
       </dl>
       {material.origin === "agent" && material.lineage?.length ? (

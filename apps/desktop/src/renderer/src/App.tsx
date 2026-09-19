@@ -13,6 +13,7 @@ import { QueueView } from "./QueueView";
 import { SearchPalette } from "./SearchPalette";
 import { SettingsSheet, type SettingsSection } from "./SettingsSheet";
 import { SourcesView } from "./SourcesView";
+import { agentStore, onAgentOpenSession, useAgentRunning } from "./agentStore";
 import { read } from "./api";
 import { isTypingTarget } from "./format";
 import { applyTheme, loadPrefs } from "./readingPrefs";
@@ -46,6 +47,10 @@ export function App() {
   const focus = useMemo(() => focusOf(scope), [scope]);
   const library = useLibrary(focus);
   const agentSessions = useAgentSessions();
+  const agentRunning = useAgentRunning();
+  const [agentStartError, setAgentStartError] = useState<string | undefined>(undefined);
+  // A session the main process asked the window to show (a notification was clicked): the Agent scope selects it.
+  const [requestedSession, setRequestedSession] = useState<{ id: string; nonce: number } | undefined>(undefined);
   const [inboxSelected, setInboxSelected] = useState<string | undefined>(undefined);
   const [queueSelected, setQueueSelected] = useState<string | undefined>(undefined);
   const [sourceSelected, setSourceSelected] = useState<string | undefined>(undefined);
@@ -64,6 +69,11 @@ export function App() {
 
   // The reading theme applies to the whole window, whether or not a reader is open.
   useEffect(() => { applyTheme(loadPrefs().theme); }, []);
+  // The agent store outlives every panel: it is started once here and follows the bridge's runs from then on.
+  useEffect(() => {
+    agentStore.start().catch((cause: unknown) => { setAgentStartError(cause instanceof Error ? cause.message : "Could not read the agent's runs."); });
+    return onAgentOpenSession((id) => { setRequestedSession({ id, nonce: Date.now() }); setScope({ kind: "agent" }); });
+  }, [setScope]);
   // The panel library sizes panes with flex-grow and jumps on collapse; a transition on that property, enabled
   // only for the toggle, turns the jump into a slide without fighting the library's own layout or drag resizing.
   const [sidebarSliding, setSidebarSliding] = useState(false);
@@ -183,7 +193,7 @@ export function App() {
       case "tag": return { title: scope.id, count: library.materials.length };
     }
   })();
-  const shellError = lists.error ?? routeError;
+  const shellError = lists.error ?? routeError ?? agentStartError;
   const shell: ShellSlots = {
     listToolbar: <ListToolbar title={heading.title} count={heading.count} inset={sidebarCollapsed} onShowSidebar={toggleSidebar}
       sort={libraryScope ? { value: library.sort, onChange: library.setSort } : undefined} />,
@@ -205,7 +215,7 @@ export function App() {
       case "library": case "tag":
         return <LibraryView library={library} selected={librarySelected} onSelectionChange={setLibrarySelected} onOpenLink={openLink} onOpenMaterial={showMaterial} onOpenSettings={() => openSettings("agent")} shell={shell} narrowed={scope.kind === "tag" || scope.id !== "all"} />;
       case "agent":
-        return <AgentView sessions={agentSessions} onOpenMaterial={showMaterial} onOpenLink={openLink} onOpenSettings={() => openSettings("agent")} shell={shell} />;
+        return <AgentView sessions={agentSessions} requestedSession={requestedSession} onOpenMaterial={showMaterial} onOpenLink={openLink} onOpenSettings={() => openSettings("agent")} shell={shell} />;
       case "sources":
         return <SourcesView sources={lists.sources} selectedId={sourceSelected} onSelect={setSourceSelected} refresh={lists.refresh} onOpenLink={openLink} onAdd={() => setAddOpen(true)} shell={shell} />;
     }
@@ -225,7 +235,7 @@ export function App() {
           const collapsed = size.inPixels === 0;
           setSidebarCollapsed(collapsed); saveSidebarCollapsed(collapsed);
         }}>
-        <AppSidebar width={sidebarWidth} scope={scope} onScope={setScope} inbox={lists.inbox} queueCount={lists.queue.length} conversationCount={agentSessions.sessions.length} tags={library.tags} sources={lists.sources} onHide={toggleSidebar} onOpenSettings={() => openSettings()} />
+        <AppSidebar width={sidebarWidth} scope={scope} onScope={setScope} inbox={lists.inbox} queueCount={lists.queue.length} conversationCount={agentSessions.sessions.length} runningCount={agentRunning} tags={library.tags} sources={lists.sources} onHide={toggleSidebar} onOpenSettings={() => openSettings()} />
       </SplitPanel>
       {/* With the sidebar hidden the separator takes no room, so the list segment starts at the window's edge. */}
       <SplitSeparator aria-label="Resize sidebar" hit={sidebarCollapsed ? 0 : 10} footprint={sidebarCollapsed ? 0 : 1} line="always" className={sidebarCollapsed ? "invisible" : ""} />

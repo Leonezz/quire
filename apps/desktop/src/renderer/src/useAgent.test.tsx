@@ -1,37 +1,52 @@
 // @vitest-environment jsdom
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AgentEvent, AgentResult, AgentSession } from "../../shared/contracts";
-import { deferred, flush, mockRead } from "./testApi";
+import type { AgentEvent, AgentSession, AgentTurnRecord } from "../../shared/contracts";
+import { flush, mockRead } from "./testApi";
 
 const api = vi.hoisted(() => ({ read: {} as ReturnType<typeof import("./testApi").mockRead> }));
 vi.mock("./api", () => ({ get read() { return api.read; }, isPreview: true }));
 
-import { turnsOfSession, useAgent } from "./useAgent";
+import { agentStore } from "./agentStore";
+import { mergeTurns, turnsOfSession, useAgent } from "./useAgent";
 
 const context = { kind: "material" as const, materialId: "526130b61f003c33" };
 const labelOf = (task: string, text: string) => `${task}:${text}`;
 
-function setup(overrides: Partial<ReturnType<typeof mockRead>> = {}) {
-  const listeners = new Set<(event: AgentEvent) => void>();
+/** A bridge whose sessions are a map the test edits; `change()` tells the listeners. */
+function setup(overrides: Partial<ReturnType<typeof mockRead>> = {}, sessions: AgentSession[] = []) {
+  const events = new Set<(event: AgentEvent) => void>();
+  const changes = new Set<() => void>();
+  const stored = new Map(sessions.map((session) => [session.id, session]));
   api.read = mockRead({
-    agentStatus: vi.fn(async () => ({ available: true, busy: false })),
-    listAgentSessions: vi.fn(async () => []),
-    onAgentEvent: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    agentStatus: vi.fn(async () => ({ available: true, running: 0 })),
+    listAgentRuns: vi.fn(async () => []),
+    listAgentSessions: vi.fn(async () => [...stored.values()].map(({ turns: _turns, threadId: _thread, ...summary }) => summary)),
+    getAgentSession: vi.fn(async (id: string) => stored.get(id)),
+    agentAsk: vi.fn(async (request: { sessionId?: string }) => ({ ok: true as const, sessionId: request.sessionId ?? "s1", turnId: "t1" })),
+    agentInterrupt: vi.fn(async () => undefined),
+    onAgentEvent: (listener) => { events.add(listener); return () => { events.delete(listener); }; },
+    onAgentSessionsChanged: (listener) => { changes.add(listener); return () => { changes.delete(listener); }; },
     ...overrides,
   });
-  const emit = (event: AgentEvent) => act(() => { for (const listener of listeners) listener(event); });
-  const hook = renderHook(() => useAgent(context, { labelOf }));
-  return { ...hook, emit };
+  const emit = (event: AgentEvent) => act(() => { for (const listener of events) listener(event); });
+  const store = (session: AgentSession) => { stored.set(session.id, session); };
+  const change = async () => { await act(async () => { for (const listener of changes) listener(); await flush(); }); };
+  return { emit, store, change };
 }
 
-afterEach(() => { vi.restoreAllMocks(); });
+const mount = (options: { sessionId?: string | undefined } = {}) => renderHook(() => useAgent(context, { labelOf, ...options }));
+const user = (id: string, text: string, at: string): AgentTurnRecord => ({ id, role: "user", text, task: "ask", at });
+const agent = (id: string, text: string, at: string): AgentTurnRecord => ({ id, role: "agent", text, task: "ask", status: "completed", at });
+const session = (id: string, turns: AgentTurnRecord[], threadId?: string): AgentSession => ({ id, title: id, context, createdAt: "1", updatedAt: "2", turnCount: turns.length, turns, ...(threadId ? { threadId } : {}) });
+
+afterEach(() => { agentStore.stop(); vi.restoreAllMocks(); });
 
 describe("turnsOfSession", () => {
-  it("pairs user and agent records into turns with their tools and outcome", () => {
-    const records: AgentSession["turns"] = [
+  it("pairs user and agent records into turns with their tools, sources and outcome", () => {
+    const records: AgentTurnRecord[] = [
       { id: "u1", role: "user", text: "", task: "explain", at: "1" },
-      { id: "a1", role: "agent", text: "Answer", task: "explain", status: "completed", tools: [{ name: "library_search", status: "done", summary: "3 hits" }], at: "2" },
+      { id: "a1", role: "agent", text: "Answer", task: "explain", status: "completed", tools: [{ name: "library_search", status: "done", summary: "3 hits" }], sources: ["526130b61f003c33"], at: "2" },
       { id: "u2", role: "user", text: "why?", task: "ask", at: "3" },
       { id: "a2", role: "agent", text: "timed out", task: "ask", status: "failed", at: "4" },
       { id: "u3", role: "user", text: "and?", at: "5" },
@@ -43,84 +58,136 @@ describe("turnsOfSession", () => {
       ["ask:and?", "failed", "", "No answer was recorded for this turn."],
     ]);
     expect(turns[0]?.tools).toEqual([{ key: "a1-0", name: "library_search", status: "done", summary: "3 hits" }]);
-    expect(turns[0]?.sources).toBeUndefined();
+    expect(turns[0]?.sources).toEqual(["526130b61f003c33"]);
+  });
+});
+
+describe("mergeTurns", () => {
+  const run = { sessionId: "s1", task: "ask" as const, prompt: "more", answer: "Str", tools: [], startedAt: "2026-09-19T10:00:05.000Z" };
+  it("replaces the open user record with the live run, then yields to the stored turn once it landed", () => {
+    const records = [user("u1", "first", "2026-09-19T10:00:00.000Z"), agent("a1", "One.", "2026-09-19T10:00:01.000Z"), user("u2", "more", "2026-09-19T10:00:04.000Z")];
+    expect(mergeTurns(records, run, labelOf).map((turn) => [turn.label, turn.status, turn.answer])).toEqual([["ask:first", "done", "One."], ["ask:more", "running", "Str"]]);
+    const finished = { ...run, outcome: { status: "done" as const, text: "Streamed." } };
+    expect(mergeTurns(records, finished, labelOf).map((turn) => [turn.status, turn.answer])).toEqual([["done", "One."], ["done", "Streamed."]]);
+    const landed = [...records, agent("a2", "Stored.", "2026-09-19T10:00:09.000Z")];
+    expect(mergeTurns(landed, finished, labelOf).map((turn) => [turn.status, turn.answer])).toEqual([["done", "One."], ["done", "Stored."]]);
   });
 });
 
 describe("useAgent", () => {
-  it("streams deltas and tools into the turn the events name, ignoring foreign turns, and takes the result's sources", async () => {
-    const answer = deferred<AgentResult>();
-    const { result, emit } = setup({ agentAsk: vi.fn(() => answer.promise) });
+  it("asks through the store and streams the run of its session, ignoring other sessions", async () => {
+    const { emit } = setup();
+    await act(() => agentStore.start());
+    const { result } = mount();
     await act(flush);
     expect(result.current.status?.available).toBe(true);
-    act(() => { void result.current.ask("explain", "", "Explain X"); });
-    expect(result.current.running).toBe(true);
-    emit({ type: "started", threadId: "t1", turnId: "turn-1" });
-    emit({ type: "delta", turnId: "turn-1", delta: "Hel" });
-    emit({ type: "delta", turnId: "other-turn", delta: "NOPE" });
-    emit({ type: "delta", turnId: "turn-1", delta: "lo" });
-    emit({ type: "tool", turnId: "turn-1", name: "library_search", status: "running" });
-    emit({ type: "tool", turnId: "turn-1", name: "library_search", status: "done", summary: "2 hits" });
-    expect(result.current.turns[0]?.answer).toBe("Hello");
-    expect(result.current.turns[0]?.tools).toEqual([expect.objectContaining({ name: "library_search", status: "done", summary: "2 hits" })]);
-    emit({ type: "completed", turnId: "turn-1", sources: ["526130b61f003c33"] });
-    await act(async () => { answer.resolve({ ok: true, threadId: "t1", turnId: "turn-1", text: "Hello.", sessionId: "s1", sources: ["526130b61f003c33", "63d7dedf6dd9973c"] }); await flush(); });
-    expect(result.current.turns[0]).toEqual(expect.objectContaining({ status: "done", answer: "Hello.", sources: ["526130b61f003c33", "63d7dedf6dd9973c"] }));
+    expect(result.current.loadingSession).toBe(false);
+    await act(async () => { await result.current.ask("explain", ""); });
+    expect(api.read.agentAsk).toHaveBeenLastCalledWith({ context, task: "explain", text: "" });
     expect(result.current.sessionId).toBe("s1");
+    expect(result.current.running).toBe(true);
+    expect(result.current.turns).toEqual([expect.objectContaining({ label: "explain:", status: "running", answer: "" })]);
+    emit({ type: "started", sessionId: "s1", threadId: "th1", turnId: "t1" });
+    emit({ type: "delta", sessionId: "s1", turnId: "t1", delta: "Hel" });
+    emit({ type: "delta", sessionId: "other", turnId: "t9", delta: "NOPE" });
+    emit({ type: "delta", sessionId: "s1", turnId: "t1", delta: "lo" });
+    expect(result.current.turns[0]?.answer).toBe("Hello");
+    emit({ type: "completed", sessionId: "s1", turnId: "t1", text: "Hello.", sources: ["526130b61f003c33"] });
+    expect(result.current.turns[0]).toEqual(expect.objectContaining({ status: "done", answer: "Hello.", sources: ["526130b61f003c33"] }));
     expect(result.current.running).toBe(false);
     // The next question continues the same thread and session.
-    act(() => { void result.current.ask("ask", "more", "more"); });
-    expect(api.read.agentAsk).toHaveBeenLastCalledWith(expect.objectContaining({ threadId: "t1", sessionId: "s1", task: "ask", text: "more" }));
+    await act(async () => { await result.current.ask("ask", "more"); });
+    expect(api.read.agentAsk).toHaveBeenLastCalledWith(expect.objectContaining({ threadId: "th1", sessionId: "s1", task: "ask", text: "more" }));
   });
 
-  it("maps failure codes: timeout keeps the code for Retry, auth asks to sign in, interrupted is not a failure", async () => {
-    const codes: AgentResult[] = [
-      { ok: false, code: "TURN_TIMEOUT", message: "took too long" },
-      { ok: false, code: "AUTH_REQUIRED", message: "sign in" },
-      { ok: false, code: "TURN_INTERRUPTED", message: "stopped" },
-      { ok: false, code: "TURN_FAILED", message: "boom" },
-    ];
-    const agentAsk = vi.fn(async () => codes.shift()!);
-    const { result } = setup({ agentAsk });
+  it("keeps the run across unmount and shows the partial answer on remount", async () => {
+    const { emit, store } = setup();
+    await act(() => agentStore.start());
+    const first = mount();
     await act(flush);
-    for (let index = 0; index < 4; index += 1) await act(async () => { await result.current.ask("ask", `q${index}`, `q${index}`); });
-    expect(result.current.turns.map((turn) => [turn.status, turn.code, turn.authRequired ?? false, turn.error])).toEqual([
-      ["failed", "TURN_TIMEOUT", false, "took too long"],
-      ["failed", "AUTH_REQUIRED", true, "sign in"],
-      ["interrupted", "TURN_INTERRUPTED", false, "stopped"],
-      ["failed", "TURN_FAILED", false, "boom"],
-    ]);
-    // Retry resends the same question as a new turn.
-    await act(async () => { await result.current.retry(result.current.turns[0]!); });
-    expect(agentAsk).toHaveBeenLastCalledWith(expect.objectContaining({ task: "ask", text: "q0" }));
+    await act(async () => { await first.result.current.ask("ask", "q"); });
+    store(session("s1", [user("u1", "q", "2026-09-19T10:00:00.000Z")], "th1"));
+    emit({ type: "delta", sessionId: "s1", turnId: "t1", delta: "Part" });
+    first.unmount();
+    emit({ type: "delta", sessionId: "s1", turnId: "t1", delta: "ial" });
+    expect(agentStore.getState().runs.get("s1")?.answer).toBe("Partial");
+    const second = mount();
+    await act(flush);
+    expect(second.result.current.sessionId).toBe("s1");
+    expect(second.result.current.running).toBe(true);
+    expect(second.result.current.turns).toEqual([expect.objectContaining({ label: "ask:q", status: "running", answer: "Partial" })]);
   });
 
-  it("withdraws the question and waits when the agent is busy elsewhere", async () => {
-    const agentStatus = vi.fn(async () => ({ available: true, busy: false }));
-    const { result } = setup({ agentAsk: vi.fn(async () => ({ ok: false as const, code: "TURN_RUNNING" as const, message: "busy" })), agentStatus });
+  it("swaps the live bubble for the stored turn once the session holds it, without a duplicate", async () => {
+    const { emit, store, change } = setup();
+    await act(() => agentStore.start());
+    const { result } = mount();
     await act(flush);
-    agentStatus.mockResolvedValue({ available: true, busy: true });
-    await act(async () => { await result.current.ask("ask", "q", "q"); await flush(); });
+    await act(async () => { await result.current.ask("ask", "q"); });
+    const startedAt = agentStore.getState().runs.get("s1")!.startedAt;
+    store(session("s1", [user("u1", "q", startedAt)]));
+    await change();
+    expect(result.current.turns).toHaveLength(1);
+    emit({ type: "completed", sessionId: "s1", turnId: "t1", text: "Final.", sources: [] });
+    expect(result.current.turns).toEqual([expect.objectContaining({ status: "done", answer: "Final." })]);
+    const later = new Date(new Date(startedAt).getTime() + 1000).toISOString();
+    store(session("s1", [user("u1", "q", startedAt), { ...agent("a1", "Final.", later), sources: ["526130b61f003c33"] }]));
+    await change();
+    expect(result.current.turns).toEqual([expect.objectContaining({ id: "u1", status: "done", answer: "Final.", sources: ["526130b61f003c33"] })]);
+    expect(result.current.running).toBe(false);
+  });
+
+  it("runs sessions in parallel: only this session's run holds the composer, Stop interrupts by session", async () => {
+    const { emit } = setup();
+    await act(() => agentStore.start());
+    const library = renderHook(() => useAgent({ kind: "library" }, { labelOf }));
+    const material = mount();
+    await act(flush);
+    await act(async () => { await library.result.current.ask("summary", ""); });
+    expect(library.result.current.running).toBe(true);
+    expect(material.result.current.running).toBe(false);
+    (api.read.agentAsk as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ ok: true, sessionId: "s2", turnId: "t2" });
+    await act(async () => { await material.result.current.ask("explain", ""); });
+    expect(material.result.current.running).toBe(true);
+    emit({ type: "delta", sessionId: "s2", turnId: "t2", delta: "B" });
+    expect(material.result.current.turns[0]?.answer).toBe("B");
+    expect(library.result.current.turns[0]?.answer).toBe("");
+    await act(async () => { await material.result.current.stop(); });
+    expect(api.read.agentInterrupt).toHaveBeenCalledWith("s2");
+    emit({ type: "failed", sessionId: "s2", turnId: "t2", code: "TURN_INTERRUPTED", message: "stopped" });
+    expect(material.result.current.turns[0]).toEqual(expect.objectContaining({ status: "interrupted", error: "stopped" }));
+    expect(material.result.current.running).toBe(false);
+    expect(library.result.current.running).toBe(true);
+  });
+
+  it("shows a refusal inline and keeps the words for Retry", async () => {
+    setup({ agentAsk: vi.fn(async () => ({ ok: false as const, code: "TURN_RUNNING" as const, message: "busy" })) });
+    await act(() => agentStore.start());
+    const { result } = mount();
+    await act(flush);
+    await act(async () => { await result.current.ask("ask", "q"); });
+    expect(result.current.askFailure).toEqual({ code: "TURN_RUNNING", message: "busy", task: "ask", text: "q" });
     expect(result.current.turns).toEqual([]);
-    expect(result.current.busyElsewhere).toBe(true);
+    expect(result.current.running).toBe(false);
+    await act(async () => { await result.current.retry({ task: "ask", prompt: "q" }); });
+    expect(api.read.agentAsk).toHaveBeenCalledTimes(2);
   });
 
-  it("opens the context's most recent stored session and continues its thread", async () => {
-    const session: AgentSession = { id: "s9", title: "Explain · X", context, createdAt: "1", updatedAt: "2", turnCount: 2, threadId: "thread-9", turns: [
-      { id: "u1", role: "user", text: "", task: "explain", at: "1" },
-      { id: "a1", role: "agent", text: "Stored answer", task: "explain", status: "completed", at: "2" },
-    ] };
-    const { result } = setup({
-      listAgentSessions: vi.fn(async () => [{ id: "other", title: "Library chat", context: { kind: "library" as const }, createdAt: "3", updatedAt: "9", turnCount: 2 }, session]),
-      getAgentSession: vi.fn(async (id: string) => (id === "s9" ? session : undefined)),
-      agentAsk: vi.fn(async () => ({ ok: true as const, threadId: "thread-9", turnId: "t", text: "ok", sessionId: "s9", sources: [] })),
-    });
+  it("opens the context's most recent stored session, continues its thread, and follows a named session", async () => {
+    const stored = session("s9", [{ id: "u1", role: "user", text: "", task: "explain", at: "1" }, { id: "a1", role: "agent", text: "Stored answer", task: "explain", status: "completed", at: "2" }], "thread-9");
+    const other: AgentSession = { id: "other", title: "Library chat", context: { kind: "library" }, createdAt: "3", updatedAt: "9", turnCount: 0, turns: [] };
+    setup({}, [other, stored]);
+    await act(() => agentStore.start());
+    const { result, rerender } = renderHook(({ sessionId }: { sessionId?: string | undefined }) => useAgent(context, { labelOf, sessionId }), { initialProps: {} });
     await act(flush);
     expect(result.current.loadingSession).toBe(false);
     expect(result.current.sessionId).toBe("s9");
     expect(result.current.turns).toEqual([expect.objectContaining({ label: "explain:", answer: "Stored answer", status: "done" })]);
-    await act(async () => { await result.current.ask("ask", "next", "next"); });
+    await act(async () => { await result.current.ask("ask", "next"); });
     expect(api.read.agentAsk).toHaveBeenLastCalledWith(expect.objectContaining({ threadId: "thread-9", sessionId: "s9" }));
+    rerender({ sessionId: "other" });
+    await act(flush);
+    expect(result.current.sessionId).toBe("other");
     act(() => { result.current.newConversation(); });
     expect(result.current.turns).toEqual([]);
     expect(result.current.sessionId).toBeUndefined();

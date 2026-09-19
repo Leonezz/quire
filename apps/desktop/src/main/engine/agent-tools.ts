@@ -5,16 +5,18 @@ import { itemHits, materialHits, mergeHits, searchWords } from "./search";
 // The agent's window onto the library. Every tool validates its arguments by hand (no zod in the
 // main bundle), returns one JSON string, and never leaks paths or bytes to the model.
 
-/** Material ids the model retrieved during the running turn; the only ids an artifact may cite. */
-export interface TurnScope { seen: Set<string>; reset: (seed?: readonly string[]) => void }
-export function createTurnScope(): TurnScope {
-  const seen = new Set<string>();
-  return { seen, reset: (seed = []) => { seen.clear(); for (const id of seed) seen.add(id); } };
+/** Material ids the model retrieved during one turn; the only ids an artifact may cite. One per turn, never shared. */
+export interface TurnScope { readonly seen: Set<string> }
+/** A fresh scope; `seed` is what the turn may cite without retrieving it (the material the conversation is about). */
+export function createTurnScope(seed: readonly string[] = []): TurnScope {
+  return { seen: new Set(seed) };
 }
 
+export type ToolHandler = (call: ToolCall) => Promise<ToolReply>;
+/** Built once with the library's dependencies; `forTurn` gives every turn its own handler, queue and cache. */
+export interface ToolHandlerFactory { forTurn: (scope: TurnScope) => ToolHandler }
+
 export interface ToolDeps {
-  /** Shared with the AgentService, which resets it at the start of every turn. */
-  scope?: TurnScope;
   store: {
     list: () => Promise<MaterialSummary[]>;
     /** Materials whose title, byline, tags or body contain every word of the query. */
@@ -136,21 +138,21 @@ async function captureOf(id: string, title: string, deps: ToolDeps, cache: Captu
   return text;
 }
 
-async function execute(tool: string, raw: unknown, deps: ToolDeps, cache: CaptureCache): Promise<Outcome> {
+async function execute(tool: string, raw: unknown, deps: ToolDeps, scope: TurnScope, cache: CaptureCache): Promise<Outcome> {
   if (tool === "library_search") {
     const args = record(raw, ["query"]);
     const query = text(args, "query", 200);
     const words = searchWords(query);
     const merged = mergeHits(materialHits(query, await deps.store.search(query)), itemHits(deps.items.search(query))).slice(0, SEARCH_HITS);
     const hits = await Promise.all(merged.map(async (hit) => (hit.kind === "material" ? { ...hit, ...withMaterialKind(bibOf(await deps.store.get(hit.id))) } : hit)));
-    for (const hit of hits) if (hit.kind === "material") deps.scope?.seen.add(hit.id);
+    for (const hit of hits) if (hit.kind === "material") scope.seen.add(hit.id);
     const truncated = query.trim().split(/\s+/).filter(Boolean).length > words.length;
     return { value: { hits, ...(truncated ? { note: `Only the first ${words.length} words of the query were used.` } : {}) }, summary: `library_search ${quoteOf(query)} → ${hits.length} hit${hits.length === 1 ? "" : "s"}` };
   }
   if (tool === "library_recent") {
     const limit = integer(record(raw, ["limit"]), "limit", DEFAULT_RECENT, MAX_LIST, 1);
     const materials = await Promise.all((await deps.store.list()).slice(0, limit).map(async (summary) => recentOf(summary, await deps.store.get(summary.id))));
-    for (const material of materials) deps.scope?.seen.add(material.id);
+    for (const material of materials) scope.seen.add(material.id);
     return { value: { materials }, summary: `library_recent → ${materials.length} material${materials.length === 1 ? "" : "s"}` };
   }
   if (tool === "material_read") {
@@ -161,7 +163,7 @@ async function execute(tool: string, raw: unknown, deps: ToolDeps, cache: Captur
     if (!material) throw new Error(`Material ${id} is not in the library. Find ids with library_search or library_recent.`);
     const content = material.markdown ?? material.plain;
     if (content === undefined) throw new Error(`Material ${id} (${material.title}) has no text to read; it is probably a scanned PDF.`);
-    deps.scope?.seen.add(id);
+    scope.seen.add(id);
     const value = { id, title: material.title, ...(material.byline ? { byline: material.byline } : {}), url: material.url, ...bibOf(material), ...page(content, offset) };
     return { value, summary: `material_read ${id} @${offset} → ${quoteOf(material.title)}` };
   }
@@ -172,14 +174,14 @@ async function execute(tool: string, raw: unknown, deps: ToolDeps, cache: Captur
     const material = await deps.store.get(id);
     if (!material) throw new Error(`Material ${id} is not in the library. Find ids with library_search or library_recent.`);
     if (!material.capture) throw new Error(`Material ${id} (${material.title}) has no captured page: it was fetched with capture off, dropped as a file, or is a PDF or an artifact. There is nothing to rebuild from; read it with material_read instead.`);
-    deps.scope?.seen.add(id);
+    scope.seen.add(id);
     const value = { id, title: material.title, url: material.url, ...page(await captureOf(id, material.title, deps, cache), offset) };
     return { value, summary: `material_source ${id} @${offset} → ${quoteOf(material.title)}` };
   }
   if (tool === "material_annotations") {
     const id = materialId(record(raw, ["id"]));
     if (!(await deps.store.get(id))) throw new Error(`Material ${id} is not in the library.`);
-    deps.scope?.seen.add(id);
+    scope.seen.add(id);
     const annotations = (await deps.annotations.list(id)).map(({ quote, note, kind, color, createdAt }) => ({ quote, kind, color, createdAt, ...(note ? { note } : {}) }));
     return { value: { annotations }, summary: `material_annotations ${id} → ${annotations.length}` };
   }
@@ -195,7 +197,7 @@ async function execute(tool: string, raw: unknown, deps: ToolDeps, cache: Captur
     deps.onMaterialized?.(result.material);
     deps.onChanged();
     const { id, title, readingMinutes } = result.material;
-    deps.scope?.seen.add(id);
+    scope.seen.add(id);
     return { value: { id, title, readingMinutes }, summary: `library_import → ${quoteOf(title)}` };
   }
   if (tool === "artifact_write") {
@@ -204,25 +206,24 @@ async function execute(tool: string, raw: unknown, deps: ToolDeps, cache: Captur
     const markdown = text(args, "markdown", MAX_MARKDOWN);
     const sources = args.sources;
     if (!Array.isArray(sources) || sources.length === 0 || sources.length > MAX_LINEAGE || !sources.every((id) => typeof id === "string" && /^[a-f0-9]{16}$/.test(id))) throw new ArgumentError(`"sources" must be 1 to ${MAX_LINEAGE} material ids.`);
-    const scope = deps.scope;
-    const unseen = scope ? (sources as string[]).filter((id) => !scope.seen.has(id)) : [];
+    const unseen = (sources as string[]).filter((id) => !scope.seen.has(id));
     if (unseen.length > 0) throw new Error(`These sources were not retrieved during this turn, so they cannot be cited: ${unseen.join(", ")}. Read them with material_read (or find them with library_search) first.`);
     const saved = await deps.store.saveArtifact({ title, markdown, lineage: sources as string[] });
-    scope?.seen.add(saved.id);
+    scope.seen.add(saved.id);
     deps.onChanged();
     return { value: { id: saved.id, title: saved.title }, summary: `artifact_write ${quoteOf(saved.title)} → ${saved.id}` };
   }
   throw new Error(`Unknown tool ${tool}. Available: ${agentTools.map((t) => t.name).join(", ")}.`);
 }
 
-/** One handler per turn; calls run one after another so imports and writes have a clear order. */
-export function createToolHandler(deps: ToolDeps): (call: ToolCall) => Promise<ToolReply> {
+/** One handler per turn: its calls run one after another so imports and writes have a clear order, and its capture cache is its own. */
+function turnHandler(deps: ToolDeps, scope: TurnScope): ToolHandler {
   let queue: Promise<unknown> = Promise.resolve();
   const cache: CaptureCache = {};
   return (call) => {
     const run = queue.then(async (): Promise<ToolReply> => {
       try {
-        const outcome = await execute(call.tool, call.arguments, deps, cache);
+        const outcome = await execute(call.tool, call.arguments, deps, scope, cache);
         return { success: true, text: JSON.stringify({ ok: true, ...(outcome.value as Record<string, unknown>) }), summary: outcome.summary };
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -233,4 +234,9 @@ export function createToolHandler(deps: ToolDeps): (call: ToolCall) => Promise<T
     queue = run.then(() => undefined);
     return run;
   };
+}
+
+/** The tools' handler factory; turns on different threads get independent handlers and never wait on each other. */
+export function createToolHandler(deps: ToolDeps): ToolHandlerFactory {
+  return { forTurn: (scope) => turnHandler(deps, scope) };
 }

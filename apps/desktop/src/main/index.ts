@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, ipcMain, nativeTheme, shell } from "electron";
+import { app, BrowserWindow, Menu, Notification, ipcMain, nativeTheme, shell } from "electron";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { MaterialStore } from "./engine/materials";
@@ -16,7 +16,7 @@ import { Scheduler } from "./engine/scheduler";
 import { readItem } from "./engine/inbox";
 import { itemHits, materialHits, mergeHits } from "./engine/search";
 import { AgentService } from "./engine/agent";
-import { agentTools, createToolHandler, createTurnScope } from "./engine/agent-tools";
+import { agentTools, createToolHandler } from "./engine/agent-tools";
 import { CodexClient } from "./engine/codex-client";
 import { MetaStore } from "./engine/meta";
 import { SettingsStore } from "./engine/settings";
@@ -200,15 +200,39 @@ ipcMain.handle("search:query", async (_event, query: unknown): Promise<SearchHit
 });
 
 // --- M2: the agent. Codex app-server in the main process; the renderer sees text and events. -----
+// Turns run independently of any window: every event is broadcast with its session, and a turn that
+// ends while no window is focused announces itself with a system notification that opens its session.
+function firstLine(text: string): string {
+  return text.split("\n").map((line) => line.trim()).find((line) => line.length > 0) ?? "";
+}
+
+function focusWindow(): BrowserWindow {
+  const win = BrowserWindow.getAllWindows()[0] ?? createWindow();
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+  return win;
+}
+
+function notifyIfUnfocused(event: AgentEvent) {
+  if (event.type !== "completed" && event.type !== "failed") return;
+  if (BrowserWindow.getFocusedWindow() !== null) return;
+  if (!Notification.isSupported()) { console.warn("[agent] system notifications are not supported here; a turn ended unannounced"); return; }
+  const title = sessions.get(event.sessionId)?.title ?? "Quire";
+  const body = event.type === "completed" ? firstLine(event.text) : event.message;
+  const notification = new Notification({ title, body, silent: false });
+  notification.on("click", () => focusWindow().webContents.send("agent:open-session", event.sessionId));
+  notification.show();
+}
+
 const codex = new CodexClient({ onDiagnostic: (message) => console.warn(`[agent] ${message}`), configuredPath: () => settings.get().codexPath });
-const turnScope = createTurnScope();
 const agent = new AgentService({
   client: codex, tools: agentTools, userData, store, sessions,
-  scope: turnScope,
-  toolHandler: createToolHandler({ scope: turnScope, store, items, annotations, onChanged: () => broadcast("library:changed"), onMaterialized: (record) => void images.prefetch(imageUrlsOf(record)) }),
-  onEvent: (event) => broadcast("agent:event", event),
+  toolHandler: createToolHandler({ store, items, annotations, onChanged: () => broadcast("library:changed"), onMaterialized: (record) => void images.prefetch(imageUrlsOf(record)) }),
+  onEvent: (event) => { broadcast("agent:event", event); notifyIfUnfocused(event); },
   onSessionsChanged: () => broadcast("agent:sessions:changed"),
   onLibraryChanged: () => broadcast("library:changed"),
+  onError: (context, error) => console.error(`[agent] ${context}:`, error instanceof Error ? error.message : error),
   settings: () => { const { agentModel, agentReasoningEffort } = settings.get(); return { agentModel, agentReasoningEffort }; },
   openExternal: (url) => shell.openExternal(url),
 });
@@ -242,7 +266,8 @@ function agentRequest(value: unknown): AgentRequest {
 
 ipcMain.handle("agent:status", () => agent.status());
 ipcMain.handle("agent:ask", (_event, request: unknown) => agent.ask(agentRequest(request)));
-ipcMain.handle("agent:interrupt", () => agent.interrupt());
+ipcMain.handle("agent:interrupt", (_event, sessionId: unknown) => agent.interrupt(boundedString(sessionId, 64, "IPC_INVALID_ID")));
+ipcMain.handle("agent:runs", () => agent.listRuns());
 ipcMain.handle("agent:login", () => agent.login());
 
 // --- M3: metadata, library management, settings, agent sessions. ------------------------------
@@ -254,7 +279,7 @@ registerM3Handlers({
 
 // One window. Native vibrancy behind a transparent page so the glass panels
 // in the renderer sit on the real desktop, not on a painted gradient.
-function createWindow() {
+function createWindow(): BrowserWindow {
   const win = new BrowserWindow({
     width: 1360,
     height: 880,
@@ -280,6 +305,7 @@ function createWindow() {
   });
   if (process.env.ELECTRON_RENDERER_URL) void win.loadURL(process.env.ELECTRON_RENDERER_URL);
   else void win.loadFile(join(__dirname, "../renderer/index.html"));
+  return win;
 }
 
 function installMenu() {
@@ -318,5 +344,6 @@ app.whenReady().then(() => {
   scheduler.start();
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
-app.on("before-quit", () => { scheduler.stop(); codex.stop(); db.close(); });
+// Runs still open become interrupted turns of their sessions before the database closes.
+app.on("before-quit", () => { scheduler.stop(); agent.shutdown(); db.close(); });
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });

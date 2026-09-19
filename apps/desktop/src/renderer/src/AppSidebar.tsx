@@ -16,6 +16,8 @@ export interface AppSidebarProps {
   inbox: ItemRecord[];
   queueCount: number;
   conversationCount: number;
+  /** Agent turns in flight: the Agent item then shows a spinner and this number instead of the conversation count. */
+  runningCount: number;
   tags: TagCount[];
   sources: SourceRecord[];
   onHide: () => void;
@@ -34,7 +36,7 @@ export function undecidedBySource(inbox: readonly ItemRecord[]): Map<string, num
  * every scope in one list — Inbox · Queue · Agent, the Library's cuts, the most used tags, every
  * source with its health — and Settings pinned at the bottom.
  */
-export function AppSidebar({ width, scope, onScope, inbox, queueCount, conversationCount, tags, sources, onHide, onOpenSettings }: AppSidebarProps) {
+export function AppSidebar({ width, scope, onScope, inbox, queueCount, conversationCount, runningCount, tags, sources, onHide, onOpenSettings }: AppSidebarProps) {
   const [tagsOpen, setTagsOpen] = useState(false);
   const allTagsRef = useRef<HTMLDivElement>(null);
   const undecided = useMemo(() => undecidedBySource(inbox), [inbox]);
@@ -56,7 +58,7 @@ export function AppSidebar({ width, scope, onScope, inbox, queueCount, conversat
         <SidebarSection>
           <SidebarItem id="inbox" icon={<InboxIcon />} label="Inbox" count={inbox.length} />
           <SidebarItem id="queue" icon={<ListOrdered />} label="Queue" count={queueCount} />
-          <SidebarItem id="agent" icon={<Sparkles />} label="Agent" count={conversationCount} />
+          <SidebarItem id="agent" icon={<Sparkles />} label="Agent" count={runningCount > 0 ? runningCount : conversationCount} busy={runningCount > 0} />
         </SidebarSection>
         <SidebarSection title="Library">
           {LIBRARY_CUTS.map((cut) => <SidebarItem key={cut} id={`library:${cut}`} icon={cut === "all" ? <BookOpen /> : <FileText />} label={cut === "all" ? "All" : CUT_LABELS[cut]} />)}

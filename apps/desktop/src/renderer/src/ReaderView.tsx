@@ -9,9 +9,9 @@ import type { NoteDraft } from "./NotesPanel";
 import { ReaderInspector, type ReaderPanel } from "./ReaderInspector";
 import { hostLabel } from "./ArtifactLineage";
 import { QualityBanner, canRebuild, type RebuildState } from "./RebuildBanner";
-import type { PendingTask } from "./AgentPanel";
+import { agentStore, useAgentRun } from "./agentStore";
 import { SelectionToolbar, type SelectionCapture } from "./SelectionToolbar";
-import type { AgentContext, AgentTask, Annotation } from "../../shared/contracts";
+import type { AgentContext, Annotation } from "../../shared/contracts";
 import { FindBar } from "./FindBar";
 import { prefsStyle, useReadingPrefs } from "./readingPrefs";
 import { read } from "./api";
@@ -90,18 +90,28 @@ export function ReaderView({ material, onBack, onOpenLink, onOpenMaterial, onPro
   // "Ask about this" narrows the agent's context to the selected passage until it is dropped.
   const [asked, setAsked] = useState<SelectionCapture | null>(null);
   const agentContext: AgentContext = asked ? { kind: "selection", materialId: material.id, quote: asked.quote, locator: asked.locator } : { kind: "material", materialId: material.id };
-  // "Rebuild with the agent": the Agent panel opens with the material context and sends the rebuild; the banner follows the turn.
-  const [rebuild, setRebuild] = useState<RebuildState>("idle");
-  const [pendingTask, setPendingTask] = useState<PendingTask | undefined>(undefined);
-  const startRebuild = useCallback(() => {
-    setAsked(null); setRebuild("running"); setPendingTask({ task: "rebuild", text: "" }); setPanel("agent");
-    // Focus mode hides the panel, and the rebuild is sent from the Agent panel: leave it.
+  // "Rebuild with the agent": the store runs the rebuild in the material's conversation (the one the panel shows, or a new one the
+  // panel then opens); the banner follows that run and switches once `rebuiltAs` arrives with the library change.
+  const [panelSession, setPanelSession] = useState<string | undefined>(undefined);
+  const [rebuildSession, setRebuildSession] = useState<string | undefined>(undefined);
+  const [rebuildPhase, setRebuildPhase] = useState<{ kind: "idle" } | { kind: "starting" } | { kind: "failed"; error?: string | undefined }>({ kind: "idle" });
+  const rebuildRun = useAgentRun(rebuildSession);
+  useEffect(() => { setRebuildSession(undefined); setRebuildPhase({ kind: "idle" }); }, [material.id]);
+  const rebuildOutcome = rebuildRun?.outcome;
+  useEffect(() => { if (rebuildOutcome && rebuildOutcome.status !== "done") setRebuildPhase({ kind: "failed", error: rebuildOutcome.message }); }, [rebuildOutcome]);
+  const rebuild: RebuildState = rebuildPhase.kind === "starting" || (rebuildRun !== undefined && rebuildOutcome === undefined) ? "running" : rebuildPhase.kind === "failed" ? "failed" : "idle";
+  const startRebuild = useCallback(async () => {
+    setAsked(null); setPanel("agent"); setRebuildPhase({ kind: "starting" });
+    // Focus mode hides the panel, and the rebuild is worth watching: leave it.
     if (prefs.focus) setPrefs({ ...prefs, focus: false });
-  }, [prefs, setPrefs]);
-  const onPendingTaskSent = useCallback((accepted: boolean) => { setPendingTask(undefined); if (!accepted) setRebuild("failed"); }, []);
-  const onTaskSettled = useCallback((task: AgentTask, status: "done" | "failed" | "interrupted") => { if (task === "rebuild") setRebuild(status === "done" ? "idle" : "failed"); }, []);
-  useEffect(() => { if (material.rebuiltAs) setRebuild("idle"); }, [material.rebuiltAs]);
-  const onRebuild = canRebuild(material) ? startRebuild : undefined;
+    try {
+      const result = await agentStore.ask({ context: { kind: "material", materialId: material.id }, task: "rebuild", text: "", ...(panelSession ? { sessionId: panelSession } : {}) });
+      if (!result.ok) { setRebuildPhase({ kind: "failed", error: result.message }); return; }
+      setRebuildSession(result.sessionId); setRebuildPhase({ kind: "idle" });
+    } catch (cause: unknown) { setRebuildPhase({ kind: "failed", error: cause instanceof Error ? cause.message : "The agent did not answer." }); }
+  }, [material.id, panelSession, prefs, setPrefs]);
+  const onRebuild = canRebuild(material) ? () => void startRebuild() : undefined;
+  const rebuildError = rebuildPhase.kind === "failed" ? rebuildPhase.error : undefined;
   // Focus mode closes the panel; an explicit request for one (button, i / n / ⌘J) leaves focus mode again.
   useEffect(() => { if (prefs.focus) setPanel(null); }, [prefs.focus]);
   useEffect(() => { if (panel !== null && prefs.focus) setPrefs({ ...prefs, focus: false }); }, [panel, prefs, setPrefs]);
@@ -241,7 +251,7 @@ export function ReaderView({ material, onBack, onOpenLink, onOpenMaterial, onPro
               <span>{material.readingMinutes} min</span>
               {material.origin === "agent" ? null : <a href={material.finalUrl} onClick={(event) => { event.preventDefault(); onOpenLink(material.finalUrl); }}>Open original ↗</a>}
             </div>
-            <QualityBanner material={material} low={quality.low} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onRebuild={onRebuild} rebuild={rebuild} />
+            <QualityBanner material={material} low={quality.low} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError} />
             <ReaderDocumentSurface
               schema={material.reader?.schema ?? "none"}
               payload={material.reader?.payload ?? ""}
@@ -260,7 +270,7 @@ export function ReaderView({ material, onBack, onOpenLink, onOpenMaterial, onPro
           <ColumnSeparator label="Resize panel" />
           <SplitPanel id="inspector" defaultSize={sizes.sizeOf("inspector", PANEL_DEFAULT)} minSize={PANEL_MIN} maxSize={PANEL_MAX} onResize={sizes.onResize("inspector")}>
             <ReaderInspector material={material} panel={panel} onClose={() => setPanel(null)} subject={material.title} agentContext={agentContext} onClearSelection={() => setAsked(null)}
-              pendingTask={pendingTask} onPendingTaskSent={onPendingTaskSent} onTaskSettled={onTaskSettled} onRebuild={onRebuild} rebuild={rebuild}
+              agentSessionId={rebuildSession} onAgentSessionChange={setPanelSession} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError}
               annotations={annotations} annotationsError={annotationsError} activeAnnotation={activeAnnotation} noteDraft={noteDraft} onNoteDraftChange={setNoteDraft}
               onJump={jumpTo} onUpdateNote={(id, note) => void update(id, { note })} onDeleteAnnotation={(id) => void remove(id)}
               sectionFor={(annotation) => sectionOf(bodyRef.current ? resolveTextQuoteRange(bodyRef.current, annotation.locator, annotation.quote) : undefined)}

@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { PAGE_CHARS, agentTools, createToolHandler, type ToolDeps } from "./agent-tools";
+import { PAGE_CHARS, agentTools, createToolHandler, createTurnScope, type ToolDeps } from "./agent-tools";
 import { AnnotationStore } from "./annotations";
 import { openDatabase, type Database } from "./db";
 import type { Fetcher } from "./fetch";
@@ -29,7 +29,9 @@ async function setup() {
   ]);
   const changes: string[] = [];
   const deps: ToolDeps = { store, items, annotations, onChanged: () => changes.push("changed"), onMaterialized: (record) => changes.push(`materialized ${record.title}`) };
-  return { store, annotations, items, handle: createToolHandler(deps), material: saved.material, changes };
+  // The turn is about the saved material, so it may be cited without a retrieval, as the AgentService seeds it.
+  const scope = createTurnScope([saved.material.id]);
+  return { store, annotations, items, deps, scope, handle: createToolHandler(deps).forTurn(scope), material: saved.material, changes };
 }
 
 const parse = (text: string) => JSON.parse(text) as Record<string, unknown>;
@@ -113,8 +115,8 @@ describe("createToolHandler", () => {
     expect(changes).toHaveLength(2);
   });
 
-  it("writes an artifact with its lineage and rejects unknown sources", async () => {
-    const { handle, store, material, changes } = await setup();
+  it("writes an artifact with its lineage and rejects sources the turn did not retrieve", async () => {
+    const { handle, store, material, changes, scope, deps } = await setup();
     const reply = await handle({ tool: "artifact_write", arguments: { title: "On momentum", markdown: "# On momentum\n\nSee [" + material.id + "]: \"keeps the direction\".", sources: [material.id] }, callId: "c1" });
     expect(reply.success).toBe(true);
     const { id } = parse(reply.text) as { id: string };
@@ -124,10 +126,43 @@ describe("createToolHandler", () => {
     expect(saved?.quality).toMatchObject({ completeness: "declared_full", identityConfidence: "derived" });
     expect((await store.list()).find((m) => m.id === id)?.lineage).toEqual([material.id]);
     expect(changes).toEqual(["changed"]);
+    expect(scope.seen.has(id)).toBe(true);
     const bad = await handle({ tool: "artifact_write", arguments: { title: "x", markdown: "y", sources: [material.id, "0123456789abcdef"] }, callId: "c2" });
     expect(bad.success).toBe(false);
-    expect(parse(bad.text).error).toMatch(/Unknown material ids in lineage: 0123456789abcdef/);
-    expect(changes).toHaveLength(1);
+    expect(parse(bad.text).error).toMatch(/not retrieved during this turn, so they cannot be cited: 0123456789abcdef/);
+    // A scope that vouches for an id the library does not have still fails, at the store.
+    const vouched = createToolHandler(deps).forTurn(createTurnScope([material.id, "0123456789abcdef"]));
+    expect(parse((await vouched({ tool: "artifact_write", arguments: { title: "x", markdown: "y", sources: [material.id, "0123456789abcdef"] }, callId: "c3" })).text).error).toMatch(/Unknown material ids in lineage: 0123456789abcdef/);
+    // A fresh turn about nothing in particular may not cite even the first turn's material until it reads it.
+    const other = createTurnScope();
+    const fresh = createToolHandler(deps).forTurn(other);
+    expect(parse((await fresh({ tool: "artifact_write", arguments: { title: "x", markdown: "y", sources: [material.id] }, callId: "c4" })).text).error).toMatch(/not retrieved during this turn/);
+    await fresh({ tool: "material_read", arguments: { id: material.id }, callId: "c5" });
+    expect([...other.seen]).toEqual([material.id]);
+    expect(scope.seen.has(material.id)).toBe(true);
+    expect((await fresh({ tool: "artifact_write", arguments: { title: "z", markdown: "y", sources: [material.id] }, callId: "c6" })).success).toBe(true);
+    expect(changes).toHaveLength(2);
+  });
+
+  it("gives every turn its own queue: a slow call in one turn does not hold up another", async () => {
+    const { deps, store } = await setup();
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const slowStore: ToolDeps["store"] = {
+      list: async () => { await gate; return store.list(); }, search: (query) => store.search(query), get: (id) => store.get(id),
+      openUrl: (url, origin) => store.openUrl(url, origin), saveArtifact: (input) => store.saveArtifact(input), captureText: (id) => store.captureText(id),
+    };
+    const factory = createToolHandler({ ...deps, store: slowStore });
+    const first = factory.forTurn(createTurnScope());
+    const second = factory.forTurn(createTurnScope());
+    const order: string[] = [];
+    const slow = first({ tool: "library_recent", arguments: {}, callId: "c1" }).then((reply) => { order.push(`first:${reply.summary}`); });
+    const queued = first({ tool: "inbox_list", arguments: {}, callId: "c2" }).then((reply) => { order.push(`first:${reply.summary}`); });
+    await second({ tool: "inbox_list", arguments: {}, callId: "c3" }).then((reply) => { order.push(`second:${reply.summary}`); });
+    expect(order).toEqual(["second:inbox_list → 2 items"]);
+    release();
+    await Promise.all([slow, queued]);
+    expect(order).toEqual(["second:inbox_list → 2 items", "first:library_recent → 1 material", "first:inbox_list → 2 items"]);
   });
 
   it("pages the captured page through material_source and refuses materials without a capture", async () => {
