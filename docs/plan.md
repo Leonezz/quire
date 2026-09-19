@@ -79,6 +79,12 @@
 - 实现：去掉玻璃卡片与缝隙，侧栏走系统 vibrancy，1px 分隔线即拖拽柄；红绿灯落在侧栏 52px 头部，侧栏收起时工具栏向左延伸并留 80px 内缩；侧栏 = Inbox / Queue / Agent + Library（All / Articles / Papers / Artifacts）+ Tags（前 8 个 + All tags…）+ Sources（健康点 + 未读数，点即该来源的 Inbox；Manage sources… 进管理）+ Settings；Library 过滤栏与 Inbox 的 Date / Source 分段整体删除，列表只剩搜索与排序；检查器去掉 tab 条，只有名称 + ×，由阅读器工具栏的 Info / Notes / Ask 互斥切换。
 - 未做（推后）：无材料打开时工具栏没有 Ask 按钮（⌘J 仍可用）；窄窗口三栏 + 面板同时打开时低于各自最小宽度。
 
+### 第 10 刀：Agent 运行时 — 已完成 2026-09-19（设计见 `docs/design/agent-runtime.md`，`16a0484`）
+- 问题：turn 的实时状态住在面板 hook 里，切走视图即丢；主进程里其实还在跑。
+- 标准做法（VS Code Copilot Chat 的 ChatService / ChatModel、Zed 的 ThreadStore、Cursor / Claude Code 的后台会话、Codex app-server 的 thread 模型）：运行状态在视图之外，事件可重放，视图只订阅，多个运行并行，完成时通知。
+- 实现：`agentAsk` 立即返回 `{ sessionId, turnId }`；事件全部带 `sessionId`；主进程 `runs` 注册表 + `listAgentRuns()` 快照；CodexClient 按 thread 维护多个 turn（`TURN_RUNNING` 只针对同一会话）；`agentInterrupt(sessionId)`；退出时进行中的 turn 记为 interrupted；窗口未聚焦时完成 / 失败发系统通知并可点开会话。渲染层 `agentStore`（useSyncExternalStore）启动取快照后跟事件，面板成为纯视图；侧栏 Agent 条目显示运行中数量，Agent 视图把运行中的会话排前。
+- 已验（桌面 app 真实 turn）：提问后立刻切到 Inbox，侧栏显示 Agent 1（转圈），Agent 视图列出"answering…"，切回后继续显示；主进程 223 个测试（含并行线程、按会话中断、退出孤儿）。
+
 ## 评测集导入 app
 - Developer 菜单 → Import Evaluation Corpus（⌘⇧I，仅开发检出可见）把 `eval/corpus` 全部快照按当前抽取器入库；2026-09-18 实测 64 篇导入、0 失败。浏览器预览也直接列出导出后的语料（`EXPORT=1`）。
 - 第二轮独立评审（`eval/quality-review-2.md`）：46 通过 / 4 轻微 / 14 严重（首轮 36 / 6 / 22）；随后又修了 Paul Graham 脚注、卡片链接的 Markdown、尾部 discuss / read-my-book 段。剩余主要是站点级残留（Quanta、Stratechery 的相关文章卡片），留给 L3 profile。
