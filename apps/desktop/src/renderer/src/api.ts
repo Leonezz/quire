@@ -7,6 +7,7 @@ import { createPreviewM2, previewArtifacts } from "./previewM2";
 import { createPreviewM3 } from "./previewM3";
 import { kindOfRecord } from "./previewMeta";
 import { rebuiltArtifacts } from "./previewRebuild";
+import { createPreviewUpdates } from "./previewUpdates";
 import { createPreviewViews } from "./previewViews";
 
 // In Electron the preload bridge provides window.read. In a plain browser (Vite dev
@@ -76,6 +77,8 @@ const browserPreview: ReadApi = {
   // The agent: unavailable in a browser, or a scripted stream behind the demo switch (see previewM2.ts).
   ...createPreviewM2({ listMaterials: previewListMaterials, getMaterial: previewGetMaterial, markRebuilt: previewM3.markRebuilt }),
   ...previewM3,
+  // Updates: a fake newer alpha after a short pause, never installable (see previewUpdates.ts).
+  ...createPreviewUpdates(),
   version: "preview",
   platform: "browser",
   // The preview paints its own ground (see styles.css), so there is no native appearance to sync.

@@ -15,9 +15,9 @@ describe("SettingsStore", () => {
   it("starts from the defaults with the data directory, and persists validated updates", async () => {
     const store = new SettingsStore(path(), root, { exists });
     expect(store.get()).toEqual({ ...SETTINGS_DEFAULTS, dataDirectory: root });
-    const updated = store.update({ syncIntervalMinutes: 60, keepCapture: false, codexPath: " /opt/codex/bin/codex ", agentModel: " gpt-5-codex ", agentReasoningEffort: "high" });
-    expect(updated).toEqual({ syncIntervalMinutes: 60, keepCapture: false, codexPath: "/opt/codex/bin/codex", agentModel: "gpt-5-codex", agentReasoningEffort: "high", dataDirectory: root });
-    expect(JSON.parse(await readFile(path(), "utf8"))).toEqual({ syncIntervalMinutes: 60, keepCapture: false, codexPath: "/opt/codex/bin/codex", agentModel: "gpt-5-codex", agentReasoningEffort: "high" });
+    const updated = store.update({ syncIntervalMinutes: 60, keepCapture: false, codexPath: " /opt/codex/bin/codex ", agentModel: " gpt-5-codex ", agentReasoningEffort: "high", checkUpdatesAutomatically: false });
+    expect(updated).toEqual({ syncIntervalMinutes: 60, keepCapture: false, codexPath: "/opt/codex/bin/codex", agentModel: "gpt-5-codex", agentReasoningEffort: "high", checkUpdatesAutomatically: false, dataDirectory: root });
+    expect(JSON.parse(await readFile(path(), "utf8"))).toEqual({ syncIntervalMinutes: 60, keepCapture: false, codexPath: "/opt/codex/bin/codex", agentModel: "gpt-5-codex", agentReasoningEffort: "high", checkUpdatesAutomatically: false });
     const reopened = new SettingsStore(path(), root, { exists });
     expect(reopened.get()).toEqual(updated);
     expect(reopened.update({ codexPath: "", agentReasoningEffort: "" }).codexPath).toBe("");
@@ -30,7 +30,8 @@ describe("SettingsStore", () => {
       [{ syncIntervalMinutes: 1441 }, /syncIntervalMinutes/],
       [{ syncIntervalMinutes: 7.5 }, /syncIntervalMinutes/],
       [{ syncIntervalMinutes: "30" }, /syncIntervalMinutes/],
-      [{ keepCapture: "yes" }, /keepCapture/],
+      [{ keepCapture: "yes" }, /keepCapture must be true or false/],
+      [{ checkUpdatesAutomatically: 1 }, /checkUpdatesAutomatically must be true or false/],
       [{ codexPath: "/nowhere/codex" }, /codexPath points to \/nowhere\/codex, which does not exist/],
       [{ codexPath: 3 }, /codexPath/],
       [{ agentModel: "m".repeat(65) }, /agentModel .* 64/],

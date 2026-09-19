@@ -38,7 +38,7 @@ const META_LONG_TEXT = ["abstract", "note", "extra"];
 const META_KEYS = ["kind", "title", "shortTitle", "creators", "abstract", "publication", "volume", "issue", "pages", "publisher", "place", "edition", "series", "date", "accessed", "language", "doi", "arxivId", "isbn", "issn", "url", "tags", "note", "extra", "related"];
 const KINDS: readonly NonNullable<LibraryFilter["kind"]>[] = ["all", "articles", "pdf", "artifact", "feed"];
 const SORTS: readonly NonNullable<LibraryFilter["sort"]>[] = ["fetched", "published", "title"];
-const SETTING_KEYS = ["syncIntervalMinutes", "keepCapture", "codexPath", "agentModel", "agentReasoningEffort"] as const;
+const SETTING_KEYS = ["syncIntervalMinutes", "keepCapture", "codexPath", "agentModel", "agentReasoningEffort", "checkUpdatesAutomatically"] as const;
 
 function materialId(value: unknown): string {
   if (typeof value !== "string" || !/^[a-f0-9]{16}$/.test(value)) throw new Error("IPC_INVALID_ID");

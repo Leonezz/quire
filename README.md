@@ -29,7 +29,11 @@ Blogs, newsletters, papers, PDFs — whatever you bring in, Quire turns it into 
 - Inbox items suggested by the agent, and syntheses across everything you have read.
 - Site-specific extraction profiles for the last stubborn layouts.
 
-## Run it
+## Get it
+
+Alpha builds for macOS are published at [github.com/Leonezz/quire-releases/releases](https://github.com/Leonezz/quire-releases/releases). The alpha is not yet signed: right-click the app and choose Open the first time. Quire checks for new alphas and offers them in Settings › About.
+
+## Run it from source
 
 ```bash
 pnpm install

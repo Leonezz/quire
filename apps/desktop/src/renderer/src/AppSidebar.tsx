@@ -3,6 +3,7 @@ import { BookOpen, FileText, Inbox as InboxIcon, ListOrdered, PanelLeft, Setting
 import { Button, Icon, Popover, Sidebar, SidebarItem, SidebarSection, ToolbarButton, type SidebarHealth } from "@read/ui";
 import type { ItemRecord, SourceRecord, TagCount } from "../../shared/contracts";
 import { sourceHealth } from "./format";
+import { UpdateBanner } from "./UpdateBanner";
 import { CUT_LABELS, LIBRARY_CUTS, scopeKey, scopeOfKey, type Scope } from "./useScope";
 
 const TOP_TAGS = 8;
@@ -34,7 +35,7 @@ export function undecidedBySource(inbox: readonly ItemRecord[]): Map<string, num
 /**
  * The sidebar: the traffic lights' row on top (52px, draggable, the hide button at its right), then
  * every scope in one list — Inbox · Queue · Agent, the Library's cuts, the most used tags, every
- * source with its health — and Settings pinned at the bottom.
+ * source with its health — and Settings pinned at the bottom, under the update notice when there is one.
  */
 export function AppSidebar({ width, scope, onScope, inbox, queueCount, conversationCount, runningCount, tags, sources, onHide, onOpenSettings }: AppSidebarProps) {
   const [tagsOpen, setTagsOpen] = useState(false);
@@ -72,8 +73,9 @@ export function AppSidebar({ width, scope, onScope, inbox, queueCount, conversat
           <SidebarItem id="sources" label="Manage sources…" quiet />
         </SidebarSection>
       </Sidebar>
-      <div className="px-2.5 pb-2.5 pt-1">
-        <Button variant="quiet" size="sm" className="w-full justify-start gap-2 px-2.5 text-[13px] font-medium text-label" onPress={onOpenSettings}><Icon of={SettingsIcon} size="md" className="text-label-2" />Settings</Button>
+      <div className="pb-2.5 pt-1">
+        <UpdateBanner />
+        <Button variant="quiet" size="sm" className="mx-2.5 w-[calc(100%-20px)] justify-start gap-2 px-2.5 text-[13px] font-medium text-label" onPress={onOpenSettings}><Icon of={SettingsIcon} size="md" className="text-label-2" />Settings</Button>
       </div>
       <Popover triggerRef={allTagsRef} isOpen={tagsOpen} onOpenChange={setTagsOpen} placement="right top" aria-label="All tags" className="max-h-[420px] w-[240px] overflow-auto p-1.5">
         <ul className="m-0 grid list-none gap-px p-0">

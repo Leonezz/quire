@@ -8,13 +8,13 @@ import type { Settings } from "../../shared/contracts";
 export type SettingsPatch = Partial<Omit<Settings, "dataDirectory">>;
 type Stored = Omit<Settings, "dataDirectory">;
 
-export const SETTINGS_DEFAULTS: Stored = { syncIntervalMinutes: 30, keepCapture: true, codexPath: "", agentModel: "", agentReasoningEffort: "" };
+export const SETTINGS_DEFAULTS: Stored = { syncIntervalMinutes: 30, keepCapture: true, codexPath: "", agentModel: "", agentReasoningEffort: "", checkUpdatesAutomatically: true };
 export const MIN_SYNC_MINUTES = 5;
 export const MAX_SYNC_MINUTES = 1440;
 export const MAX_MODEL_LENGTH = 64;
 const MAX_PATH_LENGTH = 1024;
 const EFFORTS: readonly Settings["agentReasoningEffort"][] = ["", "low", "medium", "high"];
-const KEYS: readonly (keyof Stored)[] = ["syncIntervalMinutes", "keepCapture", "codexPath", "agentModel", "agentReasoningEffort"];
+const KEYS: readonly (keyof Stored)[] = ["syncIntervalMinutes", "keepCapture", "codexPath", "agentModel", "agentReasoningEffort", "checkUpdatesAutomatically"];
 
 export class SettingsError extends Error {
   constructor(message: string) { super(message); this.name = "SettingsError"; }
@@ -24,8 +24,8 @@ function validSyncInterval(value: unknown): number {
   if (typeof value !== "number" || !Number.isInteger(value) || value < MIN_SYNC_MINUTES || value > MAX_SYNC_MINUTES) throw new SettingsError(`syncIntervalMinutes must be a whole number of minutes between ${MIN_SYNC_MINUTES} and ${MAX_SYNC_MINUTES}.`);
   return value;
 }
-function validFlag(value: unknown): boolean {
-  if (typeof value !== "boolean") throw new SettingsError("keepCapture must be true or false.");
+function validFlag(name: "keepCapture" | "checkUpdatesAutomatically", value: unknown): boolean {
+  if (typeof value !== "boolean") throw new SettingsError(`${name} must be true or false.`);
   return value;
 }
 function validModel(value: unknown): string {
@@ -85,13 +85,14 @@ export class SettingsStore {
   }
 
   private validated(patch: Record<string, unknown>): Partial<Stored> {
-    const { syncIntervalMinutes, keepCapture, codexPath, agentModel, agentReasoningEffort } = patch;
+    const { syncIntervalMinutes, keepCapture, codexPath, agentModel, agentReasoningEffort, checkUpdatesAutomatically } = patch;
     return {
       ...(syncIntervalMinutes !== undefined ? { syncIntervalMinutes: validSyncInterval(syncIntervalMinutes) } : {}),
-      ...(keepCapture !== undefined ? { keepCapture: validFlag(keepCapture) } : {}),
+      ...(keepCapture !== undefined ? { keepCapture: validFlag("keepCapture", keepCapture) } : {}),
       ...(codexPath !== undefined ? { codexPath: this.validCodexPath(codexPath) } : {}),
       ...(agentModel !== undefined ? { agentModel: validModel(agentModel) } : {}),
       ...(agentReasoningEffort !== undefined ? { agentReasoningEffort: validEffort(agentReasoningEffort) } : {}),
+      ...(checkUpdatesAutomatically !== undefined ? { checkUpdatesAutomatically: validFlag("checkUpdatesAutomatically", checkUpdatesAutomatically) } : {}),
     };
   }
 

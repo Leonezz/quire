@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AgentEvent, ReadApi } from "../shared/contracts";
+import type { AgentEvent, ReadApi, UpdateState } from "../shared/contracts";
 
 // The only bridge. Method names mirror the main-process handlers one to one.
 const api: ReadApi = {
@@ -82,5 +82,15 @@ const api: ReadApi = {
   fetchMaterialView: (id, view) => ipcRenderer.invoke("material:fetchView", id, view),
   getMaterialView: (id, view) => ipcRenderer.invoke("material:getView", id, view),
   setPrimaryView: (id, view) => ipcRenderer.invoke("material:setPrimaryView", id, view),
+  // Updates: the state is pushed on every change; `current` in it is the main process's app.getVersion().
+  getUpdateState: () => ipcRenderer.invoke("update:state"),
+  checkForUpdates: () => ipcRenderer.invoke("update:check"),
+  installUpdate: () => ipcRenderer.invoke("update:install"),
+  openReleasePage: () => ipcRenderer.invoke("update:openRelease"),
+  onUpdateState: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: UpdateState) => listener(state);
+    ipcRenderer.on("update:state", handler);
+    return () => ipcRenderer.removeListener("update:state", handler);
+  },
 };
 contextBridge.exposeInMainWorld("read", api);

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button, Kbd, NumberField, Segment, Segmented, Sheet, SheetDialog, Switch, TextField } from "@read/ui";
 import type { AgentStatus, Settings } from "../../shared/contracts";
+import { AboutSection } from "./AboutSection";
 import { read } from "./api";
 import { KEYBOARD_MAP } from "./keyboardMap";
 import { ReadingControls } from "./ReadingSettings";
@@ -9,10 +10,10 @@ import { useReadingPrefs } from "./readingPrefs";
 type Patch = Partial<Omit<Settings, "dataDirectory">>;
 type Field = keyof Patch;
 type FieldErrors = Partial<Record<Field, string>>;
-export type SettingsSection = "reading" | "sources" | "agent" | "storage" | "keyboard";
+export type SettingsSection = "reading" | "sources" | "agent" | "storage" | "keyboard" | "about";
 
 const SECTIONS: { id: SettingsSection; title: string }[] = [
-  { id: "reading", title: "Reading" }, { id: "sources", title: "Sources" }, { id: "agent", title: "Agent" }, { id: "storage", title: "Storage" }, { id: "keyboard", title: "Keyboard" },
+  { id: "reading", title: "Reading" }, { id: "sources", title: "Sources" }, { id: "agent", title: "Agent" }, { id: "storage", title: "Storage" }, { id: "keyboard", title: "Keyboard" }, { id: "about", title: "About" },
 ];
 
 function Section({ id, title, children }: { id: SettingsSection; title: string; children: React.ReactNode }) {
@@ -45,7 +46,7 @@ function agentLine(status: AgentStatus | undefined, error: string | undefined): 
  * shared reading store); engine settings are saved per change with the engine's answer shown
  * under the field that caused it.
  */
-export function SettingsSheet({ open, onClose, section }: { open: boolean; onClose: () => void; section?: SettingsSection | undefined }) {
+export function SettingsSheet({ open, onClose, section, onOpenLink }: { open: boolean; onClose: () => void; section?: SettingsSection | undefined; onOpenLink: (url: string) => void }) {
   const [prefs, setPrefs] = useReadingPrefs();
   const [settings, setSettings] = useState<Settings | undefined>(undefined);
   const [loadError, setLoadError] = useState<string | undefined>(undefined);
@@ -180,6 +181,11 @@ export function SettingsSheet({ open, onClose, section }: { open: boolean; onClo
                 </table>
               ))}
             </div>
+          </Section>
+
+          <Section id="about" title="About">
+            <AboutSection version={read.version} autoCheck={settings?.checkUpdatesAutomatically} disabled={!settings} onAutoCheck={(value) => void save("checkUpdatesAutomatically", value)}
+              autoCheckError={errors.checkUpdatesAutomatically} autoCheckNote={savedNote("checkUpdatesAutomatically")} onOpenLink={onOpenLink} />
           </Section>
         </div>
       </SheetDialog>

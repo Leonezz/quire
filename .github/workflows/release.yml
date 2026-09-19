@@ -1,0 +1,141 @@
+name: Release
+
+# Cutting a release: bump apps/desktop/package.json `version`, commit, tag `v<version>` and push the
+# tag. electron-builder publishes the macOS artifacts (dmg + zip, arm64 and x64, plus latest-mac.yml
+# for electron-updater) to the public Leonezz/quire-releases repository. See docs/release.md.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  # Personal access token with `contents: write` on Leonezz/quire-releases. The job's own
+  # GITHUB_TOKEN cannot publish to another repository.
+  GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
+  RELEASE_REPO: Leonezz/quire-releases
+
+jobs:
+  mac:
+    name: macOS (arm64 + x64)
+    runs-on: macos-14
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The changelog needs the previous tag and the commits since it.
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Check the tag matches the app version
+        shell: bash
+        run: |
+          version="$(node -p "require('./apps/desktop/package.json').version")"
+          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match apps/desktop/package.json version $version"
+            exit 1
+          fi
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::The RELEASE_TOKEN secret is not set; electron-builder cannot publish to $RELEASE_REPO"
+            exit 1
+          fi
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      # Signing and notarization are opt-in through secrets. Without a Developer ID certificate the
+      # build is explicitly unsigned (CSC_IDENTITY_AUTO_DISCOVERY=false); Gatekeeper then asks users
+      # to allow the app and electron-updater will not install updates on macOS.
+      - name: Configure signing
+        shell: bash
+        env:
+          CSC_LINK_SECRET: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD_SECRET: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID_SECRET: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD_SECRET: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID_SECRET: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -n "$CSC_LINK_SECRET" ]; then
+            if [ -z "$CSC_KEY_PASSWORD_SECRET" ]; then
+              echo "::error::CSC_LINK is set but CSC_KEY_PASSWORD is missing"
+              exit 1
+            fi
+            {
+              echo "CSC_LINK=$CSC_LINK_SECRET"
+              echo "CSC_KEY_PASSWORD=$CSC_KEY_PASSWORD_SECRET"
+            } >> "$GITHUB_ENV"
+            echo "Signing with the Developer ID certificate from CSC_LINK."
+          else
+            echo "CSC_IDENTITY_AUTO_DISCOVERY=false" >> "$GITHUB_ENV"
+            echo "::warning::No CSC_LINK secret: building an unsigned app. Users must allow it in Gatekeeper and cannot auto-update."
+          fi
+          if [ -n "$APPLE_ID_SECRET" ]; then
+            if [ -z "$APPLE_APP_SPECIFIC_PASSWORD_SECRET" ] || [ -z "$APPLE_TEAM_ID_SECRET" ]; then
+              echo "::error::APPLE_ID is set but APPLE_APP_SPECIFIC_PASSWORD or APPLE_TEAM_ID is missing"
+              exit 1
+            fi
+            if [ -z "$CSC_LINK_SECRET" ]; then
+              echo "::error::Notarization needs a signed app: set CSC_LINK and CSC_KEY_PASSWORD as well"
+              exit 1
+            fi
+            {
+              echo "APPLE_ID=$APPLE_ID_SECRET"
+              echo "APPLE_APP_SPECIFIC_PASSWORD=$APPLE_APP_SPECIFIC_PASSWORD_SECRET"
+              echo "APPLE_TEAM_ID=$APPLE_TEAM_ID_SECRET"
+            } >> "$GITHUB_ENV"
+            echo "Notarizing with notarytool."
+          else
+            echo "No APPLE_ID secret: skipping notarization."
+          fi
+
+      - name: Package and publish
+        run: pnpm --filter @read/desktop exec electron-builder --mac --publish always
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: quire-${{ github.ref_name }}-mac
+          if-no-files-found: error
+          path: |
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.zip
+            apps/desktop/release/*.yml
+
+      # electron-builder created the release; this fills in its notes from the feat/fix commits since
+      # the previous tag and sets the prerelease flag from the tag name.
+      - name: Write release notes
+        shell: bash
+        run: |
+          tag="$GITHUB_REF_NAME"
+          previous="$(git describe --tags --abbrev=0 "${tag}^" 2>/dev/null || true)"
+          if [ -n "$previous" ]; then
+            range="${previous}..${tag}"
+            heading="Changes since ${previous}"
+          else
+            range="$tag"
+            heading="Changes"
+          fi
+          {
+            echo "## ${heading}"
+            echo
+            git log --no-merges --pretty='- %s' "$range" | grep -E '^- (feat|fix)(\([^)]*\))?!?:' || echo "- No feat/fix commits in this range."
+          } > release-notes.md
+          cat release-notes.md
+          if [[ "$tag" == *alpha* || "$tag" == *beta* ]]; then
+            flag="--prerelease"
+          else
+            flag="--prerelease=false --latest"
+          fi
+          # shellcheck disable=SC2086
+          gh release edit "$tag" --repo "$RELEASE_REPO" --title "Quire $tag" --notes-file release-notes.md $flag

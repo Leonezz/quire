@@ -14,6 +14,7 @@ import { SearchPalette } from "./SearchPalette";
 import { SettingsSheet, type SettingsSection } from "./SettingsSheet";
 import { SourcesView } from "./SourcesView";
 import { agentStore, onAgentOpenSession, useAgentRunning } from "./agentStore";
+import { updateStore } from "./updateStore";
 import { read } from "./api";
 import { isTypingTarget } from "./format";
 import { applyTheme, loadPrefs } from "./readingPrefs";
@@ -72,6 +73,8 @@ export function App() {
   // The agent store outlives every panel: it is started once here and follows the bridge's runs from then on.
   useEffect(() => {
     agentStore.start().catch((cause: unknown) => { setAgentStartError(cause instanceof Error ? cause.message : "Could not read the agent's runs."); });
+    // The update store never rejects: a failed seed is shown in Settings › About and the sidebar stays quiet.
+    void updateStore.start();
     return onAgentOpenSession((id) => { setRequestedSession({ id, nonce: Date.now() }); setScope({ kind: "agent" }); });
   }, [setScope]);
   // The panel library sizes panes with flex-grow and jumps on collapse; a transition on that property, enabled
@@ -247,7 +250,7 @@ export function App() {
       </SplitPanel>
       <AddSheet open={addOpen} busy={addBusy} error={addError} onClose={() => { setAddOpen(false); setAddError(undefined); }} onSubmit={(url) => void submitUrl(url)} onSubscribed={(result) => void subscribed(result)} />
       <SearchPalette open={searchOpen} onOpenChange={setSearchOpen} onOpenMaterial={showMaterial} onOpenItem={(id) => void openItemHit(id)} />
-      <SettingsSheet open={settings.open} section={settings.section} onClose={() => setSettings({ open: false })} />
+      <SettingsSheet open={settings.open} section={settings.section} onClose={() => setSettings({ open: false })} onOpenLink={openLink} />
     </SplitGroup>
     </div>
   );

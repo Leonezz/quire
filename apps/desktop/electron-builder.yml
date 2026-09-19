@@ -1,0 +1,97 @@
+# Packaging for the Quire desktop app (apps/desktop). Run through the `package` /
+# `package:dir` scripts, or directly with `electron-builder --mac` from this directory.
+#
+# Signing and notarization are driven by the environment, not by this file:
+#   - CSC_LINK + CSC_KEY_PASSWORD (a base64 .p12 Developer ID Application cert) sign the app;
+#     without them set CSC_IDENTITY_AUTO_DISCOVERY=false to get an explicitly unsigned build.
+#   - APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID notarize a signed app; when they are
+#     absent electron-builder logs "skipped macOS notarization" and continues.
+# See docs/release.md.
+appId: app.quire.desktop
+productName: Quire
+copyright: Copyright © 2026 ${author}
+# Injected into the packaged package.json only. Electron derives app.name (and with it the
+# userData directory, ~/Library/Application Support/Quire) from productName, so the packaged app
+# keeps its data apart from the dev app, which still runs as "@read/desktop".
+extraMetadata:
+  productName: Quire
+
+directories:
+  output: release
+  buildResources: build
+
+# electron-vite writes main, preload and renderer into out/. The workspace packages (@read/*) and
+# almost every dependency are bundled into those files through the Vite aliases, so node_modules is
+# restricted to the runtime externals of the main process (electron.vite.config.ts) and their
+# production dependency closure: `electron` and `node:sqlite` come with Electron, `jsdom` and
+# `canvas` are declared external but never required by the built main.
+#
+# The allow-list must use the object form: for node_modules electron-builder keeps only the "!"
+# patterns from plain string entries, but takes every pattern of a `{from: ".", filter}` set.
+# When an external or one of its dependencies changes, regenerate the list by walking
+# `dependencies` + `optionalDependencies` from each external's package.json (pnpm keeps them as
+# siblings under node_modules/.pnpm/<pkg>/node_modules). A missing package fails loudly at launch
+# (top-level require) or on first PDF open (pdfjs-dist is imported lazily); the package:dir smoke
+# in docs/release.md catches the former.
+files:
+  - out/**
+  - package.json
+  - from: "."
+    filter:
+      - "!node_modules/**"
+      # @mixmark-io/domino
+      - node_modules/@mixmark-io/domino/**
+      # linkedom
+      - node_modules/linkedom/**
+      - node_modules/css-select/**
+      - node_modules/boolbase/**
+      - node_modules/css-what/**
+      - node_modules/domhandler/**
+      - node_modules/domelementtype/**
+      - node_modules/domutils/**
+      - node_modules/dom-serializer/**
+      - node_modules/entities/**
+      - node_modules/nth-check/**
+      - node_modules/cssom/**
+      - node_modules/html-escaper/**
+      - node_modules/htmlparser2/**
+      - node_modules/uhyphen/**
+      # mathml-to-latex
+      - node_modules/mathml-to-latex/**
+      - node_modules/@xmldom/xmldom/**
+      # temml
+      - node_modules/temml/**
+      # pdfjs-dist; @napi-rs/canvas is its optional native canvas. The main process only reads text
+      # and metadata, so pdfjs merely warns when the binary for the target arch is not installed
+      # (x64 builds made on an arm64 runner).
+      - node_modules/pdfjs-dist/**
+      - node_modules/@napi-rs/canvas*/**
+
+asar: true
+# No native modules to rebuild: node:sqlite is built into Electron and the externals are pure JS.
+npmRebuild: false
+
+mac:
+  target:
+    - target: dmg
+      arch: [arm64, x64]
+    - target: zip
+      arch: [arm64, x64]
+  category: public.app-category.productivity
+  icon: build/icon.icns
+  artifactName: ${productName}-${version}-${arch}.${ext}
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # Notarize whenever the app was signed and the APPLE_* variables are present.
+  notarize: true
+
+dmg:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+publish:
+  - provider: github
+    owner: Leonezz
+    repo: quire-releases
+    releaseType: prerelease

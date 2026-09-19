@@ -5,7 +5,7 @@ import { MaterialStore } from "./engine/materials";
 import { ImageCache } from "./engine/images";
 import { AnnotationStore } from "./engine/annotations";
 import { imageUrlsOf } from "./engine/materials";
-import type { AddSourceResult, AgentContext, AgentEvent, AgentRequest, AgentTask, ItemDecision, MaterialRecord, OpenUrlResult, ReadingEventKind, SearchHit } from "../shared/contracts";
+import type { AddSourceResult, AgentContext, AgentEvent, AgentRequest, AgentTask, ItemDecision, MaterialRecord, OpenUrlResult, ReadingEventKind, SearchHit, UpdateState } from "../shared/contracts";
 import { MAX_BYTES, fetchPage } from "./engine/fetch";
 import { openDatabase } from "./engine/db";
 import { ItemStore } from "./engine/items";
@@ -23,6 +23,8 @@ import { SettingsStore } from "./engine/settings";
 import { SessionStore } from "./engine/agent-sessions";
 import { registerM3Handlers } from "./ipc-m3";
 import { isMaterialViewId } from "./engine/material-views";
+import { UpdateService } from "./engine/updates";
+import { createElectronInstaller } from "./update-installer";
 
 const userData = app.getPath("userData");
 const settings = new SettingsStore(join(userData, "settings.json"), userData, { warn: (message) => console.warn(`[settings] ${message}`) });
@@ -51,7 +53,7 @@ function annotationView(value: unknown) {
   return value;
 }
 
-function broadcast(channel: "library:changed" | "sources:changed" | "agent:event" | "agent:sessions:changed", payload?: AgentEvent) {
+function broadcast(channel: "library:changed" | "sources:changed" | "agent:event" | "agent:sessions:changed" | "update:state", payload?: AgentEvent | UpdateState) {
   for (const win of BrowserWindow.getAllWindows()) win.webContents.send(channel, payload);
 }
 
@@ -288,6 +290,21 @@ registerM3Handlers({
   warn: (message) => console.warn(message),
 });
 
+// --- Updates: GitHub Releases, alpha channel. The manual path always works; a signed build installs in place. ---
+const UPDATE_FEED = { owner: "Leonezz", repo: "quire-releases" };
+const updates = new UpdateService({
+  currentVersion: app.getVersion(), feed: UPDATE_FEED, platform: process.platform, arch: process.arch,
+  fetch: (url, init) => fetch(url, init),
+  installer: createElectronInstaller({ feed: UPDATE_FEED, currentVersion: app.getVersion(), warn: (message) => console.warn(message) }),
+  onState: (state) => broadcast("update:state", state),
+  autoCheck: () => settings.get().checkUpdatesAutomatically,
+  openExternal: (url) => shell.openExternal(url),
+});
+ipcMain.handle("update:state", () => updates.getState());
+ipcMain.handle("update:check", () => updates.check());
+ipcMain.handle("update:install", () => updates.install());
+ipcMain.handle("update:openRelease", () => updates.openReleasePage());
+
 // One window. Native vibrancy behind a transparent page so the glass panels
 // in the renderer sit on the real desktop, not on a painted gradient.
 function createWindow(): BrowserWindow {
@@ -353,8 +370,9 @@ app.whenReady().then(() => {
   installMenu();
   createWindow();
   scheduler.start();
+  updates.start();
   app.on("activate", () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
 });
 // Runs still open become interrupted turns of their sessions before the database closes.
-app.on("before-quit", () => { scheduler.stop(); agent.shutdown(); db.close(); });
+app.on("before-quit", () => { scheduler.stop(); updates.stop(); agent.shutdown(); db.close(); });
 app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });

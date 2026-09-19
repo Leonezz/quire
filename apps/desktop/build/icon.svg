@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <!-- Quire: a small gathering of folded sheets, nested at one spine. -->
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#e3944f"/>
+      <stop offset="1" stop-color="#b0552a"/>
+    </linearGradient>
+    <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.22"/>
+      <stop offset="0.55" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="drop" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="14" stdDeviation="18" flood-color="#000000" flood-opacity="0.28"/>
+    </filter>
+    <filter id="sheet-shadow" x="-10%" y="-10%" width="120%" height="130%">
+      <feDropShadow dx="0" dy="10" stdDeviation="10" flood-color="#5a2a10" flood-opacity="0.35"/>
+    </filter>
+  </defs>
+
+  <!-- macOS icon grid: an 824px rounded square centred on a 1024px canvas. -->
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#tile)" filter="url(#drop)"/>
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#gloss)"/>
+
+  <!-- Three folded sheets sharing one spine; each inner sheet sits a little lower and narrower. -->
+  <g filter="url(#sheet-shadow)" stroke="#7d3f1e" stroke-width="14" stroke-linejoin="round">
+    <path d="M512 728 L214 612 L214 322 L512 438 L810 322 L810 612 Z" fill="#efdcbd"/>
+    <path d="M512 728 L214 612 L214 322 L512 438 L810 322 L810 612 Z" fill="#f6e8cf"
+          transform="translate(512 728) scale(0.84) translate(-512 -728)"/>
+    <path d="M512 728 L214 612 L214 322 L512 438 L810 322 L810 612 Z" fill="#fcf3e2"
+          transform="translate(512 728) scale(0.68) translate(-512 -728)"/>
+  </g>
+
+  <!-- The sewing thread down the fold. -->
+  <line x1="512" y1="546" x2="512" y2="712" stroke="#7d3f1e" stroke-width="14" stroke-linecap="round" stroke-dasharray="4 40"/>
+</svg>

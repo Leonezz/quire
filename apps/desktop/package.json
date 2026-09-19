@@ -1,14 +1,19 @@
 {
   "name": "@read/desktop",
-  "version": "0.0.1",
+  "version": "0.1.0-alpha.1",
   "private": true,
+  "description": "Quire — a reading workbench for blogs, papers and the web",
+  "author": "Leonezz",
+  "homepage": "https://github.com/Leonezz/quire",
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "package": "electron-vite build && electron-builder --mac",
+    "package:dir": "electron-vite build && electron-builder --mac --dir"
   },
   "dependencies": {
     "@mixmark-io/domino": "2.2.0",
@@ -35,6 +40,7 @@
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^5",
     "electron": "44.4.1",
+    "electron-builder": "26.16.1",
     "electron-vite": "5.0.0",
     "jsdom": "26.1.0",
     "tailwindcss": "4.3.3",

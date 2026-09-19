@@ -20,7 +20,7 @@ const MIN_SYNC_MINUTES = 5;
 const MAX_SYNC_MINUTES = 1440;
 const MAX_MODEL_LENGTH = 64;
 const EFFORTS: readonly Settings["agentReasoningEffort"][] = ["", "low", "medium", "high"];
-const SETTINGS_DEFAULTS: Omit<Settings, "dataDirectory"> = { syncIntervalMinutes: 30, keepCapture: true, codexPath: "", agentModel: "", agentReasoningEffort: "" };
+const SETTINGS_DEFAULTS: Omit<Settings, "dataDirectory"> = { syncIntervalMinutes: 30, keepCapture: true, codexPath: "", agentModel: "", agentReasoningEffort: "", checkUpdatesAutomatically: true };
 
 function readJson<T>(key: string, fallback: T): T {
   const raw = localStorage.getItem(key);
@@ -66,11 +66,12 @@ export function queryLibrary(summaries: readonly MaterialSummary[], filter: Libr
 }
 
 function validateSettings(patch: Partial<Omit<Settings, "dataDirectory">>): Partial<Omit<Settings, "dataDirectory">> {
-  const { syncIntervalMinutes, keepCapture, codexPath, agentModel, agentReasoningEffort } = patch;
+  const { syncIntervalMinutes, keepCapture, codexPath, agentModel, agentReasoningEffort, checkUpdatesAutomatically } = patch;
   const unknown = Object.keys(patch).filter((key) => !(key in SETTINGS_DEFAULTS));
   if (unknown.length) throw new Error(`Unknown or read-only setting(s): ${unknown.join(", ")}.`);
   if (syncIntervalMinutes !== undefined && (!Number.isInteger(syncIntervalMinutes) || syncIntervalMinutes < MIN_SYNC_MINUTES || syncIntervalMinutes > MAX_SYNC_MINUTES)) throw new Error(`syncIntervalMinutes must be a whole number of minutes between ${MIN_SYNC_MINUTES} and ${MAX_SYNC_MINUTES}.`);
   if (keepCapture !== undefined && typeof keepCapture !== "boolean") throw new Error("keepCapture must be true or false.");
+  if (checkUpdatesAutomatically !== undefined && typeof checkUpdatesAutomatically !== "boolean") throw new Error("checkUpdatesAutomatically must be true or false.");
   if (agentModel !== undefined && agentModel.trim().length > MAX_MODEL_LENGTH) throw new Error(`agentModel must be at most ${MAX_MODEL_LENGTH} characters, or empty for Codex's default.`);
   if (agentReasoningEffort !== undefined && !EFFORTS.includes(agentReasoningEffort)) throw new Error('agentReasoningEffort must be "", "low", "medium" or "high".');
   return {
@@ -79,6 +80,7 @@ function validateSettings(patch: Partial<Omit<Settings, "dataDirectory">>): Part
     ...(codexPath !== undefined ? { codexPath: codexPath.trim() } : {}),
     ...(agentModel !== undefined ? { agentModel: agentModel.trim() } : {}),
     ...(agentReasoningEffort !== undefined ? { agentReasoningEffort } : {}),
+    ...(checkUpdatesAutomatically !== undefined ? { checkUpdatesAutomatically } : {}),
   };
 }
 
