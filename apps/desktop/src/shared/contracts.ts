@@ -277,10 +277,28 @@ export interface AgentRequest {
   sessionId?: string;
 }
 
+export type AgentFailureCode = "AGENT_UNAVAILABLE" | "AUTH_REQUIRED" | "TURN_RUNNING" | "TURN_FAILED" | "TURN_INTERRUPTED" | "TURN_TIMEOUT";
+
+/**
+ * agentAsk returns as soon as the turn is running (or could not start). The answer arrives through
+ * onAgentEvent and, once finished, as a turn of the session; the caller never waits on this promise for text.
+ */
 export type AgentResult =
-  /** `sources`: the material ids the agent retrieved this turn (plus the one it was asked about); only these are trustworthy citations. */
-  | { ok: true; threadId: string; turnId: string; text: string; sessionId: string; sources: string[] }
-  | { ok: false; code: "AGENT_UNAVAILABLE" | "AUTH_REQUIRED" | "TURN_RUNNING" | "TURN_FAILED" | "TURN_INTERRUPTED" | "TURN_TIMEOUT"; message: string };
+  | { ok: true; sessionId: string; turnId: string }
+  | { ok: false; code: AgentFailureCode; message: string };
+
+/** A turn in flight, with everything streamed so far, so a panel mounting later can catch up. */
+export interface AgentRun {
+  sessionId: string;
+  turnId: string;
+  threadId?: string;
+  task: AgentTask;
+  prompt: string;
+  /** The answer accumulated from deltas so far. */
+  answer: string;
+  tools: { name: string; status: "running" | "done" | "failed"; summary?: string }[];
+  startedAt: string;
+}
 
 export interface AgentStatus {
   /** The codex binary was found and answers `initialize`. */
@@ -290,22 +308,30 @@ export interface AgentStatus {
   account?: string;
   /** Why the agent cannot be used right now, in words the panel can show. */
   reason?: string;
-  busy: boolean;
+  /** How many turns are running right now (across sessions). */
+  running: number;
 }
 
-/** Streamed while a turn runs. `turnId` lets the panel ignore events from a turn it no longer shows. */
+/**
+ * Streamed while turns run, to every window. Every event names its session, so the renderer's store
+ * routes it whether or not a panel for that session is mounted. `completed` / `failed` are followed by
+ * onAgentSessionsChanged once the turn is stored.
+ */
 export type AgentEvent =
-  | { type: "started"; threadId: string; turnId: string }
-  | { type: "delta"; turnId: string; delta: string }
-  | { type: "tool"; turnId: string; name: string; status: "running" | "done" | "failed"; summary?: string }
-  | { type: "completed"; turnId: string; sources: string[] }
-  | { type: "failed"; turnId: string; message: string };
+  | { type: "started"; sessionId: string; threadId: string; turnId: string }
+  | { type: "delta"; sessionId: string; turnId: string; delta: string }
+  | { type: "tool"; sessionId: string; turnId: string; name: string; status: "running" | "done" | "failed"; summary?: string }
+  | { type: "completed"; sessionId: string; turnId: string; text: string; sources: string[] }
+  | { type: "failed"; sessionId: string; turnId: string; code: AgentFailureCode; message: string };
 
 export interface ReadApiM2 {
   agentStatus: () => Promise<AgentStatus>;
-  /** Runs one turn; resolves with the final text. Progress arrives through onAgentEvent. */
+  /** Starts one turn in the named (or a new) session and returns once it is running; see AgentResult. */
   agentAsk: (request: AgentRequest) => Promise<AgentResult>;
-  agentInterrupt: () => Promise<void>;
+  /** Stops the turn running in that session; a no-op when none is. */
+  agentInterrupt: (sessionId: string) => Promise<void>;
+  /** Every turn in flight with what has streamed so far; a store takes this once and follows onAgentEvent after. */
+  listAgentRuns: () => Promise<AgentRun[]>;
   /** Starts the ChatGPT login flow in the browser; resolves once the account is available or with the failure reason. */
   agentLogin: () => Promise<AgentStatus>;
   onAgentEvent: (listener: (event: AgentEvent) => void) => () => void;
