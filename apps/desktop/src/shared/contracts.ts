@@ -16,6 +16,7 @@ export interface MaterialSummary {
   lineage?: string[];
   /** User tags from the metadata overrides. */
   tags: string[];
+  kind: MaterialKind;
   /** Set when the agent rebuilt this material into a cleaner artifact (its id). */
   rebuiltAs?: string;
 }
@@ -32,8 +33,12 @@ export interface MaterialRecord extends MaterialSummary {
   pdf?: PdfInfo;
   /** The raw page as captured (kept next to the record as <id>.html) so the agent can rebuild from it. */
   capture?: { byteLength: number; mediaType: string };
+  /** What the source declared (citation_* / Dublin Core / JSON-LD / Open Graph / arXiv), never edited. */
+  extracted: MaterialMeta;
   /** What the user overrode; the top-level fields already carry the effective values. */
   overrides?: MaterialMeta;
+  /** extracted with overrides applied; `title`, `byline` (from creators), `publishedAt` (from date) and `tags` above mirror it. */
+  meta: MaterialMeta;
   lang?: string;
   dir?: "ltr" | "rtl";
   /** Reader representation: schema id and JSON payload (v2 preferred, v1 otherwise). */
@@ -308,21 +313,87 @@ export interface ReadApiM2 {
 // M3: metadata, library management, settings, agent sessions, rebuild.
 // ---------------------------------------------------------------------------
 
-/** Per-material overrides the user typed; absent fields fall back to what was extracted. */
+/**
+ * Bibliographic metadata, modelled on Zotero's item types and fields but kept to what a reading
+ * app needs. The same shape serves three layers: `extracted` (what the source declared), the
+ * user's `overrides`, and `meta` (extracted with overrides applied). A field set to "" in the
+ * overrides clears the extracted value; an absent field falls through.
+ */
+export type MaterialKind =
+  | "webpage" | "blogPost" | "newsletter" | "newsArticle"
+  | "journalArticle" | "preprint" | "conferencePaper"
+  | "book" | "bookSection" | "report" | "thesis" | "document"
+  /** Written inside Quire (an agent artifact). */
+  | "note";
+
+export type CreatorRole = "author" | "editor" | "translator" | "contributor";
+
+export interface Creator {
+  role: CreatorRole;
+  /** As displayed. When the source gives structured names, `given` and `family` are filled too. */
+  name: string;
+  given?: string;
+  family?: string;
+}
+
 export interface MaterialMeta {
+  kind?: MaterialKind;
   title?: string;
-  byline?: string;
-  publishedAt?: string;
+  shortTitle?: string;
+  creators?: Creator[];
+  abstract?: string;
+  /** Journal, proceedings, blog, newsletter or site title — where it appeared. */
+  publication?: string;
+  volume?: string;
+  issue?: string;
+  pages?: string;
+  publisher?: string;
+  place?: string;
+  edition?: string;
+  series?: string;
+  /** ISO date, or a partial one (YYYY, YYYY-MM) when the source gives no more. */
+  date?: string;
+  /** When Quire fetched it (the "accessed" date of a citation). */
+  accessed?: string;
+  language?: string;
+  doi?: string;
+  arxivId?: string;
+  isbn?: string;
+  issn?: string;
+  url?: string;
   tags?: string[];
   /** A free-form note about the material itself (not an annotation). */
   note?: string;
+  /** Anything that fits no field, Zotero style. */
+  extra?: string;
+  /** Other materials in the library this one relates to. */
+  related?: string[];
 }
+
+/** Which fields a kind shows, in order (title, creators, abstract, date, language, url, tags, note, extra are always shown). */
+export const MATERIAL_KIND_FIELDS: Record<MaterialKind, readonly (keyof MaterialMeta)[]> = {
+  webpage: ["publication", "accessed"],
+  blogPost: ["publication", "accessed"],
+  newsletter: ["publication", "issue", "accessed"],
+  newsArticle: ["publication", "place", "accessed"],
+  journalArticle: ["publication", "volume", "issue", "pages", "series", "doi", "issn"],
+  preprint: ["arxivId", "doi", "publication", "series"],
+  conferencePaper: ["publication", "pages", "publisher", "place", "doi", "isbn"],
+  book: ["publisher", "place", "edition", "series", "isbn"],
+  bookSection: ["publication", "pages", "publisher", "place", "edition", "isbn"],
+  report: ["publisher", "place", "series", "doi"],
+  thesis: ["publisher", "place"],
+  document: ["publisher", "accessed"],
+  note: [],
+};
 
 export interface TagCount { tag: string; count: number }
 
 export interface LibraryFilter {
   /** "pdf" selects application/pdf; "artifact" origin agent; others by origin. */
   kind?: "all" | "articles" | "pdf" | "artifact" | "feed";
+  /** Bibliographic kind from the metadata (a finer cut than `kind`). */
+  materialKind?: MaterialKind;
   tag?: string;
   /** Every word must match title, byline or tags. */
   query?: string;
@@ -372,7 +443,12 @@ export interface AgentSession extends AgentSessionSummary {
 export interface ReadApiM3 {
   /** Materials filtered and sorted for the Library; the plain listMaterials stays for the rest. */
   queryLibrary: (filter: LibraryFilter) => Promise<MaterialSummary[]>;
+  /** Merges into the overrides: "" clears a field back to the extracted value; arrays replace. */
   updateMaterialMeta: (id: string, patch: MaterialMeta) => Promise<MaterialRecord>;
+  /** Re-runs extraction on the stored capture (or the record) and replaces `extracted`; overrides stay. */
+  refreshMetadata: (id: string) => Promise<MaterialRecord>;
+  /** BibTeX entries for the given materials, from their effective metadata. */
+  exportBibtex: (ids: string[]) => Promise<string>;
   listTags: () => Promise<TagCount[]>;
   /** Removes the records, their bytes, images are left in the shared cache; items that pointed at them lose the link. */
   deleteMaterials: (ids: string[]) => Promise<void>;
