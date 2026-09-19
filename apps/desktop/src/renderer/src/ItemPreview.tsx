@@ -5,16 +5,6 @@ import { timeOf, dayLabel } from "./format";
 
 export interface PreviewAction { label: string; kbd: string; onPress: () => void; variant?: ButtonVariant; icon?: React.ReactNode }
 
-export const panelClass = "rounded-panel bg-content shadow-[0_0_0_1px_var(--separator-soft),0_6px_20px_rgba(15,17,21,.04)]";
-
-export function EmptyState({ title, hint }: { title: string; hint: string }) {
-  return (
-    <div className="grid flex-1 place-items-center px-6 text-center text-label-2">
-      <div><strong className="mb-1.5 block text-[16px] font-semibold text-label">{title}</strong><span className="text-[13px]">{hint}</span></div>
-    </div>
-  );
-}
-
 /** A visible failure inside a pane: the message and the way out. */
 export function InlineError({ title, message, link, onOpenLink }: { title: string; message: string; link?: string | undefined; onOpenLink?: ((url: string) => void) | undefined }) {
   return (
@@ -43,7 +33,7 @@ export function ItemPreview({ item, actions, busy, failure, error, kept, onOpenL
   const [primary, ...rest] = actions;
   const when = `${dayLabel(item.publishedAt)} · ${timeOf(item.publishedAt)}`;
   return (
-    <div key={item.id} className="panel-enter flex min-h-0 flex-1 flex-col overflow-auto">
+    <div key={item.id} className="reader-enter flex min-h-0 flex-1 flex-col overflow-auto">
       {kept}
       <div className="px-9 pt-7">
         <div className="flex items-center gap-2 text-[12.5px] text-label-2">

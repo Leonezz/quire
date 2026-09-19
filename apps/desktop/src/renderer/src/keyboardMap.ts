@@ -8,14 +8,18 @@ export const KEYBOARD_MAP: ShortcutGroup[] = [
   { title: "Everywhere", shortcuts: [
     { keys: "⌘N", action: "Add a page, feed or arXiv category" },
     { keys: "⌘K", action: "Search titles across the library and inbox" },
-    { keys: "⌘J", action: "Toggle the Agent panel (the Library context when nothing is open)" },
+    { keys: "⌘J", action: "Toggle the Agent panel (the Library context when no material is open)" },
     { keys: "⌘⇧J", action: "The Agent view: every conversation" },
     { keys: "⌘,", action: "Settings" },
     { keys: "⌘\\", action: "Hide or show the sidebar" },
     { keys: "⌘.", action: "Stop the agent's current answer" },
-    { keys: "Esc", action: "Close the inspector, the sheet, or the reader" },
+    { keys: "Esc", action: "Close the panel, the sheet, or the reader" },
   ] },
-  { title: "Inbox and Queue", shortcuts: [
+  { title: "Sidebar", shortcuts: [
+    { keys: "↑ ↓", action: "Move between scopes: Inbox, Queue, Agent, the Library's cuts, tags, sources" },
+    { keys: "↵ · Space", action: "Show the focused scope" },
+  ] },
+  { title: "Inbox, Queue and a source", shortcuts: [
     { keys: "↑ ↓", action: "Move the selection" },
     { keys: "↵", action: "Read now" },
     { keys: "k", action: "Keep in the library without reading" },
@@ -32,9 +36,9 @@ export const KEYBOARD_MAP: ShortcutGroup[] = [
   ] },
   { title: "Reader", shortcuts: [
     { keys: "t", action: "Pin the contents rail" },
-    { keys: "i", action: "Info panel (title, author, tags, note)" },
-    { keys: "n", action: "Notes panel" },
+    { keys: "i", action: "Info panel (title, author, tags, note); i again closes it" },
+    { keys: "n", action: "Notes panel; n again closes it" },
     { keys: "⌘F", action: "Find in page" },
-    { keys: "⌘J", action: "Ask the agent about this material" },
+    { keys: "⌘J", action: "Agent panel: ask about this material" },
   ] },
 ];

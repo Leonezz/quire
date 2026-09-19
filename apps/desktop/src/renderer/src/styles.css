@@ -6,8 +6,8 @@
 @import "@read/reader-pdf/reader-pdf.css";
 
 html, body, #root { height: 100%; margin: 0; }
-/* Transparent page: the window's vibrancy shows through the gutters. */
-html[data-preview] { background: var(--ground); }
+/* Transparent page: the sidebar column lets the window's vibrancy through. The browser preview paints a flat ground instead. */
+html[data-preview] { background: var(--ground-flat); }
 body { background: transparent; color: var(--label); font: 400 14px/20px var(--font); -webkit-font-smoothing: antialiased; overflow: hidden; }
 .titlebar-drag { -webkit-app-region: drag; }
 .titlebar-drag button, .titlebar-drag [role="button"], .titlebar-drag [role="option"], .titlebar-drag input { -webkit-app-region: no-drag; }
@@ -19,14 +19,13 @@ body { background: transparent; color: var(--label); font: 400 14px/20px var(--f
 ::highlight(read-find-current) { background: var(--orange); color: #fff; }
 .reader-body { text-align: var(--reading-align, start); }
 
-/* Motion: quiet, short, and only where something appears. */
-@keyframes reader-enter { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+/* Motion: quiet, short, and only where something appears. A reader (or a preview) switches with a
+   120ms fade; the side panel slides in over 160ms (`panel-slide`, in @read/ui); nothing moves for reduced motion. */
+@keyframes reader-enter { from { opacity: 0; } to { opacity: 1; } }
 @keyframes toolbar-pop { from { opacity: 0; transform: translate(-50%, 4px) scale(.96); } to { opacity: 1; transform: translate(-50%, 0) scale(1); } }
-@keyframes panel-enter { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
-.reader-enter { animation: reader-enter .22s cubic-bezier(.2,.7,.2,1) both; }
+.reader-enter { animation: reader-enter .12s ease-out both; }
 .toolbar-pop { animation: toolbar-pop .14s cubic-bezier(.2,.7,.2,1) both; }
-.panel-enter { animation: panel-enter .16s cubic-bezier(.2,.7,.2,1) both; }
-@media (prefers-reduced-motion: reduce) { .reader-enter, .toolbar-pop, .panel-enter { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .reader-enter, .toolbar-pop { animation: none; } }
 
 /* Scrollbars: the reader's position lives in the contents rail and the progress line, so its
    viewport hides the native bar; lists get a thin overlay thumb with no track or border. */

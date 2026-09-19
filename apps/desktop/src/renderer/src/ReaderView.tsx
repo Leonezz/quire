@@ -1,17 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ChevronLeft, Highlighter, Info, List, Sparkles } from "lucide-react";
-import { AskButton, Kbd, SplitGroup, SplitPanel, SplitSeparator, TocRail, Toolbar, ToolbarButton, ToolbarGroup, ToolbarTitle, useSplitSizes } from "@read/ui";
+import type { ReactNode } from "react";
+import { SplitGroup, SplitPanel, TocRail, useSplitSizes } from "@read/ui";
+import { ColumnSeparator, PAGE_MIN, PANEL_DEFAULT, PANEL_MAX, PANEL_MIN } from "./ContentPane";
+import { ReaderToolbar } from "./ReaderToolbar";
 import { ReaderDocumentSurface, installTextAnnotationHighlights, renderedTextQuoteSelection, resolveTextQuoteRange, textAnnotationHighlightStyles, useDocumentReadingPosition } from "@read/reader";
 import { ANNOTATION_COLORS, citationFor, useAnnotations } from "./annotations";
 import type { NoteDraft } from "./NotesPanel";
-import { ReaderInspector, type ReaderTab } from "./ReaderInspector";
+import { ReaderInspector, type ReaderPanel } from "./ReaderInspector";
 import { hostLabel } from "./ArtifactLineage";
 import { QualityBanner, canRebuild, type RebuildState } from "./RebuildBanner";
 import type { PendingTask } from "./AgentPanel";
 import { SelectionToolbar, type SelectionCapture } from "./SelectionToolbar";
 import type { AgentContext, AgentTask, Annotation } from "../../shared/contracts";
 import { FindBar } from "./FindBar";
-import { ReadingSettings } from "./ReadingSettings";
 import { prefsStyle, useReadingPrefs } from "./readingPrefs";
 import { read } from "./api";
 import { headerParts } from "./materialMeta";
@@ -65,23 +66,22 @@ export interface ReaderProps {
   /** The Info panel saved metadata: the owner replaces its record so the header and body follow. */
   onMaterialSaved: (record: MaterialRecord) => void;
   onOpenSettings?: (() => void) | undefined;
-  /** Rendered inside a pane (no back button, no title-bar drag region); Escape closes the inspector, then calls `onBack`. */
-  embedded?: boolean;
+  /** The shell's Add · Search icons, at the far right of the toolbar segment. Escape closes the panel, then calls `onBack`. */
+  trailing?: ReactNode;
 }
 
-export function ReaderView({ material, onBack, onOpenLink, onOpenMaterial, onProgress, onMaterialSaved, onOpenSettings, embedded = false }: ReaderProps) {
+export function ReaderView({ material, onBack, onOpenLink, onOpenMaterial, onProgress, onMaterialSaved, onOpenSettings, trailing }: ReaderProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const onProgressRef = useRef(onProgress);
   onProgressRef.current = onProgress;
   const bodyRef = useRef<HTMLDivElement>(null);
-  const [inspectorTab, setInspectorTab] = useState<ReaderTab | null>(null);
+  const [panel, setPanel] = useState<ReaderPanel | null>(null);
   const sizes = useSplitSizes("reader");
   const [outline, setOutline] = useState<OutlineEntry[]>([]);
   const [activeHeading, setActiveHeading] = useState<string | undefined>(undefined);
   const [tocPinned, setTocPinned] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [reading, setReading] = useState(false);
-  const [prefs, setPrefs] = useReadingPrefs();
+    const [prefs, setPrefs] = useReadingPrefs();
   const [findOpen, setFindOpen] = useState(false);
   const [bodyGeneration, setBodyGeneration] = useState(0);
   const { annotations, error: annotationsError, add, update, remove } = useAnnotations(material.id);
@@ -90,21 +90,21 @@ export function ReaderView({ material, onBack, onOpenLink, onOpenMaterial, onPro
   // "Ask about this" narrows the agent's context to the selected passage until it is dropped.
   const [asked, setAsked] = useState<SelectionCapture | null>(null);
   const agentContext: AgentContext = asked ? { kind: "selection", materialId: material.id, quote: asked.quote, locator: asked.locator } : { kind: "material", materialId: material.id };
-  // "Rebuild with the agent": the Agent tab opens with the material context and sends the rebuild; the banner follows the turn.
+  // "Rebuild with the agent": the Agent panel opens with the material context and sends the rebuild; the banner follows the turn.
   const [rebuild, setRebuild] = useState<RebuildState>("idle");
   const [pendingTask, setPendingTask] = useState<PendingTask | undefined>(undefined);
   const startRebuild = useCallback(() => {
-    setAsked(null); setRebuild("running"); setPendingTask({ task: "rebuild", text: "" }); setInspectorTab("agent");
-    // Focus mode hides the inspector, and the rebuild is sent from the Agent tab: leave it.
+    setAsked(null); setRebuild("running"); setPendingTask({ task: "rebuild", text: "" }); setPanel("agent");
+    // Focus mode hides the panel, and the rebuild is sent from the Agent panel: leave it.
     if (prefs.focus) setPrefs({ ...prefs, focus: false });
   }, [prefs, setPrefs]);
   const onPendingTaskSent = useCallback((accepted: boolean) => { setPendingTask(undefined); if (!accepted) setRebuild("failed"); }, []);
   const onTaskSettled = useCallback((task: AgentTask, status: "done" | "failed" | "interrupted") => { if (task === "rebuild") setRebuild(status === "done" ? "idle" : "failed"); }, []);
   useEffect(() => { if (material.rebuiltAs) setRebuild("idle"); }, [material.rebuiltAs]);
   const onRebuild = canRebuild(material) ? startRebuild : undefined;
-  // Focus mode closes the inspector; an explicit request for a tab (button, i / n / ⌘J) leaves focus mode again.
-  useEffect(() => { if (prefs.focus) setInspectorTab(null); }, [prefs.focus]);
-  useEffect(() => { if (inspectorTab !== null && prefs.focus) setPrefs({ ...prefs, focus: false }); }, [inspectorTab, prefs, setPrefs]);
+  // Focus mode closes the panel; an explicit request for one (button, i / n / ⌘J) leaves focus mode again.
+  useEffect(() => { if (prefs.focus) setPanel(null); }, [prefs.focus]);
+  useEffect(() => { if (panel !== null && prefs.focus) setPrefs({ ...prefs, focus: false }); }, [panel, prefs, setPrefs]);
   const quality = qualityLabel(material);
   const identity = material.reader ? `${material.id}:${material.reader.schema}` : material.id;
 
@@ -125,7 +125,7 @@ export function ReaderView({ material, onBack, onOpenLink, onOpenMaterial, onPro
     const installed = installTextAnnotationHighlights({
       annotations: annotations.map((annotation) => ({ id: annotation.id, locator: annotation.locator, quote: annotation.quote, kind: annotation.kind, color: annotation.color, ...(annotation.note ? { note: annotation.note } : {}) })),
       namePrefix: "read-note",
-      onActivate: (id) => { setActiveAnnotation(id); setInspectorTab("notes"); },
+      onActivate: (id) => { setActiveAnnotation(id); setPanel("notes"); },
       root,
     });
     return installed.dispose;
@@ -162,7 +162,7 @@ export function ReaderView({ material, onBack, onOpenLink, onOpenMaterial, onPro
   const onHighlight = (capture: SelectionCapture, color: Annotation["color"]) => { void add({ ...capture, kind: "highlight", color }); };
   const onNote = async (capture: SelectionCapture) => {
     const saved = await add({ ...capture, kind: "comment", color: ANNOTATION_COLORS[0]!.color });
-    setInspectorTab("notes");
+    setPanel("notes");
     setActiveAnnotation(saved.id);
     setNoteDraft({ id: saved.id, value: "" });
   };
@@ -185,7 +185,6 @@ export function ReaderView({ material, onBack, onOpenLink, onOpenMaterial, onPro
       const fraction = max > 0 ? Math.min(1, viewport.scrollTop / max) : 1;
       setProgress(Math.round(fraction * 100));
       onProgressRef.current?.(fraction);
-      setReading(viewport.scrollTop > 40);
       setActiveHeading(currentHeading(viewport, bodyRef.current));
       if (idle !== undefined) window.clearTimeout(idle);
     };
@@ -198,16 +197,16 @@ export function ReaderView({ material, onBack, onOpenLink, onOpenMaterial, onPro
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
-      if (event.key === "Escape") { event.preventDefault(); if (inspectorTab) setInspectorTab(null); else onBack?.(); }
+      if (event.key === "Escape") { event.preventDefault(); if (panel) setPanel(null); else onBack?.(); }
       if (event.key === "t") { event.preventDefault(); setTocPinned((pinned) => !pinned); }
-      if (event.key === "n" && !event.metaKey && !event.ctrlKey) { event.preventDefault(); setInspectorTab((tab) => (tab === "notes" ? null : "notes")); }
-      if (event.key === "i" && !event.metaKey && !event.ctrlKey) { event.preventDefault(); setInspectorTab((tab) => (tab === "info" ? null : "info")); }
-      if ((event.metaKey || event.ctrlKey) && event.key === "j") { event.preventDefault(); setInspectorTab((tab) => (tab === "agent" ? null : "agent")); }
+      if (event.key === "n" && !event.metaKey && !event.ctrlKey) { event.preventDefault(); setPanel((open) => (open === "notes" ? null : "notes")); }
+      if (event.key === "i" && !event.metaKey && !event.ctrlKey) { event.preventDefault(); setPanel((open) => (open === "info" ? null : "info")); }
+      if ((event.metaKey || event.ctrlKey) && event.key === "j") { event.preventDefault(); setPanel((open) => (open === "agent" ? null : "agent")); }
       if ((event.metaKey || event.ctrlKey) && event.key === "f") { event.preventDefault(); setFindOpen(true); }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [inspectorTab, onBack]);
+  }, [panel, onBack]);
 
   // A stable resolver: the surface keys its image cache by resolver identity, so a new function per render
   // would re-request every image on each scroll tick (flicker and layout jumps).
@@ -215,30 +214,19 @@ export function ReaderView({ material, onBack, onOpenLink, onOpenMaterial, onPro
   const fallback = useMemo(() => (material.markdown ? { content: material.markdown, format: "gfm" as const } : { content: material.plain ?? "", format: "plain" as const }), [material]);
   const host = hostLabel(material);
   const subtitle = [material.origin === "agent" ? "Agent" : host, `${progress}%`, `${material.readingMinutes} min`].join(" · ");
-  const inspectorOpen = inspectorTab !== null && !prefs.focus;
+  const panelOpen = panel !== null && !prefs.focus;
   const lineageCount = material.origin === "agent" ? (material.lineage?.length ?? 0) : 0;
 
   return (
-    <div className={`grid h-full grid-cols-[minmax(0,1fr)] grid-rows-[56px_minmax(0,1fr)] gap-3 ${embedded ? "p-0" : "p-3"}`}>
-      <Toolbar aria-label="Reader toolbar" className={`${embedded ? "" : "titlebar-drag pl-[92px]"} col-span-full transition-opacity ${reading ? "opacity-70 hover:opacity-100" : ""}`}>
-        {embedded ? <span /> : <ToolbarGroup><ToolbarButton aria-label="Back" isSelected={false} onChange={() => onBack?.()}><ChevronLeft /></ToolbarButton></ToolbarGroup>}
-        <ToolbarTitle title={material.title} subtitle={subtitle} />
-        <ToolbarGroup>
-          <span className={`mr-1.5 inline-flex h-[22px] items-center gap-1 rounded-pill px-2.5 text-[11.5px] font-medium ${quality.low ? "bg-orange-soft text-orange-text" : "bg-fill text-label-2"}`}>{quality.text}</span>
-          <ToolbarButton aria-label="Contents (t)" isSelected={tocPinned} onChange={setTocPinned}><List /></ToolbarButton>
-          <ToolbarButton aria-label="Info (i)" isSelected={inspectorTab === "info"} onChange={(on) => setInspectorTab(on ? "info" : null)}><Info /></ToolbarButton>
-          <ToolbarButton aria-label="Notes (n)" isSelected={inspectorTab === "notes"} onChange={(on) => setInspectorTab(on ? "notes" : null)}><Highlighter /></ToolbarButton>
-          <ReadingSettings prefs={prefs} onChange={setPrefs} />
-          <AskButton aria-label="Ask" isSelected={inspectorTab === "agent"} onChange={(on) => setInspectorTab(on ? "agent" : null)}><Sparkles />Ask<Kbd>⌘J</Kbd></AskButton>
-        </ToolbarGroup>
-      </Toolbar>
+    <div className="grid h-full grid-cols-[minmax(0,1fr)] grid-rows-[52px_minmax(0,1fr)]">
+      <ReaderToolbar title={material.title} subtitle={subtitle} badge={quality} tocPinned={tocPinned} onTocChange={setTocPinned} panel={panel} onPanelChange={setPanel} prefs={prefs} onPrefsChange={setPrefs} trailing={trailing} />
 
-      <SplitGroup id="reader" aria-label="Reader and inspector" className="h-full">
-      <SplitPanel id="page" minSize={360}>
-      <main key={material.id} className="reader-enter relative grid h-full min-h-0 grid-rows-[2px_minmax(0,1fr)] overflow-hidden rounded-panel bg-content shadow-[0_0_0_1px_var(--separator-soft),0_6px_20px_rgba(15,17,21,.04)]">
+      <SplitGroup id="reader" aria-label="Reader and panel" className="h-full">
+      <SplitPanel id="page" minSize={PAGE_MIN}>
+      <main key={material.id} className="reader-enter relative grid h-full min-h-0 grid-rows-[2px_minmax(0,1fr)] overflow-hidden bg-content">
         <div className="bg-separator-soft">{prefs.focus ? null : <i className="block h-full bg-accent opacity-80" style={{ width: `${progress}%` }} />}</div>
         {findOpen ? <FindBar root={bodyRef.current} generation={bodyGeneration} onClose={() => setFindOpen(false)} /> : null}
-        <SelectionToolbar root={bodyRef.current} viewport={viewportRef.current} capture={captureSelection} onHighlight={onHighlight} onNote={(capture) => void onNote(capture)} onCopy={onCopyCapture} onAsk={(capture) => { setAsked(capture); setInspectorTab("agent"); }} />
+        <SelectionToolbar root={bodyRef.current} viewport={viewportRef.current} capture={captureSelection} onHighlight={onHighlight} onNote={(capture) => void onNote(capture)} onCopy={onCopyCapture} onAsk={(capture) => { setAsked(capture); setPanel("agent"); }} />
         {outline.length > 1 ? (
           <div className="pointer-events-none absolute inset-y-6 right-5 z-10 flex items-center">
             <TocRail aria-label="Contents" entries={outline.map((entry) => ({ id: entry.id, label: entry.label, level: entry.level - 1 }))} activeId={activeHeading} pinned={tocPinned} onSelect={(id) => document.getElementById(id)?.scrollIntoView({ block: "start", behavior: "smooth" })} />
@@ -246,7 +234,7 @@ export function ReaderView({ material, onBack, onOpenLink, onOpenMaterial, onPro
         ) : null}
         <div ref={viewportRef} className="reader-viewport overflow-auto px-14 pb-[120px] pt-12" style={prefsStyle(prefs)}>
           <article ref={bodyRef} className="reader-body" style={{ textAlign: prefs.justify ? "justify" : "start" }}>
-            {lineageCount ? <button type="button" className="mb-3 block cursor-default border-0 bg-transparent p-0 text-[13px] font-medium text-accent-text hover:underline" onClick={() => setInspectorTab("info")}>{host} · sources in Info</button> : <p className="mb-3 text-[13px] font-medium text-accent-text">{host}</p>}
+            {lineageCount ? <button type="button" className="mb-3 block cursor-default border-0 bg-transparent p-0 text-[13px] font-medium text-accent-text hover:underline" onClick={() => setPanel("info")}>{host} · sources in Info</button> : <p className="mb-3 text-[13px] font-medium text-accent-text">{host}</p>}
             <h1>{material.title}</h1>
             <div className="mb-8 flex flex-wrap gap-x-3 text-[12.5px] text-label-2">
               {headerParts(material.meta).map((part) => <span key={part}>{part}</span>)}
@@ -267,11 +255,11 @@ export function ReaderView({ material, onBack, onOpenLink, onOpenMaterial, onPro
         </div>
       </main>
       </SplitPanel>
-      {inspectorOpen ? (
+      {panelOpen ? (
         <>
-          <SplitSeparator aria-label="Resize inspector" hit={12} footprint={12} line="hover" />
-          <SplitPanel id="inspector" defaultSize={sizes.sizeOf("inspector", 360)} minSize={300} maxSize={520} onResize={sizes.onResize("inspector")}>
-            <ReaderInspector material={material} tab={inspectorTab} onTabChange={setInspectorTab} subject={material.title} agentContext={agentContext} onClearSelection={() => setAsked(null)}
+          <ColumnSeparator label="Resize panel" />
+          <SplitPanel id="inspector" defaultSize={sizes.sizeOf("inspector", PANEL_DEFAULT)} minSize={PANEL_MIN} maxSize={PANEL_MAX} onResize={sizes.onResize("inspector")}>
+            <ReaderInspector material={material} panel={panel} onClose={() => setPanel(null)} subject={material.title} agentContext={agentContext} onClearSelection={() => setAsked(null)}
               pendingTask={pendingTask} onPendingTaskSent={onPendingTaskSent} onTaskSettled={onTaskSettled} onRebuild={onRebuild} rebuild={rebuild}
               annotations={annotations} annotationsError={annotationsError} activeAnnotation={activeAnnotation} noteDraft={noteDraft} onNoteDraftChange={setNoteDraft}
               onJump={jumpTo} onUpdateNote={(id, note) => void update(id, { note })} onDeleteAnnotation={(id) => void remove(id)}

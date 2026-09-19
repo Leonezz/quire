@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import type { MaterialRecord } from "../../shared/contracts";
 import { read } from "./api";
 import { PdfReaderView } from "./PdfReaderView";
@@ -12,7 +12,7 @@ const finished = new Set<string>();
  * Loads a material by id and renders the matching reader inside a pane; records "finished" when reading passes 95%.
  * A metadata save from the Info panel replaces the record here, so the header, body and inspector show the new values at once.
  */
-export function MaterialReader({ id, onOpenLink, onOpenMaterial, onBack, onOpenSettings }: { id: string; onOpenLink: (url: string) => void; onOpenMaterial: (id: string) => void; onBack?: (() => void) | undefined; onOpenSettings?: (() => void) | undefined }) {
+export function MaterialReader({ id, onOpenLink, onOpenMaterial, onBack, onOpenSettings, trailing }: { id: string; onOpenLink: (url: string) => void; onOpenMaterial: (id: string) => void; onBack?: (() => void) | undefined; onOpenSettings?: (() => void) | undefined; /** The shell's Add · Search icons for the toolbar segment. */ trailing?: ReactNode }) {
   const [material, setMaterial] = useState<MaterialRecord | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
   const [eventError, setEventError] = useState<string | undefined>(undefined);
@@ -41,7 +41,7 @@ export function MaterialReader({ id, onOpenLink, onOpenMaterial, onBack, onOpenS
   if (!material) return <div className="grid flex-1 place-items-center text-[13px] text-label-3">Opening…</div>;
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
-      {material.pdf ? <PdfReaderView material={material} onBack={onBack} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onProgress={onProgress} onMaterialSaved={setMaterial} onOpenSettings={onOpenSettings} embedded /> : <ReaderView material={material} onBack={onBack} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onProgress={onProgress} onMaterialSaved={setMaterial} onOpenSettings={onOpenSettings} embedded />}
+      {material.pdf ? <PdfReaderView material={material} onBack={onBack} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onProgress={onProgress} onMaterialSaved={setMaterial} onOpenSettings={onOpenSettings} trailing={trailing} /> : <ReaderView material={material} onBack={onBack} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onProgress={onProgress} onMaterialSaved={setMaterial} onOpenSettings={onOpenSettings} trailing={trailing} />}
       {eventError ? <div role="alert" className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-pill bg-red-soft px-3.5 py-1.5 text-[12.5px] text-red-text shadow-float">{eventError}</div> : null}
     </div>
   );

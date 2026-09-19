@@ -1,10 +1,13 @@
 import { useMemo } from "react";
 import { Bookmark } from "lucide-react";
-import { ItemGroup, ItemList, ItemRow, SplitGroup, SplitPanel, SplitSeparator, useDragAndDrop, useSplitSizes, type Key } from "@read/ui";
+import { ItemGroup, ItemList, ItemRow, useDragAndDrop, type Key } from "@read/ui";
 import type { ItemRecord } from "../../shared/contracts";
+import { ContentToolbar } from "./AppToolbar";
+import { ContentColumn, ContentPane, EmptySentence, ListColumn } from "./ContentPane";
 import { ErrorBoundary } from "./ErrorBoundary";
+import type { ItemViewProps } from "./InboxView";
 import { MaterialReader } from "./MaterialReader";
-import { EmptyState, InlineError, ItemPreview, KeptNoticeLine, panelClass } from "./ItemPreview";
+import { InlineError, ItemPreview, KeptNoticeLine } from "./ItemPreview";
 import { signalsOf, timeOf } from "./format";
 import { useItemReader } from "./useItemReader";
 import { useQueueOrder, type Reorder } from "./useQueueOrder";
@@ -35,50 +38,52 @@ function QueueGroup({ title, items, selectedId, onSelect, onAction, onReorder }:
   );
 }
 
-export function QueueView({ items, selectedId, onSelect, refresh, onOpenLink, onOpenMaterial }: { items: ItemRecord[]; selectedId: string | undefined; onSelect: (id: string | undefined) => void; refresh: () => Promise<void>; onOpenLink: (url: string) => void; onOpenMaterial: (id: string) => void }) {
+/** The Queue: Continue and Up next on the left (drag to reorder), the preview or the reader on the right. */
+export function QueueView({ items, selectedId, onSelect, refresh, onOpenLink, onOpenMaterial, shell, error }: ItemViewProps) {
   const { continuing, upNext, reorderContinuing, reorderUpNext, error: reorderError } = useQueueOrder(items, refresh);
   const orderedIds = useMemo(() => [...continuing, ...upNext].map((item) => item.id), [continuing, upNext]);
   const { reading, failure, decisionError, busy, kept, listRef, select, readNow, keep, decide, closeReader } = useItemReader({ orderedIds, selectedId, onSelect, refresh, leavesOnRead: false, leavesOnKeep: false, shortcuts });
   const current = items.find((item) => item.id === selectedId);
-  const sizes = useSplitSizes("queue");
   const keptLine = kept ? <KeptNoticeLine title={kept.title} onOpen={() => onOpenMaterial(kept.materialId)} /> : undefined;
   const onAction = (id: string) => void readNow(id);
 
   return (
-    <SplitGroup id="queue" aria-label="Queue" className={`min-h-0 flex-1 overflow-hidden ${panelClass}`}>
-      <SplitPanel id="list" defaultSize={sizes.sizeOf("list", 420)} minSize={280} maxSize={560} onResize={sizes.onResize("list")}>
-      <div ref={listRef} className="list-scroll flex h-full min-h-0 flex-col overflow-y-auto py-2.5">
-        {reorderError ? <div className="px-3 pb-2"><InlineError title="The order was not saved." message={reorderError} /></div> : null}
-        {items.length ? (
-          <>
-            {continuing.length ? <QueueGroup title="Continue" items={continuing} selectedId={selectedId} onSelect={select} onAction={onAction} onReorder={reorderContinuing} /> : null}
-            {upNext.length ? <QueueGroup title="Up next" items={upNext} selectedId={selectedId} onSelect={select} onAction={onAction} onReorder={reorderUpNext} /> : null}
-          </>
-        ) : (
-          <EmptyState title="Nothing queued." hint="Press q on an Inbox item to save it for later." />
-        )}
-      </div>
-      </SplitPanel>
-      <SplitSeparator aria-label="Resize list" />
-      <SplitPanel id="detail" minSize={360}>
-      <section className="flex h-full min-h-0 flex-col overflow-hidden">
+    <>
+      <ListColumn family="items" toolbar={shell.listToolbar} listRef={listRef}>
+        <div className="list-scroll flex min-h-0 flex-1 flex-col overflow-y-auto py-2.5">
+          {error ? <div className="px-3 pb-2"><InlineError title="The lists could not be loaded." message={error} /></div> : null}
+          {reorderError ? <div className="px-3 pb-2"><InlineError title="The order was not saved." message={reorderError} /></div> : null}
+          {items.length ? (
+            <>
+              {continuing.length ? <QueueGroup title="Continue" items={continuing} selectedId={selectedId} onSelect={select} onAction={onAction} onReorder={reorderContinuing} /> : null}
+              {upNext.length ? <QueueGroup title="Up next" items={upNext} selectedId={selectedId} onSelect={select} onAction={onAction} onReorder={reorderUpNext} /> : null}
+            </>
+          ) : (
+            <EmptySentence>Nothing queued — press q on an Inbox item to save it for later.</EmptySentence>
+          )}
+        </div>
+      </ListColumn>
+      <ContentColumn>
         {reading ? (
-          <ErrorBoundary key={reading.materialId} label="The reader" onReset={closeReader}><MaterialReader id={reading.materialId} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onBack={closeReader} /></ErrorBoundary>
-        ) : current ? (
-          <ItemPreview item={current} busy={busy !== undefined} failure={failure?.itemId === current.id ? failure : undefined} error={decisionError?.itemId === current.id ? decisionError.message : undefined} kept={keptLine} onOpenLink={onOpenLink}
-            actions={[
-              { label: busy === "read" ? "Opening…" : current.openedAt ? "Continue" : "Read now", kbd: "↵", onPress: () => void readNow(current.id) },
-              { label: busy === "keep" ? "Keeping…" : current.keptAt ? "Kept" : "Keep", kbd: "k", icon: <Bookmark className="size-3.5" />, onPress: () => void keep(current.id) },
-              { label: "Remove", kbd: "e", variant: "quiet", onPress: () => void decide(current.id, "unqueue") },
-            ]} />
+          <ErrorBoundary key={reading.materialId} label="The reader" onReset={closeReader}><MaterialReader id={reading.materialId} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onBack={closeReader} trailing={shell.trailing} /></ErrorBoundary>
         ) : (
-          <>
-            {keptLine}
-            <EmptyState title="Nothing selected" hint={items.length ? "Select something queued." : "Queued items wait on the left."} />
-          </>
+          <ContentPane toolbar={<ContentToolbar trailing={shell.trailing} />} panel={shell.agentPanel}>
+            {current ? (
+              <ItemPreview item={current} busy={busy !== undefined} failure={failure?.itemId === current.id ? failure : undefined} error={decisionError?.itemId === current.id ? decisionError.message : undefined} kept={keptLine} onOpenLink={onOpenLink}
+                actions={[
+                  { label: busy === "read" ? "Opening…" : current.openedAt ? "Continue" : "Read now", kbd: "↵", onPress: () => void readNow(current.id) },
+                  { label: busy === "keep" ? "Keeping…" : current.keptAt ? "Kept" : "Keep", kbd: "k", icon: <Bookmark className="size-3.5" />, onPress: () => void keep(current.id) },
+                  { label: "Remove", kbd: "e", variant: "quiet", onPress: () => void decide(current.id, "unqueue") },
+                ]} />
+            ) : (
+              <>
+                {keptLine}
+                <EmptySentence>Select something to read.</EmptySentence>
+              </>
+            )}
+          </ContentPane>
         )}
-      </section>
-      </SplitPanel>
-    </SplitGroup>
+      </ContentColumn>
+    </>
   );
 }

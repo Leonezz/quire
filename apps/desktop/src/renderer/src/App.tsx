@@ -1,26 +1,29 @@
-import { useCallback, useEffect, useState } from "react";
-import { BookOpen, Inbox as InboxIcon, ListOrdered, PanelLeft, Plus, Radio, Search as SearchIcon, Settings as SettingsIcon, Sparkles } from "lucide-react";
-import { AskButton, Kbd, Segment, Segmented, Sidebar, SidebarItem, SidebarSection, SplitGroup, SplitPanel, SplitSeparator, Toolbar, ToolbarButton, ToolbarGroup, ToolbarTitle, useSplitPanelRef, useSplitSizes, type Selection } from "@read/ui";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Panel, SplitGroup, SplitPanel, SplitSeparator, useSplitPanelRef, useSplitSizes, type Selection } from "@read/ui";
+import type { AgentContext } from "../../shared/contracts";
 import { AddSheet } from "./AddSheet";
-import { InboxView, type InboxGrouping } from "./InboxView";
-import { QueueView } from "./QueueView";
-import { SourcesView } from "./SourcesView";
-import { LibraryView } from "./LibraryView";
-import { SearchPalette } from "./SearchPalette";
-import { SettingsSheet, type SettingsSection } from "./SettingsSheet";
 import { AgentPanel } from "./AgentPanel";
 import { AgentView } from "./AgentView";
-import { InlineError } from "./ItemPreview";
-import { selectedIds } from "./LibraryView";
-import { useLists } from "./useLists";
-import { useLibrary } from "./useLibrary";
-import { useAgentSessions } from "./useAgentSessions";
-import { loadPrefs, applyTheme } from "./readingPrefs";
+import { AppSidebar } from "./AppSidebar";
+import { ListToolbar, ShellActions } from "./AppToolbar";
+import type { ShellSlots } from "./ContentPane";
+import { InboxView } from "./InboxView";
+import { LibraryView } from "./LibraryView";
+import { QueueView } from "./QueueView";
+import { SearchPalette } from "./SearchPalette";
+import { SettingsSheet, type SettingsSection } from "./SettingsSheet";
+import { SourcesView } from "./SourcesView";
 import { read } from "./api";
+import { isTypingTarget } from "./format";
+import { applyTheme, loadPrefs } from "./readingPrefs";
+import { useAgentSessions } from "./useAgentSessions";
+import { useLibrary, type LibraryFocus } from "./useLibrary";
+import { useLists } from "./useLists";
+import { CUT_LABELS, scopeFamily, useScope, type Scope } from "./useScope";
 
-type View = "inbox" | "queue" | "library" | "sources" | "agent";
-const titles: Record<View, string> = { inbox: "Inbox", queue: "Queue", library: "Library", sources: "Sources", agent: "Agent" };
 const SIDEBAR_KEY = "read:layout:sidebar-collapsed";
+const SIDEBAR_DEFAULT = 220;
+const LIBRARY_CONTEXT: AgentContext = { kind: "library" };
 
 function loadSidebarCollapsed(): boolean {
   try { return localStorage.getItem(SIDEBAR_KEY) === "1"; } catch { return false; }
@@ -28,14 +31,20 @@ function loadSidebarCollapsed(): boolean {
 function saveSidebarCollapsed(collapsed: boolean) {
   try { localStorage.setItem(SIDEBAR_KEY, collapsed ? "1" : "0"); } catch { /* storage may be unavailable; the sidebar simply starts open next time */ }
 }
+/** The part of the scope the Library answers to. */
+function focusOf(scope: Scope): LibraryFocus {
+  if (scope.kind === "library") return { cut: scope.id, tag: undefined };
+  if (scope.kind === "tag") return { cut: "all", tag: scope.id };
+  return { cut: "all", tag: undefined };
+}
 
 export function App() {
-  const [view, setView] = useState<View>("inbox");
+  const [scope, setScope] = useScope();
   const [askOpen, setAskOpen] = useState(false);
   const lists = useLists();
-  const library = useLibrary();
+  const focus = useMemo(() => focusOf(scope), [scope]);
+  const library = useLibrary(focus);
   const agentSessions = useAgentSessions();
-  const [grouping, setGrouping] = useState<InboxGrouping>("date");
   const [inboxSelected, setInboxSelected] = useState<string | undefined>(undefined);
   const [queueSelected, setQueueSelected] = useState<string | undefined>(undefined);
   const [sourceSelected, setSourceSelected] = useState<string | undefined>(undefined);
@@ -56,41 +65,46 @@ export function App() {
     const panel = sidebarRef.current;
     if (!panel) return;
     // A panel collapsed since mount has no "most recent size" to expand to, so the remembered width is set outright.
-    if (panel.isCollapsed()) panel.resize(shellSizes.sizeOf("sidebar", 236)); else panel.collapse();
+    if (panel.isCollapsed()) panel.resize(shellSizes.sizeOf("sidebar", SIDEBAR_DEFAULT)); else panel.collapse();
   }, [sidebarRef, shellSizes]);
   const openSettings = useCallback((section?: SettingsSection) => setSettings({ open: true, section }), []);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
+      // Esc closes the shell's Agent panel; a reader (listening on `document`, which fires first) closes its own panel instead.
+      if (event.key === "Escape" && !event.defaultPrevented && askOpen && !isTypingTarget(event.target)) { setAskOpen(false); return; }
       if (!(event.metaKey || event.ctrlKey)) return;
       if (event.key === "n") { event.preventDefault(); setAddOpen(true); }
       if (event.key === "k") { event.preventDefault(); setSearchOpen(true); }
       if (event.key === ",") { event.preventDefault(); openSettings(); }
       if (event.key === "\\") { event.preventDefault(); toggleSidebar(); }
-      if (event.key.toLowerCase() === "j" && event.shiftKey) { event.preventDefault(); setView("agent"); }
+      if (event.key.toLowerCase() === "j" && event.shiftKey) { event.preventDefault(); setScope({ kind: "agent" }); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [openSettings, toggleSidebar]);
+  }, [askOpen, openSettings, setScope, toggleSidebar]);
   // ⌘J toggles the shell's Agent panel (the Library context); an open reader (listening on `document`, which fires
-  // first) takes it for its material instead. In the Agent view the conversation is the whole pane: ⌘J focuses its composer.
+  // first) takes it for its material instead. In the Agent scope the conversation is the whole pane: ⌘J focuses its composer.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.key !== "j" || event.shiftKey || event.defaultPrevented) return;
       event.preventDefault();
-      if (view === "agent") { document.querySelector<HTMLTextAreaElement>('section[aria-label="Conversation"] textarea')?.focus(); return; }
+      if (scope.kind === "agent") { document.querySelector<HTMLTextAreaElement>('section[aria-label="Conversation"] textarea')?.focus(); return; }
       setAskOpen((open) => !open);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [view]);
-  // The first row is selected once a list arrives, so Enter / k / q / e have something to act on.
-  useEffect(() => { if (inboxSelected === undefined && lists.inbox[0]) setInboxSelected(lists.inbox[0].id); }, [lists.inbox, inboxSelected]);
+  }, [scope.kind]);
+
+  // A source scope is that source's Inbox.
+  const inboxItems = useMemo(() => (scope.kind === "source" ? lists.inbox.filter((item) => item.sourceId === scope.id) : lists.inbox), [lists.inbox, scope]);
+  // The first row is selected once a list arrives (or the selection left the visible list), so Enter / k / q / e have something to act on.
+  useEffect(() => { if (inboxSelected === undefined || !inboxItems.some((item) => item.id === inboxSelected)) setInboxSelected(inboxItems[0]?.id); }, [inboxItems, inboxSelected]);
   useEffect(() => { if (queueSelected === undefined && lists.queue[0]) setQueueSelected(lists.queue[0].id); }, [lists.queue, queueSelected]);
   useEffect(() => { if (sourceSelected === undefined && lists.sources[0]) setSourceSelected(lists.sources[0].id); }, [lists.sources, sourceSelected]);
 
-  // Opening a material from elsewhere (search, a citation, "Open in Library") must show it, whatever the Library was filtered to.
-  const showMaterial = (id: string) => { library.clearFilter(); setView("library"); setLibrarySelected(new Set([id])); };
+  // Opening a material from elsewhere (search, a citation, "Open in Library") must show it, whatever the Library was narrowed to.
+  const showMaterial = useCallback((id: string) => { library.setQuery(""); setScope({ kind: "library", id: "all" }); setLibrarySelected(new Set([id])); }, [library, setScope]);
   const submitUrl = async (url: string) => {
     setAddBusy(true); setAddError(undefined);
     const result = await read.openUrl(url);
@@ -113,16 +127,16 @@ export function App() {
   const subscribed = async ({ source, added }: { source: { id: string }; added: number }) => {
     setAddOpen(false);
     await lists.refresh();
-    if (added > 0) { setView("inbox"); return; }
-    setSourceSelected(source.id); setView("sources");
+    if (added > 0) { setScope({ kind: "source", id: source.id }); return; }
+    setSourceSelected(source.id); setScope({ kind: "sources" });
   };
   const openItemHit = async (id: string) => {
     setRouteError(undefined);
     try {
       const item = await read.getItem(id);
       if (!item) { setRouteError("That item is no longer in the inbox."); return; }
-      if (item.queuedAt) { setQueueSelected(id); setView("queue"); return; }
-      setInboxSelected(id); setView("inbox");
+      if (item.queuedAt) { setQueueSelected(id); setScope({ kind: "queue" }); return; }
+      setInboxSelected(id); setScope({ kind: "inbox" });
     } catch (cause: unknown) { setRouteError(cause instanceof Error ? cause.message : "Could not open that item."); }
   };
   useEffect(() => {
@@ -138,46 +152,51 @@ export function App() {
   });
   const openLink = (url: string) => { window.open(url, "_blank", "noopener"); };
 
-  // The orange dot on Sources: a source is failing right now; it clears with the next successful sync.
-  const attention = lists.sources.some((source) => source.failureCount > 0);
-  const sourcesLabel = `${lists.sources.length} ${lists.sources.length === 1 ? "source" : "sources"}`;
-  const conversationsLabel = `${agentSessions.sessions.length} ${agentSessions.sessions.length === 1 ? "conversation" : "conversations"}`;
-  const subtitle = view === "inbox" ? `${lists.inbox.length} unread · ${sourcesLabel}` : view === "queue" ? `${lists.queue.length} queued` : view === "sources" ? sourcesLabel : view === "agent" ? conversationsLabel : `${library.materials.length} ${library.materials.length === 1 ? "material" : "materials"}`;
+  const libraryScope = scope.kind === "library" || scope.kind === "tag";
+  const source = scope.kind === "source" ? lists.sources.find((entry) => entry.id === scope.id) : undefined;
+  const heading = (() => {
+    switch (scope.kind) {
+      case "inbox": return { title: "Inbox", count: inboxItems.length };
+      case "queue": return { title: "Queue", count: lists.queue.length };
+      case "agent": return { title: "Agent", count: agentSessions.sessions.length };
+      case "sources": return { title: "Sources", count: lists.sources.length };
+      case "source": return { title: source?.title ?? "Source", count: inboxItems.length };
+      case "library": return { title: CUT_LABELS[scope.id], count: library.materials.length };
+      case "tag": return { title: scope.id, count: library.materials.length };
+    }
+  })();
   const shellError = lists.error ?? routeError;
-  // The shell's Ask (Library context) stands wherever no reader with its own panel is open: every view but the Agent view, and the Library with nothing (or several things) selected.
-  const readerOpen = view === "library" && selectedIds(librarySelected, library.materials).length === 1;
-  const shellAsk = view !== "agent" && !readerOpen;
-  const inspectorOpen = askOpen && shellAsk;
-
-  const toolbar = (
-    <Toolbar aria-label="Toolbar" className="titlebar-drag">
-      <ToolbarGroup><ToolbarButton aria-label={sidebarCollapsed ? "Show sidebar (⌘\\)" : "Hide sidebar (⌘\\)"} isSelected={false} onChange={toggleSidebar}><PanelLeft /></ToolbarButton></ToolbarGroup>
-      <ToolbarTitle title={titles[view]} subtitle={subtitle} />
-      <ToolbarGroup>
-        {view === "inbox" ? <Segmented aria-label="Group by" selectedKeys={[grouping]} onSelectionChange={(keys) => { const key = [...keys][0]; if (key) setGrouping(key as InboxGrouping); }}><Segment id="date">Date</Segment><Segment id="source">Source</Segment></Segmented> : null}
-        <ToolbarButton aria-label="Add (⌘N)" isSelected={addOpen} onChange={(on) => setAddOpen(on)}><Plus /></ToolbarButton>
-        <ToolbarButton aria-label="Search (⌘K)" isSelected={searchOpen} onChange={(on) => setSearchOpen(on)}><SearchIcon /></ToolbarButton>
-        {shellAsk ? <AskButton aria-label="Ask" isSelected={askOpen} onChange={setAskOpen}><Sparkles />Ask<Kbd>⌘J</Kbd></AskButton> : null}
-        <ToolbarButton aria-label="Settings (⌘,)" isSelected={settings.open} onChange={(on) => { if (on) openSettings(); else setSettings({ open: false }); }}><SettingsIcon /></ToolbarButton>
-      </ToolbarGroup>
-    </Toolbar>
-  );
-  const inspector = inspectorOpen ? (
-    <>
-      <SplitSeparator aria-label="Resize Agent panel" hit={12} footprint={12} line="hover" />
-      <SplitPanel id="inspector" defaultSize={shellSizes.sizeOf("inspector", 360)} minSize={300} maxSize={520} onResize={shellSizes.onResize("inspector")}>
-        {/* The shell inspector is the Agent alone: one panel, so no tab strip. */}
-        <aside aria-label="Agent" className="glass flex h-full min-h-0 flex-col overflow-auto rounded-panel px-4 pb-4 pt-4">
-          <AgentPanel context={{ kind: "library" }} onOpenMaterial={showMaterial} onOpenLink={openLink} onOpenSettings={() => openSettings("agent")} />
-        </aside>
-      </SplitPanel>
-    </>
-  ) : null;
+  const shell: ShellSlots = {
+    listToolbar: <ListToolbar title={heading.title} count={heading.count} inset={sidebarCollapsed} onShowSidebar={toggleSidebar}
+      search={libraryScope ? { value: library.query, onChange: library.setQuery } : undefined} sort={libraryScope ? { value: library.sort, onChange: library.setSort } : undefined} />,
+    trailing: <ShellActions addOpen={addOpen} onAdd={setAddOpen} searchOpen={searchOpen} onSearch={setSearchOpen} />,
+    // The shell's Agent (the Library context) stands wherever no reader with its own panel is open; the Agent scope is the conversation itself.
+    agentPanel: askOpen ? (
+      <Panel title="Agent" onClose={() => setAskOpen(false)} className="h-full">
+        <AgentPanel context={LIBRARY_CONTEXT} onOpenMaterial={showMaterial} onOpenLink={openLink} onOpenSettings={() => openSettings("agent")} />
+      </Panel>
+    ) : undefined,
+  };
+  const view = (() => {
+    switch (scope.kind) {
+      case "inbox": case "source":
+        return <InboxView items={inboxItems} selectedId={inboxSelected} onSelect={setInboxSelected} refresh={lists.refresh} onOpenLink={openLink} onOpenMaterial={showMaterial} shell={shell} error={shellError}
+          empty={scope.kind === "source" ? "Nothing undecided from this source." : "Inbox zero — sources bring new items here; ⌘N adds one."} />;
+      case "queue":
+        return <QueueView items={lists.queue} selectedId={queueSelected} onSelect={setQueueSelected} refresh={lists.refresh} onOpenLink={openLink} onOpenMaterial={showMaterial} shell={shell} error={shellError} />;
+      case "library": case "tag":
+        return <LibraryView library={library} selected={librarySelected} onSelectionChange={setLibrarySelected} onOpenLink={openLink} onOpenMaterial={showMaterial} onOpenSettings={() => openSettings("agent")} shell={shell} narrowed={scope.kind === "tag" || scope.id !== "all"} />;
+      case "agent":
+        return <AgentView sessions={agentSessions} onOpenMaterial={showMaterial} onOpenLink={openLink} onOpenSettings={() => openSettings("agent")} shell={shell} />;
+      case "sources":
+        return <SourcesView sources={lists.sources} selectedId={sourceSelected} onSelect={setSourceSelected} refresh={lists.refresh} onOpenLink={openLink} onAdd={() => setAddOpen(true)} shell={shell} />;
+    }
+  })();
 
   return (
-    <SplitGroup id="shell" aria-label="Window" className="h-full p-3">
+    <SplitGroup id="shell" aria-label="Window" className="h-full">
       {/* A collapsible panel mounted below its minimum starts collapsed: that is how the hidden sidebar comes back hidden. */}
-      <SplitPanel id="sidebar" panelRef={sidebarRef} defaultSize={sidebarCollapsed ? 0 : shellSizes.sizeOf("sidebar", 236)} minSize={180} maxSize={320} collapsible collapsedSize={0}
+      <SplitPanel id="sidebar" panelRef={sidebarRef} defaultSize={sidebarCollapsed ? 0 : shellSizes.sizeOf("sidebar", SIDEBAR_DEFAULT)} minSize={180} maxSize={320} collapsible collapsedSize={0} className="overflow-hidden"
         onResize={(size, id, previous) => {
           shellSizes.onResize("sidebar")(size, id, previous);
           // The mount report is a measurement in progress; the collapsed state follows real changes only.
@@ -185,47 +204,15 @@ export function App() {
           const collapsed = size.inPixels === 0;
           setSidebarCollapsed(collapsed); saveSidebarCollapsed(collapsed);
         }}>
-        <Sidebar aria-label="Sidebar" className="h-full titlebar-drag" selectedKeys={new Set([view])} onSelectionChange={(keys) => { const key = [...keys][0]; if (key) setView(key as View); }}>
-          <SidebarSection title="Read">
-            <SidebarItem id="inbox" icon={<InboxIcon />} label="Inbox" count={lists.inbox.length} />
-            <SidebarItem id="queue" icon={<ListOrdered />} label="Queue" count={lists.queue.length} />
-            <SidebarItem id="library" icon={<BookOpen />} label="Library" />
-            <SidebarItem id="sources" icon={<Radio />} label="Sources" attention={attention} />
-            <SidebarItem id="agent" icon={<Sparkles />} label="Agent" count={agentSessions.sessions.length} />
-          </SidebarSection>
-        </Sidebar>
+        <AppSidebar scope={scope} onScope={setScope} inbox={lists.inbox} queueCount={lists.queue.length} conversationCount={agentSessions.sessions.length} tags={library.tags} sources={lists.sources} onHide={toggleSidebar} onOpenSettings={() => openSettings()} />
       </SplitPanel>
-      {/* With the sidebar hidden, a drag gutter keeps the toolbar clear of the traffic lights. */}
-      {sidebarCollapsed ? <div aria-hidden="true" className="titlebar-drag w-[68px] shrink-0" /> : null}
-      <SplitSeparator aria-label="Resize sidebar" hit={12} footprint={12} line="hover" className={sidebarCollapsed ? "invisible w-0" : ""} />
+      {/* With the sidebar hidden the separator takes no room, so the list segment starts at the window's edge. */}
+      <SplitSeparator aria-label="Resize sidebar" hit={sidebarCollapsed ? 0 : 10} footprint={sidebarCollapsed ? 0 : 1} line="always" className={sidebarCollapsed ? "invisible" : ""} />
       <SplitPanel id="main" minSize={640}>
-        {view === "library" ? (
-          <SplitGroup id="content" aria-label="Content" className="h-full min-h-0">
-            <SplitPanel id="view" minSize={480}>
-              <LibraryView library={library} toolbar={toolbar} selected={librarySelected} onSelectionChange={setLibrarySelected} onOpenLink={openLink} onOpenMaterial={showMaterial} onOpenSettings={() => openSettings("agent")} />
-            </SplitPanel>
-            {inspector}
-          </SplitGroup>
-        ) : (
-        <div className="grid h-full grid-rows-[56px_minmax(0,1fr)] gap-3">
-          {toolbar}
-          <SplitGroup id="content" aria-label="Content" className="min-h-0">
-            <SplitPanel id="view" minSize={480}>
-              {view === "agent" ? (
-                <AgentView sessions={agentSessions} onOpenMaterial={showMaterial} onOpenLink={openLink} onOpenSettings={() => openSettings("agent")} />
-              ) : (
-                <div className="flex h-full min-h-0 flex-col gap-3">
-                  {shellError ? <InlineError title="The lists could not be loaded." message={shellError} /> : null}
-                  {view === "inbox" ? <InboxView items={lists.inbox} grouping={grouping} selectedId={inboxSelected} onSelect={setInboxSelected} refresh={lists.refresh} onOpenLink={openLink} onOpenMaterial={showMaterial} /> : null}
-                  {view === "queue" ? <QueueView items={lists.queue} selectedId={queueSelected} onSelect={setQueueSelected} refresh={lists.refresh} onOpenLink={openLink} onOpenMaterial={showMaterial} /> : null}
-                  {view === "sources" ? <SourcesView sources={lists.sources} selectedId={sourceSelected} onSelect={setSourceSelected} refresh={lists.refresh} onOpenLink={openLink} /> : null}
-                </div>
-              )}
-            </SplitPanel>
-            {inspector}
-          </SplitGroup>
-        </div>
-        )}
+        {/* Keyed by family: each family keeps its own list width, applied when its group mounts. */}
+        <SplitGroup key={scopeFamily(scope)} id="content" aria-label="Content" className="h-full min-h-0">
+          {view}
+        </SplitGroup>
       </SplitPanel>
       <AddSheet open={addOpen} busy={addBusy} error={addError} onClose={() => { setAddOpen(false); setAddError(undefined); }} onSubmit={(url) => void submitUrl(url)} onSubscribed={(result) => void subscribed(result)} />
       <SearchPalette open={searchOpen} onOpenChange={setSearchOpen} onOpenMaterial={showMaterial} onOpenItem={(id) => void openItemHit(id)} />

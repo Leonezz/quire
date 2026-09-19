@@ -59,10 +59,10 @@
   --r-window:  22px;
   --shadow-float: 0 2px 6px rgba(15,17,21,.05), 0 16px 40px rgba(15,17,21,.09);
   --shadow-window: 0 30px 80px rgba(15,17,21,.22), 0 0 0 .5px rgba(15,17,21,.12);
-  --sidebar-w: 236px;
-  --list-w:    420px;
+  --sidebar-w: 220px;
+  --list-w:    360px;
   --inspector-w: 360px;
-  --toolbar-h: 56px;
+  --toolbar-h: 52px;
   --measure: 680px;
   --gutter: 12px;
 }

@@ -74,6 +74,11 @@
 - UI：Info 面板重做（类型菜单、创建者编辑器可排序、按类型显示字段、标识符可打开、关联材料选择器、每字段"extracted: … · Reset"、Copy citation / Copy BibTeX / Refresh from source、About 折叠）；Library 行显示类型与出版物、Type 过滤、批量 Copy BibTeX；阅读头部显示创建者 · 出版物 · 日期；引用与批注导出用新模型。同时修了：Library 工具栏回到列表列（阅读器标题栏占顶行）、侧栏收起时的红绿灯槽、分栏缝隙、artifact 重复标题、专注模式下显式打开面板会退出专注。
 - 未做（推后）：Crossref / arXiv API 按 DOI / id 补全元数据；CSL 样式引用；OPML。
 
+### 第 9 刀：布局重设计 — 已完成 2026-09-19（设计见 `docs/design/layout.md`）
+- 调研 Mail / Notes / Reeder / NetNewsWire / Readwise Reader / Zotero 7 后定下三条规则：三栏平铺一条工具栏；切面进侧栏、列表只做列表；面板开关只在工具栏。
+- 实现：去掉玻璃卡片与缝隙，侧栏走系统 vibrancy，1px 分隔线即拖拽柄；红绿灯落在侧栏 52px 头部，侧栏收起时工具栏向左延伸并留 80px 内缩；侧栏 = Inbox / Queue / Agent + Library（All / Articles / Papers / Artifacts）+ Tags（前 8 个 + All tags…）+ Sources（健康点 + 未读数，点即该来源的 Inbox；Manage sources… 进管理）+ Settings；Library 过滤栏与 Inbox 的 Date / Source 分段整体删除，列表只剩搜索与排序；检查器去掉 tab 条，只有名称 + ×，由阅读器工具栏的 Info / Notes / Ask 互斥切换。
+- 未做（推后）：无材料打开时工具栏没有 Ask 按钮（⌘J 仍可用）；窄窗口三栏 + 面板同时打开时低于各自最小宽度。
+
 ## 评测集导入 app
 - Developer 菜单 → Import Evaluation Corpus（⌘⇧I，仅开发检出可见）把 `eval/corpus` 全部快照按当前抽取器入库；2026-09-18 实测 64 篇导入、0 失败。浏览器预览也直接列出导出后的语料（`EXPORT=1`）。
 - 第二轮独立评审（`eval/quality-review-2.md`）：46 通过 / 4 轻微 / 14 严重（首轮 36 / 6 / 22）；随后又修了 Paul Graham 脚注、卡片链接的 Markdown、尾部 discuss / read-my-book 段。剩余主要是站点级残留（Quanta、Stratechery 的相关文章卡片），留给 L3 profile。

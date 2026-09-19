@@ -98,9 +98,9 @@ export function SplitSeparator({ className, orientation = "horizontal", hit = 8,
       className={cx("group relative z-10 shrink-0 outline-none", horizontal ? "cursor-col-resize" : "cursor-row-resize", className)}
     >
       <span aria-hidden="true" className={cx(
-        "pointer-events-none absolute rounded-full transition-colors duration-100",
+        "pointer-events-none absolute transition-colors duration-100",
         horizontal ? "inset-y-0 left-1/2 w-px -translate-x-1/2" : "inset-x-0 top-1/2 h-px -translate-y-1/2",
-        line === "always" ? "bg-separator-soft" : "bg-transparent",
+        line === "always" ? "bg-separator" : "bg-transparent",
         "group-data-[separator=hover]:bg-accent group-data-[separator=active]:bg-accent group-data-[separator=focus]:bg-accent",
         horizontal ? "group-data-[separator=active]:w-[2px] group-data-[separator=focus]:w-[2px]" : "group-data-[separator=active]:h-[2px] group-data-[separator=focus]:h-[2px]",
       )} />
