@@ -19,6 +19,7 @@ const material: MaterialRecord = {
   id: "abcdefabcdefabcd", url: "https://example.test/momentum", finalUrl: "https://example.test/momentum", title: "Momentum, revisited", byline: "A. Author",
   fetchedAt: "2026-09-10T00:00:00.000Z", readingMinutes: 3, origin: "web", mediaType: "text/html", markdown: "x".repeat(30_000), tags: [], kind: "webpage", extracted: meta, meta,
   quality: { completeness: "declared_full", conformance: "conformant", identityConfidence: "strong", safety: "safe", warnings: [] }, problems: [],
+  views: [{ id: "web", label: "Web page", url: "https://example.test/momentum", mediaType: "text/html", status: "ready" }], primaryView: "web", readyViews: ["web"],
 };
 const artifact: MaterialRecord = { ...material, id: "0123456789abcdef", url: "quire://artifact/0123456789abcdef", finalUrl: "quire://artifact/0123456789abcdef", title: "Momentum (rebuilt)", origin: "agent", mediaType: "text/markdown", lineage: [material.id], markdown: "# Momentum" };
 const summaries = Array.from({ length: 45 }, (_, i) => ({ ...material, id: `${i.toString(16).padStart(16, "0")}`, title: `Title ${i}` }));

@@ -12,7 +12,7 @@ import { MetaStore } from "./meta";
 
 const quality = { completeness: "declared_full" as const, conformance: "conformant" as const, identityConfidence: "strong" as const, safety: "safe" as const, warnings: [] };
 function summary(overrides: Partial<MaterialSummary> & { id: string; title: string }): MaterialSummary {
-  return { url: `https://x.test/${overrides.id}`, fetchedAt: "2026-09-10T00:00:00.000Z", readingMinutes: 1, origin: "web", mediaType: "text/html", quality, tags: [], kind: "webpage", ...overrides };
+  return { url: `https://x.test/${overrides.id}`, fetchedAt: "2026-09-10T00:00:00.000Z", readingMinutes: 1, origin: "web", mediaType: "text/html", quality, tags: [], kind: "webpage", readyViews: ["web"], ...overrides };
 }
 
 const web = summary({ id: "1", title: "Cache keys", byline: "Ada", fetchedAt: "2026-09-12T00:00:00.000Z", publishedAt: "2026-09-01T00:00:00.000Z", tags: ["Systems"] });

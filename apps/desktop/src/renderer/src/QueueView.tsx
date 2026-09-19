@@ -72,7 +72,7 @@ export function QueueView({ items, selectedId, onSelect, refresh, onOpenLink, on
               <ItemPreview item={current} busy={busy !== undefined} failure={failure?.itemId === current.id ? failure : undefined} error={decisionError?.itemId === current.id ? decisionError.message : undefined} kept={keptLine} onOpenLink={onOpenLink}
                 actions={[
                   { label: busy === "read" ? "Opening…" : current.openedAt ? "Continue" : "Read now", kbd: "↵", onPress: () => void readNow(current.id) },
-                  { label: busy === "keep" ? "Keeping…" : current.keptAt ? "Kept" : "Keep", kbd: "k", icon: <Bookmark className="size-3.5" />, onPress: () => void keep(current.id) },
+                  { label: busy === "keep" ? "Keeping…" : current.keptAt ? "Kept" : "Keep", kbd: "k", icon: <Bookmark />, onPress: () => void keep(current.id) },
                   { label: "Remove", kbd: "e", variant: "quiet", onPress: () => void decide(current.id, "unqueue") },
                 ]} />
             ) : (

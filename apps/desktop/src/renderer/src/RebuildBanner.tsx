@@ -1,5 +1,5 @@
 import { ArrowRight, Sparkles } from "lucide-react";
-import { Button } from "@read/ui";
+import { Button, Icon } from "@read/ui";
 import type { MaterialRecord } from "../../shared/contracts";
 
 export type RebuildState = "idle" | "running" | "failed";
@@ -21,13 +21,13 @@ export function canRebuild(material: Pick<MaterialRecord, "capture" | "rebuiltAs
 export function RebuildAction({ material, onRebuild, rebuild, rebuildError, onOpenMaterial, size = "sm" }: RebuildProps & { material: MaterialRecord; onOpenMaterial: (id: string) => void; size?: "sm" | "md" }) {
   if (material.rebuiltAs) {
     const id = material.rebuiltAs;
-    return <span className="inline-flex items-center gap-1.5">A rebuilt version exists · <Button variant="plain" size={size} className="h-6 px-1.5 text-[12.5px]" onPress={() => onOpenMaterial(id)}>Open<ArrowRight className="size-3" /></Button></span>;
+    return <span className="inline-flex items-center gap-1.5">A rebuilt version exists · <Button variant="plain" size={size} className="h-6 px-1.5 text-[12.5px]" onPress={() => onOpenMaterial(id)}>Open<ArrowRight /></Button></span>;
   }
   if (!onRebuild) return null;
-  if (rebuild === "running") return <span role="status" className="inline-flex items-center gap-1.5"><Sparkles className="size-3.5 animate-pulse text-purple-text" />Rebuilding…</span>;
+  if (rebuild === "running") return <span role="status" className="inline-flex items-center gap-1.5"><Icon of={Sparkles} size="sm" className="animate-pulse text-purple-text" />Rebuilding…</span>;
   return (
     <span className="inline-flex flex-wrap items-center gap-1.5">
-      <Button size={size} className="gap-1" onPress={onRebuild}><Sparkles className="size-3.5" />Rebuild with the agent</Button>
+      <Button size={size} className="gap-1" onPress={onRebuild}><Sparkles />Rebuild with the agent</Button>
       {rebuild === "failed" ? <span role="alert" className="text-red-text">The rebuild did not finish{rebuildError ? ` — ${rebuildError}` : " — see the Agent panel."}</span> : null}
     </span>
   );

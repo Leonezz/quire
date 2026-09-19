@@ -23,7 +23,7 @@ export interface CreatorRowProps {
   className?: string | undefined;
 }
 
-const iconButton = "grid size-7 shrink-0 cursor-default place-items-center rounded-control text-label-2 outline-none data-[hovered]:bg-fill data-[hovered]:text-label data-[focus-visible]:ring-[3px] data-[focus-visible]:ring-accent-ring data-[disabled]:opacity-30 [&>svg]:size-3.5";
+const iconButton = "grid size-7 shrink-0 cursor-default place-items-center rounded-control text-label-2 outline-none data-[hovered]:bg-fill data-[hovered]:text-label data-[focus-visible]:ring-[3px] data-[focus-visible]:ring-accent-ring data-[disabled]:opacity-30 [&>svg:not(.icon)]:size-icon-md";
 
 /**
  * One creator of a material: [role][name][↑][↓][×]. Every control is in the tab order; inside

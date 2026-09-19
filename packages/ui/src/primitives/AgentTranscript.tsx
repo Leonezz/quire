@@ -1,5 +1,6 @@
 import { Button as AriaButton, composeRenderProps, type ButtonProps as AriaButtonProps } from "react-aria-components";
 import { Check, X } from "lucide-react";
+import { Icon } from "./Icon";
 import { cx } from "../cx";
 
 export type AgentToolStatus = "running" | "done" | "failed";
@@ -24,10 +25,10 @@ export function AgentToolLine({ name, status, summary, className }: { name: stri
   const label = status === "running" ? "running" : status === "done" ? "done" : "failed";
   return (
     <div className={cx("agent-pop flex min-w-0 items-center gap-2 text-[12px] leading-4 text-label-3", className)} role={status === "running" ? "status" : undefined} data-status={status}>
-      <span aria-label={label} role="img" className="grid size-3.5 shrink-0 place-items-center">
+      <span aria-label={label} role="img" className="grid size-icon-sm shrink-0 place-items-center">
         {status === "running" ? <i className="block size-3 animate-spin rounded-full border-[1.5px] border-label-4 border-t-label-2" /> : null}
-        {status === "done" ? <Check className="size-3.5 text-green" /> : null}
-        {status === "failed" ? <X className="size-3.5 text-red" /> : null}
+        {status === "done" ? <Icon of={Check} size="sm" className="text-green" /> : null}
+        {status === "failed" ? <Icon of={X} size="sm" className="text-red" /> : null}
       </span>
       <span className="truncate"><code className="font-mono text-[11.5px] text-label-2">{name}</code>{summary ? <span> {summary.startsWith(name) ? summary.slice(name.length).trimStart() : summary}</span> : null}</span>
     </div>

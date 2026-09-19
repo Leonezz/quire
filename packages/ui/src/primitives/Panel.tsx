@@ -20,7 +20,7 @@ export function Panel({ title, onClose, children, className, "aria-label": ariaL
     <aside aria-label={ariaLabel ?? title} className={cx("panel-slide grid h-full min-h-0 grid-rows-[40px_minmax(0,1fr)] bg-content", className)}>
       <header className="flex items-center gap-2 border-b border-separator pl-4 pr-2">
         <h2 className="m-0 min-w-0 flex-1 truncate text-[13px] font-semibold leading-5 text-label">{title}</h2>
-        <Button aria-label={`Close ${title}`} onPress={onClose} className="grid size-6 place-items-center rounded-control text-label-3 outline-none transition-colors duration-100 data-[hovered]:bg-fill data-[hovered]:text-label data-[focus-visible]:ring-[3px] data-[focus-visible]:ring-accent-ring [&>svg]:size-3.5"><X /></Button>
+        <Button aria-label={`Close ${title}`} onPress={onClose} className="grid size-7 place-items-center rounded-control text-label-3 outline-none transition-colors duration-100 data-[hovered]:bg-fill data-[hovered]:text-label data-[focus-visible]:ring-[3px] data-[focus-visible]:ring-accent-ring [&>svg:not(.icon)]:size-icon-md"><X /></Button>
       </header>
       <div className="flex min-h-0 flex-col gap-4 overflow-auto px-4 pb-4 pt-3">{children}</div>
     </aside>

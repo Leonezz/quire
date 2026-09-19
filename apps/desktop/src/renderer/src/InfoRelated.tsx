@@ -57,7 +57,7 @@ export function InfoRelated({ editor, selfId, onOpenMaterial }: { editor: Materi
             </Chip>
           );
         })}
-        <Button size="sm" variant="plain" className="h-[22px] gap-0.5 px-1.5" isDisabled={disabled} onPress={() => setOpen(true)}><Plus className="size-3" />Add</Button>
+        <Button size="sm" variant="plain" className="h-[22px] gap-0.5 px-1.5" isDisabled={disabled} onPress={() => setOpen(true)}><Plus />Add</Button>
       </div>
       {titlesError ? <p role="alert" className="m-0 text-[12px] text-red">{titlesError}</p> : null}
       {editor.errors.related ? <p role="alert" className="m-0 text-[12px] text-red">{editor.errors.related}</p> : null}

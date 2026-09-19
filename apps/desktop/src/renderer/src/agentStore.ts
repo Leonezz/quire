@@ -1,11 +1,12 @@
-import { useSyncExternalStore } from "react";
+import { useSyncExternalStore, type RefObject } from "react";
 import type { AgentEvent, AgentFailureCode, AgentRequest, AgentResult, AgentRun, AgentStatus, AgentTask } from "../../shared/contracts";
 import { read } from "./api";
 
 // The renderer's agent runtime: every turn in flight, whichever panel (if any) is looking at it.
 // Panels are views of this store; mounting and unmounting them changes nothing here. A run is seeded
-// from `listAgentRuns()` (or created when `ask` returns), grows with `agent:event`, and is dropped once
-// the session holds the stored turn (or a short while after it finished, when no session change came).
+// from `listAgentRuns()` (or created the moment `ask` is called, before the bridge answers), grows with
+// `agent:event`, and is dropped once the session holds the stored turn (or a short while after it finished,
+// when no session change came).
 
 export interface RunTool { key: string; name: string; status: "running" | "done" | "failed"; summary?: string | undefined }
 
@@ -28,10 +29,14 @@ export interface RunState {
   tools: readonly RunTool[];
   startedAt: string;
   outcome?: RunOutcome | undefined;
+  /** Asked and shown, but the bridge has not named the session yet: keyed by the session id when known, else by a pending key. */
+  pending?: boolean | undefined;
 }
 
 export interface AgentStoreState {
   runs: ReadonlyMap<string, RunState>;
+  /** Pending key → the session the bridge then named, so a panel still holding the key finds its run. */
+  adopted: ReadonlyMap<string, string>;
   status?: AgentStatus | undefined;
   /** The last bridge failure the store met: reading the status, signing in, or checking a finished run's session. */
   statusError?: string | undefined;
@@ -56,6 +61,8 @@ export const SWAP_GRACE_MS = 250;
 export const FINISHED_TTL_MS = 2000;
 
 const newKey = () => `tool-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+/** A temporary key for a run whose session the bridge has not named yet. */
+export const newPendingKey = () => `pending:${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
 
 function runOfSnapshot(run: AgentRun): RunState {
   return { sessionId: run.sessionId, turnId: run.turnId, threadId: run.threadId, task: run.task, prompt: run.prompt, answer: run.answer, tools: run.tools.map((tool) => ({ key: newKey(), ...tool })), startedAt: run.startedAt };
@@ -76,7 +83,7 @@ function applyEvent(run: RunState, event: AgentEvent): RunState {
 }
 
 export function createAgentStore(api: AgentStoreApi) {
-  let state: AgentStoreState = { runs: new Map() };
+  let state: AgentStoreState = { runs: new Map(), adopted: new Map() };
   const listeners = new Set<() => void>();
   const timers = new Map<string, number>();
   let stop: (() => void) | undefined;
@@ -89,13 +96,16 @@ export function createAgentStore(api: AgentStoreApi) {
     catch (cause: unknown) { set({ ...state, statusError: cause instanceof Error ? cause.message : "Could not reach the agent." }); }
   };
 
+  const clearTimer = (key: string) => {
+    const timer = timers.get(key);
+    if (timer !== undefined) { window.clearTimeout(timer); timers.delete(key); }
+  };
   const drop = (sessionId: string) => {
-    const timer = timers.get(sessionId);
-    if (timer !== undefined) { window.clearTimeout(timer); timers.delete(sessionId); }
+    clearTimer(sessionId);
     if (!state.runs.has(sessionId)) return;
     const runs = new Map(state.runs);
     runs.delete(sessionId);
-    setRuns(runs);
+    set({ ...state, runs, adopted: new Map([...state.adopted].filter(([, id]) => id !== sessionId)) });
   };
   const dropAfter = (sessionId: string, ms: number) => {
     const pending = timers.get(sessionId);
@@ -135,6 +145,34 @@ export function createAgentStore(api: AgentStoreApi) {
     setRuns(runs);
   };
 
+  /** Shows the turn at once, under its session id or under `key` until the bridge names the session. */
+  const begin = (key: string, request: AgentRequest) => {
+    clearTimer(key);
+    const run: RunState = { sessionId: key, task: request.task, prompt: request.text, answer: "", tools: [], startedAt: new Date().toISOString(), pending: true, ...(request.threadId ? { threadId: request.threadId } : {}) };
+    setRuns(new Map(state.runs).set(key, run));
+  };
+  /** The bridge refused (or broke): the shown turn goes, and the finished run it replaced comes back for its remaining grace. */
+  const unwind = (key: string, previous: RunState | undefined) => {
+    const runs = new Map(state.runs);
+    if (previous) runs.set(key, previous); else runs.delete(key);
+    setRuns(runs);
+    if (previous) dropAfter(key, FINISHED_TTL_MS);
+  };
+  /** The bridge named the session: the entry moves under that id, taking in the events that arrived there first. */
+  const adopt = (key: string, result: { sessionId: string; turnId: string }, request: AgentRequest) => {
+    const runs = new Map(state.runs);
+    const shown = runs.get(key);
+    const early = key === result.sessionId ? undefined : runs.get(result.sessionId);
+    const base = early ?? (shown && !shown.outcome ? shown : undefined);
+    if (key !== result.sessionId) runs.delete(key);
+    runs.set(result.sessionId, {
+      sessionId: result.sessionId, turnId: result.turnId, threadId: base?.threadId ?? request.threadId, task: request.task, prompt: request.text,
+      answer: base?.answer ?? "", tools: base?.tools ?? [], startedAt: shown?.startedAt ?? base?.startedAt ?? new Date().toISOString(), outcome: base?.outcome,
+    });
+    const adopted = key === result.sessionId ? state.adopted : new Map(state.adopted).set(key, result.sessionId);
+    set({ ...state, runs, adopted });
+  };
+
   return {
     getState: () => state,
     subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
@@ -152,26 +190,33 @@ export function createAgentStore(api: AgentStoreApi) {
       stop?.(); stop = undefined;
       for (const timer of timers.values()) window.clearTimeout(timer);
       timers.clear();
-      set({ runs: new Map() });
+      set({ runs: new Map(), adopted: new Map() });
     },
     refreshStatus,
     login: async () => {
       try { set({ ...state, status: await api.agentLogin(), statusError: undefined }); }
       catch (cause: unknown) { set({ ...state, statusError: cause instanceof Error ? cause.message : "Signing in failed." }); }
     },
-    /** Starts a turn; the run appears here once the bridge names its session. A refusal is returned, not thrown; a broken bridge throws. */
-    ask: async (request: AgentRequest): Promise<AgentResult> => {
-      const result = await api.agentAsk(request);
+    /**
+     * Starts a turn. The run shows at once — under the session id when the request names one, else under
+     * `pendingKey` (or a fresh one) until the bridge names the session, when it is re-keyed and `adopted`
+     * records the move. A refusal removes it and is returned, not thrown; a broken bridge removes it and throws.
+     */
+    ask: async (request: AgentRequest, pendingKey?: string): Promise<AgentResult> => {
+      const key = request.sessionId ?? pendingKey ?? newPendingKey();
+      const previous = state.runs.get(key);
+      // A turn of this session is already running (another window's): the bridge will refuse, so nothing is shown ahead of it.
+      const shown = !(previous && !previous.outcome);
+      if (shown) begin(key, request);
+      let result: AgentResult;
+      try { result = await api.agentAsk(request); }
+      catch (cause: unknown) { if (shown) unwind(key, previous); throw cause; }
       if (!result.ok) {
+        if (shown) unwind(key, previous);
         if (result.code === "AGENT_UNAVAILABLE" || result.code === "AUTH_REQUIRED") void refreshStatus();
         return result;
       }
-      const placeholder = state.runs.get(result.sessionId);
-      // Events that raced ahead of this result already live in the placeholder; only the words are filled in.
-      const run: RunState = placeholder && !placeholder.outcome
-        ? { ...placeholder, turnId: result.turnId, task: request.task, prompt: request.text }
-        : { sessionId: result.sessionId, turnId: result.turnId, task: request.task, prompt: request.text, answer: "", tools: [], startedAt: new Date().toISOString(), ...(request.threadId ? { threadId: request.threadId } : {}) };
-      setRuns(new Map(state.runs).set(result.sessionId, run));
+      adopt(key, result, request);
       void refreshStatus();
       return result;
     },
@@ -204,9 +249,20 @@ export function useAgentStore<T>(selector: (state: AgentStoreState) => T): T {
   return useSyncExternalStore(agentStore.subscribe, () => selector(agentStore.getState()), () => selector(agentStore.getState()));
 }
 
-/** The run in flight (or just finished) for a session; undefined when there is none. */
-export function useAgentRun(sessionId: string | undefined): RunState | undefined {
-  return useAgentStore((state) => (sessionId ? state.runs.get(sessionId) : undefined));
+function runOf(state: AgentStoreState, sessionId: string | undefined, pendingKey: string | undefined): RunState | undefined {
+  const own = sessionId ? state.runs.get(sessionId) : undefined;
+  if (own || !pendingKey) return own;
+  const adopted = state.adopted.get(pendingKey);
+  return state.runs.get(pendingKey) ?? (adopted ? state.runs.get(adopted) : undefined);
+}
+
+/**
+ * The run in flight (or just finished) for a session; undefined when there is none. A panel that asked
+ * before it had a session passes the pending key it holds in a ref: the run is found under that key, and
+ * still under the session the bridge then named, until the panel adopts that session itself.
+ */
+export function useAgentRun(sessionId: string | undefined, pendingKey?: RefObject<string | undefined>): RunState | undefined {
+  return useAgentStore((state) => runOf(state, sessionId, pendingKey?.current));
 }
 
 export function runningCount(runs: ReadonlyMap<string, RunState>): number {

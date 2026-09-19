@@ -1,4 +1,5 @@
 import { ChevronRight } from "lucide-react";
+import { Icon } from "@read/ui";
 import type { MaterialRecord } from "../../shared/contracts";
 import { useMaterialTitles } from "./useMaterialTitles";
 
@@ -21,7 +22,7 @@ export function ArtifactLineage({ lineage, onOpenMaterial, defaultOpen = false }
   if (lineage.length === 0) return null;
   return (
     <details open={defaultOpen} className={`group text-[12.5px] text-label-2 ${defaultOpen ? "" : "mb-8 -mt-5"}`}>
-      <summary className="inline-flex cursor-default list-none items-center gap-1 rounded-pill py-0.5 pr-2 pl-1 text-accent-text outline-none hover:bg-accent-soft focus-visible:ring-[3px] focus-visible:ring-accent-ring [&::-webkit-details-marker]:hidden"><ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />Sources</summary>
+      <summary className="inline-flex cursor-default list-none items-center gap-1 rounded-pill py-0.5 pr-2 pl-1 text-accent-text outline-none hover:bg-accent-soft focus-visible:ring-[3px] focus-visible:ring-accent-ring [&::-webkit-details-marker]:hidden"><Icon of={ChevronRight} size="sm" className="transition-transform group-open:rotate-90" />Sources</summary>
       {error ? <p role="alert" className="mt-1.5 text-red-text">{error}</p> : null}
       <ol className="mt-1.5 grid list-decimal gap-1 pl-6">
         {lineage.map((id) => (

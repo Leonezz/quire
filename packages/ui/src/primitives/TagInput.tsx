@@ -1,6 +1,7 @@
 import { useId, useRef, useState } from "react";
 import { Button as AriaButton, Input, Label, ListBox, ListBoxItem, Popover } from "react-aria-components";
 import { X } from "lucide-react";
+import { Icon } from "./Icon";
 import { cx } from "../cx";
 
 export type ChipTone = "neutral" | "accent";
@@ -16,8 +17,8 @@ export function Chip({ children, tone = "neutral", onRemove, removeLabel, classN
     )}>
       <span className="truncate">{children}</span>
       {onRemove ? (
-        <AriaButton aria-label={removeLabel ?? `Remove ${String(children)}`} onPress={onRemove} className="grid size-4 shrink-0 cursor-default place-items-center rounded-full text-current outline-none data-[hovered]:bg-fill-2 data-[focus-visible]:ring-2 data-[focus-visible]:ring-accent-ring">
-          <X className="size-3" />
+        <AriaButton aria-label={removeLabel ?? `Remove ${String(children)}`} onPress={onRemove} className="grid size-5 shrink-0 cursor-default place-items-center rounded-full text-current outline-none data-[hovered]:bg-fill-2 data-[focus-visible]:ring-2 data-[focus-visible]:ring-accent-ring">
+          <Icon of={X} size="sm" />
         </AriaButton>
       ) : null}
     </span>

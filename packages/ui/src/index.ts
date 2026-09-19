@@ -12,6 +12,8 @@ export { Switch } from "./primitives/Switch";
 export { Menu, MenuItem, MenuTrigger } from "./primitives/Menu";
 export { Search } from "./primitives/Field";
 export { cx } from "./cx";
+export { Icon, ICON_STROKE } from "./primitives/Icon";
+export type { IconProps, IconSize } from "./primitives/Icon";
 // Re-exported so apps never import react-aria-components directly.
 export { useDragAndDrop } from "react-aria-components";
 export type { Selection, Key } from "react-aria-components";

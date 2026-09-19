@@ -21,5 +21,8 @@
   "plain": "Notes on a reading loop\n\nMost reading tools optimise for collecting. The loop that matters is smaller: something arrives, you decide in a few seconds whether it is worth your attention today, and the ones that are get read to the end.\n\nThree rules held up over a year. Decide once: an item is read, queued or dismissed, never left hovering. Read in the tool: the moment you leave for a browser tab, the decision is lost. Keep what you finish: the library is the record of what you actually read, not what you meant to.\n\nThe agent's job in this loop is narrow. It explains a passage, checks a claim against what you kept, or rebuilds a page the extractor mangled. It does not decide for you.\n\nNavigation · Home · Archive · Subscribe · © example.org",
   "problems": [
     { "code": "SOURCE_ARTICLE_READABILITY_QUALITY_LOW", "recoverBy": "generic-fallback", "scope": "candidate", "severity": "warning" }
-  ]
+  ],
+  "views": [{"id": "web", "label": "Web", "url": "https://example.org/notes/2026/reading-loop", "mediaType": "text/html", "status": "ready", "fetchedAt": "2026-09-18T07:12:00.000Z"}],
+  "primaryView": "web",
+  "readyViews": ["web"]
 }

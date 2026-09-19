@@ -89,10 +89,10 @@ export function AgentView({ sessions, requestedSession, onOpenMaterial, onOpenLi
   const footer = current ? (
     <div className="flex items-center gap-2 border-t border-separator px-3 py-1.5 text-[12.5px] text-label-2">
       <span className="min-w-0 truncate">{sessionMeta(current)}</span>
-      <Button size="sm" variant="quiet" className="ml-auto text-red-text" onPress={() => setDeleting(current)}><Trash2 className="size-3.5" />Delete <Kbd>⌫</Kbd></Button>
+      <Button size="sm" variant="quiet" className="ml-auto text-red-text" onPress={() => setDeleting(current)}><Trash2 />Delete <Kbd>⌫</Kbd></Button>
     </div>
   ) : undefined;
-  const toolbar = <ContentToolbar actions={<Button size="sm" variant={shown.sessionId === undefined ? "plain" : "quiet"} className="gap-1" onPress={fresh}><Plus className="size-3.5" />New conversation</Button>} trailing={shell.trailing} />;
+  const toolbar = <ContentToolbar actions={<Button size="sm" variant={shown.sessionId === undefined ? "plain" : "quiet"} className="gap-1" onPress={fresh}><Plus />New conversation</Button>} trailing={shell.trailing} />;
 
   return (
     <>

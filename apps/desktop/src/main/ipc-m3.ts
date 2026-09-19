@@ -1,11 +1,12 @@
 import { ipcMain } from "electron";
-import type { LibraryFilter, MaterialKind, MaterialMeta, OpenUrlResult } from "../shared/contracts";
+import type { LibraryFilter, MaterialKind, MaterialMeta, MaterialViewId, OpenUrlResult } from "../shared/contracts";
 import type { AnnotationStore } from "./engine/annotations";
 import type { EventStore } from "./engine/events";
 import type { ItemStore } from "./engine/items";
 import { keepItem } from "./engine/inbox";
 import { deleteMaterials, queryLibrary } from "./engine/library";
 import type { MaterialStore } from "./engine/materials";
+import { isMaterialViewId } from "./engine/material-views";
 import { MATERIAL_KINDS, MAX_META_LONG_TEXT, MAX_META_TEXT, MAX_TAG_LENGTH, type MetaStore } from "./engine/meta";
 import type { SessionStore } from "./engine/agent-sessions";
 import type { SettingsPatch, SettingsStore } from "./engine/settings";
@@ -41,6 +42,10 @@ const SETTING_KEYS = ["syncIntervalMinutes", "keepCapture", "codexPath", "agentM
 
 function materialId(value: unknown): string {
   if (typeof value !== "string" || !/^[a-f0-9]{16}$/.test(value)) throw new Error("IPC_INVALID_ID");
+  return value;
+}
+function viewId(value: unknown): MaterialViewId {
+  if (!isMaterialViewId(value)) throw new Error("IPC_INVALID_VIEW");
   return value;
 }
 function boundedId(value: unknown): string {
@@ -138,6 +143,19 @@ export function registerM3Handlers(deps: M3Deps): void {
     items, events, store, warn: (message) => deps.warn(`[inbox] ${message}`),
     onMaterialized: () => broadcast("library:changed"),
   }).then((result) => { if (result.ok) broadcast("sources:changed"); return result; })));
+
+  // Views: fetching a rendering or changing the primary one changes what the list rows show.
+  ipcMain.handle("material:fetchView", async (_event, id: unknown, view: unknown) => {
+    const result = await store.fetchView(materialId(id), viewId(view));
+    broadcast("library:changed");
+    return result;
+  });
+  ipcMain.handle("material:getView", (_event, id: unknown, view: unknown) => store.getView(materialId(id), viewId(view)));
+  ipcMain.handle("material:setPrimaryView", async (_event, id: unknown, view: unknown) => {
+    const updated = await store.setPrimaryView(materialId(id), viewId(view));
+    broadcast("library:changed");
+    return updated;
+  });
 
   ipcMain.handle("settings:get", () => settings.get());
   ipcMain.handle("settings:update", (_event, patch: unknown) => {

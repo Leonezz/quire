@@ -153,3 +153,102 @@ describe("agentStore", () => {
     expect(store.getState().runs.size).toBe(0);
   });
 });
+
+describe("agentStore: the turn shows before the bridge answers", () => {
+  const library = { context: { kind: "library" as const }, task: "explain" as const, text: "" };
+
+  it("shows a new conversation's turn under the pending key at once, then re-keys it to the session the bridge names", async () => {
+    let resolveAsk: (value: AgentResult) => void = () => undefined;
+    const { store, emit } = harness({ agentAsk: vi.fn(() => new Promise<AgentResult>((resolve) => { resolveAsk = resolve; })) });
+    await store.start();
+    const asking = store.ask(library, "pending:p1");
+    const shown = store.getState().runs.get("pending:p1");
+    expect(shown).toEqual(expect.objectContaining({ sessionId: "pending:p1", task: "explain", prompt: "", answer: "", tools: [], pending: true }));
+    expect(runningCount(store.getState().runs)).toBe(1);
+    // Events for the real session can land before the result does; they are taken in at the move.
+    emit({ type: "started", sessionId: "s1", threadId: "th1", turnId: "t1" });
+    emit({ type: "delta", sessionId: "s1", turnId: "t1", delta: "Early" });
+    resolveAsk({ ok: true, sessionId: "s1", turnId: "t1" });
+    await asking;
+    expect(store.getState().runs.has("pending:p1")).toBe(false);
+    const run = store.getState().runs.get("s1");
+    expect(run).toEqual(expect.objectContaining({ sessionId: "s1", turnId: "t1", threadId: "th1", task: "explain", prompt: "", answer: "Early", startedAt: shown!.startedAt }));
+    expect(run?.pending).toBeFalsy();
+    expect(store.getState().adopted.get("pending:p1")).toBe("s1");
+    expect(runningCount(store.getState().runs)).toBe(1);
+    // The alias goes with the run.
+    emit({ type: "completed", sessionId: "s1", turnId: "t1", text: "Early.", sources: [] });
+    await vi.advanceTimersByTimeAsync(FINISHED_TTL_MS);
+    expect(store.getState().runs.has("s1")).toBe(false);
+    expect(store.getState().adopted.has("pending:p1")).toBe(false);
+  });
+
+  it("makes a pending key itself when none is given", async () => {
+    let resolveAsk: (value: AgentResult) => void = () => undefined;
+    const { store } = harness({ agentAsk: vi.fn(() => new Promise<AgentResult>((resolve) => { resolveAsk = resolve; })) });
+    await store.start();
+    const asking = store.ask(library);
+    const [key] = [...store.getState().runs.keys()];
+    expect(key).toMatch(/^pending:/);
+    resolveAsk({ ok: true, sessionId: "s1", turnId: "t1" });
+    await asking;
+    expect([...store.getState().runs.keys()]).toEqual(["s1"]);
+  });
+
+  it("shows a known session's turn under its id at once and keeps what streamed while the bridge answered", async () => {
+    let resolveAsk: (value: AgentResult) => void = () => undefined;
+    const { store, emit } = harness({ agentAsk: vi.fn(() => new Promise<AgentResult>((resolve) => { resolveAsk = resolve; })) });
+    await store.start();
+    const asking = store.ask({ context: { kind: "library" }, task: "ask", text: "more", sessionId: "sA", threadId: "thA" });
+    expect(store.getState().runs.get("sA")).toEqual(expect.objectContaining({ sessionId: "sA", pending: true, prompt: "more", threadId: "thA", answer: "" }));
+    emit({ type: "delta", sessionId: "sA", turnId: "tA", delta: "Hi" });
+    resolveAsk({ ok: true, sessionId: "sA", turnId: "tA" });
+    await asking;
+    expect(store.getState().runs.get("sA")).toEqual(expect.objectContaining({ turnId: "tA", answer: "Hi", threadId: "thA", prompt: "more" }));
+    expect(store.getState().runs.get("sA")?.pending).toBeFalsy();
+    expect(store.getState().adopted.size).toBe(0);
+  });
+
+  it("removes the shown turn when the bridge refuses, and when it throws", async () => {
+    let resolveAsk: (value: AgentResult) => void = () => undefined;
+    let rejectAsk: (reason: unknown) => void = () => undefined;
+    const { store } = harness({ agentAsk: vi.fn(() => new Promise<AgentResult>((resolve, reject) => { resolveAsk = resolve; rejectAsk = reject; })) });
+    await store.start();
+    const first = store.ask(library, "pending:p1");
+    expect(store.getState().runs.has("pending:p1")).toBe(true);
+    resolveAsk({ ok: false, code: "TURN_RUNNING", message: "busy" });
+    expect(await first).toEqual({ ok: false, code: "TURN_RUNNING", message: "busy" });
+    expect(store.getState().runs.size).toBe(0);
+    const second = store.ask(library, "pending:p2");
+    expect(store.getState().runs.has("pending:p2")).toBe(true);
+    rejectAsk(new Error("bridge down"));
+    await expect(second).rejects.toThrow("bridge down");
+    expect(store.getState().runs.size).toBe(0);
+  });
+
+  it("puts a finished run back, with its grace, when the next turn of its session is refused", async () => {
+    const agentAsk = vi.fn(async () => ({ ok: true as const, sessionId: "s1", turnId: "t1" }));
+    const { store, emit } = harness({ agentAsk });
+    await store.start();
+    await store.ask({ ...library, sessionId: "s1" });
+    emit({ type: "completed", sessionId: "s1", turnId: "t1", text: "Done.", sources: [] });
+    agentAsk.mockResolvedValueOnce({ ok: false as const, code: "TURN_RUNNING" as const, message: "busy" } as never);
+    const asking = store.ask({ ...library, sessionId: "s1" });
+    expect(store.getState().runs.get("s1")?.pending).toBe(true);
+    await asking;
+    expect(store.getState().runs.get("s1")?.outcome?.status).toBe("done");
+    await vi.advanceTimersByTimeAsync(FINISHED_TTL_MS);
+    expect(store.getState().runs.has("s1")).toBe(false);
+  });
+
+  it("shows nothing ahead of a session whose turn is already running elsewhere", async () => {
+    const { store, emit } = harness({ agentAsk: vi.fn(async () => ({ ok: false as const, code: "TURN_RUNNING" as const, message: "busy" })) });
+    await store.start();
+    emit({ type: "delta", sessionId: "s1", turnId: "t9", delta: "theirs" });
+    const asking = store.ask({ ...library, sessionId: "s1" });
+    expect(store.getState().runs.get("s1")).toEqual(expect.objectContaining({ answer: "theirs" }));
+    expect(store.getState().runs.get("s1")?.pending).toBeFalsy();
+    await asking;
+    expect(store.getState().runs.get("s1")?.answer).toBe("theirs");
+  });
+});

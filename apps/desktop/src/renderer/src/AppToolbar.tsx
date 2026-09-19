@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { ArrowDownWideNarrow, ChevronDown, PanelLeft, Plus, Search as SearchIcon } from "lucide-react";
-import { Button, Menu, MenuItem, MenuTrigger, Toolbar, ToolbarButton, ToolbarGroup } from "@read/ui";
+import { Button, Icon, Menu, MenuItem, MenuTrigger, Toolbar, ToolbarButton, ToolbarGroup } from "@read/ui";
 import { SORT_LABELS, type LibrarySort } from "./useLibrary";
 
 const SORTS = Object.keys(SORT_LABELS) as LibrarySort[];
@@ -20,7 +20,7 @@ export function ShellActions({ addOpen, onAdd, searchOpen, onSearch }: { addOpen
 export function SortMenu({ sort, onChange, compact = false }: { sort: LibrarySort; onChange: (sort: LibrarySort) => void; compact?: boolean }) {
   return (
     <MenuTrigger>
-      <Button size="sm" variant="quiet" className="shrink-0 gap-1 px-2" aria-label={`Sort: ${SORT_LABELS[sort]}`}><ArrowDownWideNarrow className="size-3.5" />{compact ? null : <>{SORT_LABELS[sort]}<ChevronDown className="size-3 opacity-60" /></>}</Button>
+      <Button size="sm" variant="quiet" className="shrink-0 gap-1 px-2" aria-label={`Sort: ${SORT_LABELS[sort]}`}><ArrowDownWideNarrow />{compact ? null : <>{SORT_LABELS[sort]}<Icon of={ChevronDown} size="sm" className="opacity-60" /></>}</Button>
       <Menu aria-label="Sort" selectionMode="single" disallowEmptySelection selectedKeys={[sort]} onSelectionChange={(keys) => { const key = keys === "all" ? undefined : [...keys][0]; if (key) onChange(key as LibrarySort); }}>
         {SORTS.map((entry) => <MenuItem key={entry} id={entry}>{SORT_LABELS[entry]}</MenuItem>)}
       </Menu>

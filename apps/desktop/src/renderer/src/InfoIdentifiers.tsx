@@ -20,7 +20,7 @@ export function InfoIdentifiers({ editor, kind, onOpenLink }: { editor: Material
         const value = editor.meta[field]?.trim();
         const link = linkOf[field];
         const open = link && value ? (
-          <Button size="md" variant="quiet" aria-label={`Open ${field === "url" ? "URL" : field === "doi" ? "DOI" : "arXiv"} in the browser`} className="h-9 shrink-0 gap-1 px-2.5" onPress={() => onOpenLink(link(value))}>Open<ExternalLink className="size-3.5" /></Button>
+          <Button size="md" variant="quiet" aria-label={`Open ${field === "url" ? "URL" : field === "doi" ? "DOI" : "arXiv"} in the browser`} className="h-9 shrink-0 gap-1 px-2.5" onPress={() => onOpenLink(link(value))}>Open<ExternalLink /></Button>
         ) : undefined;
         return <MetaTextField key={field} editor={editor} field={field as TextMetaField} trailing={open} />;
       })}

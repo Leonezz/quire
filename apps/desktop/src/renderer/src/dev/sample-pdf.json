@@ -10,5 +10,8 @@
   "mediaType": "application/pdf",
   "pdf": { "pages": 15, "byteLength": 2215244, "textLayer": "available" },
   "quality": { "completeness": "declared_full", "conformance": "conformant", "identityConfidence": "strong", "safety": "safe", "warnings": [] },
-  "problems": []
+  "problems": [],
+  "views": [{"id": "pdf", "label": "PDF", "url": "https://arxiv.org/pdf/1706.03762", "mediaType": "application/pdf", "status": "ready", "fetchedAt": "2026-09-17T09:00:00.000Z", "byteLength": 2215244, "pdf": {"pages": 15, "byteLength": 2215244, "textLayer": "available"}}],
+  "primaryView": "pdf",
+  "readyViews": ["pdf"]
 }

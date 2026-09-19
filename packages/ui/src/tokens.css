@@ -65,6 +65,13 @@
   --toolbar-h: 52px;
   --measure: 680px;
   --gutter: 12px;
+
+  /* Icon scale: the only three sizes a lucide glyph is drawn at. Lucide is drawn on a 24-unit grid,
+     so below 14px the strokes vanish; every glyph is at least sm, and buttons always use md. */
+  --icon-sm: 14px;   /* inline in 12–13px text: chevrons, chips, status marks */
+  --icon-md: 18px;   /* every button and toolbar icon, sidebar items, row actions */
+  --icon-lg: 22px;   /* empty states, large marks */
+  --icon-stroke: 1.75;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {

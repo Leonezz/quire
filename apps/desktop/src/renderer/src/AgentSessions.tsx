@@ -39,7 +39,7 @@ export function SessionsMenu({ sessions, currentId, onOpen, onDelete }: { sessio
   return (
     <>
       <DialogTrigger isOpen={open} onOpenChange={setOpen}>
-        <Button variant="quiet" size="sm" aria-label={`Conversations (${sessions.length})`} className="size-7 min-w-0 shrink-0 px-0"><History className="size-3.5" /></Button>
+        <Button variant="quiet" size="sm" aria-label={`Conversations (${sessions.length})`} className="shrink-0"><History /></Button>
         <Popover aria-label="Conversations" placement="bottom end" className="w-[300px] p-2">
           {sessions.length === 0 ? <p className="m-0 px-2 py-1.5 text-[12.5px] text-label-3">No conversations yet.</p> : null}
           <ul className="m-0 grid max-h-[320px] list-none gap-px overflow-y-auto p-0">
@@ -50,7 +50,7 @@ export function SessionsMenu({ sessions, currentId, onOpen, onDelete }: { sessio
                   <span className="block truncate text-[13px] font-medium text-label">{session.title}</span>
                   <span className="block truncate text-[11.5px] text-label-3">{sessionMeta(session)}</span>
                 </button>
-                <Button variant="quiet" size="sm" aria-label={`Delete “${session.title}”`} className="mr-1 size-6 min-w-0 shrink-0 px-0 text-label-3" onPress={() => { setOpen(false); setDeleting(session); }}><X className="size-3.5" /></Button>
+                <Button variant="quiet" size="sm" aria-label={`Delete “${session.title}”`} className="mr-1 shrink-0 text-label-3" onPress={() => { setOpen(false); setDeleting(session); }}><X /></Button>
               </li>
             ))}
           </ul>

@@ -1,6 +1,7 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { Annotation } from "../../shared/contracts";
+import { isMaterialViewId } from "./material-views";
 
 const MAX_PER_MATERIAL = 2_000;
 const MAX_TEXT = 20_000;
@@ -20,9 +21,10 @@ export class AnnotationStore {
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return []; throw error; }
   }
 
-  /** Inserts or replaces by id; timestamps are set here so the renderer cannot backdate. */
+  /** Inserts or replaces by id; timestamps are set here so the renderer cannot backdate. `view` names the rendering the locator belongs to. */
   async save(input: Annotation): Promise<Annotation> {
     if (!validId(input.materialId) || !validId(input.id)) throw new Error("ANNOTATION_INVALID_ID");
+    if (input.view !== undefined && !isMaterialViewId(input.view)) throw new Error("ANNOTATION_INVALID_VIEW");
     if (typeof input.locator !== "string" || input.locator.length === 0 || input.locator.length > MAX_TEXT) throw new Error("ANNOTATION_INVALID_LOCATOR");
     if (typeof input.quote !== "string" || input.quote.length > MAX_TEXT || (input.note ?? "").length > MAX_TEXT) throw new Error("ANNOTATION_INVALID_TEXT");
     const existing = await this.list(input.materialId);

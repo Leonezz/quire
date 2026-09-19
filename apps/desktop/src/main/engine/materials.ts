@@ -2,23 +2,20 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { gunzipSync } from "node:zlib";
 import { join } from "node:path";
-import { createMarkdownRepresentations, normalizeArticleCapture, type ContentMaterialization } from "@read/normalize";
-import type { CorpusImportResult, MaterialMeta, MaterialRecord, MaterialSummary, OpenFileInput, OpenUrlResult } from "../../shared/contracts";
+import { normalizeArticleCapture } from "@read/normalize";
+import type { CorpusImportResult, MaterialMeta, MaterialRecord, MaterialSummary, MaterialView, MaterialViewContent, MaterialViewId, OpenFileInput, OpenUrlResult } from "../../shared/contracts";
 import { bibtexOf } from "../../shared/bibtex";
 import { captureTextOf } from "./capture-text";
 import { FetchError, assertPublicHttpUrl, fetchPage, type Fetcher } from "./fetch";
-import { degradedQuality, looksLikePdf, mediaTypeForName, titleFromHtml } from "./material-content";
-import { effectiveOf, searchFieldsOf, summaryOf, type StoredRecord } from "./material-record";
-import { extractMetadata } from "./metadata";
+import { NORMALIZE_BUDGET, degradedQuality, isHtml, isPdf, markdownParts, mediaTypeForName, pdfContent, pickRepresentations, titleFromHtml, withoutTitleHeading } from "./material-content";
+import { effectiveOf, searchFieldsOf, summaryOf, withExtracted, type StoredRecord } from "./material-record";
+import { failedView, mediaTypeFitsView, primaryContentOf, primaryPdfPath, primaryViewOf, readViewContent, readyView, swapPrimaryFiles, upsertView, viewFilePaths, viewPdfPath, viewsOf, withContent, withPrimaryView, writeViewContent } from "./material-views";
 import { PdfError, inspectPdf } from "./pdf";
 import type { MetaStore } from "./meta";
 import { readingMinutes } from "./reading-time";
 
 export type { StoredRecord } from "./material-record";
-export { imageUrlsOf } from "./material-content";
-
-const BUDGET = { maxBytes: 8 * 1024 * 1024, maxDepth: 100, maxNodes: 100_000, maxOutputBytes: 8 * 1024 * 1024 };
-const MINUTES_PER_PDF_PAGE = 2.5;
+export { imageUrlsOf, withoutTitleHeading } from "./material-content";
 
 function sha256(bytes: Uint8Array): `sha256:${string}` {
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
@@ -35,35 +32,6 @@ export interface MaterialStoreOptions {
   keepCapture?: () => boolean;
 }
 
-function pick(materialization: ContentMaterialization) {
-  const by = (schema: string) => materialization.representations.find((r) => r.schema === schema)?.content;
-  const v2 = by("reader.document.v2");
-  const v1 = by("reader.document.v1");
-  const reader = v2 ? { schema: "reader.document.v2" as const, payload: v2 } : v1 ? { schema: "reader.document.v1" as const, payload: v1 } : undefined;
-  return { reader, markdown: by("agent.gfm.v1"), plain: by("selection.text.v1") };
-}
-
-/** Reader representations, markdown and quality for Markdown content; shared by files, feeds and agent artifacts. */
-function markdownParts(content: string, baseUri: string): Pick<StoredRecord, "reader" | "markdown" | "readingMinutes" | "quality" | "problems"> {
-  const { representations } = createMarkdownRepresentations({ baseUri, content, maxDepth: BUDGET.maxDepth, maxNodes: BUDGET.maxNodes, maxOutputBytes: BUDGET.maxOutputBytes, outputBudgetErrorCode: "MARKDOWN_TOO_LARGE" });
-  const by = (schema: string) => representations.find((r) => r.schema === schema)?.content;
-  const v2 = by("reader.document.v2"); const v1 = by("reader.document.v1");
-  return {
-    ...(v2 ? { reader: { schema: "reader.document.v2" as const, payload: v2 } } : v1 ? { reader: { schema: "reader.document.v1" as const, payload: v1 } } : {}),
-    markdown: content, readingMinutes: readingMinutes(content),
-    quality: { completeness: "declared_full", conformance: "conformant", identityConfidence: "derived", safety: "safe", warnings: [] },
-    problems: [],
-  };
-}
-
-/** The reader prints the title itself, so a leading "# Title" line that repeats it would show twice. */
-export function withoutTitleHeading(markdown: string, title: string): string {
-  const match = /^\s*#\s+(.+?)\s*\n/.exec(markdown);
-  if (!match) return markdown;
-  const same = (text: string) => text.replace(/\s+/g, " ").trim().toLowerCase();
-  return same(match[1] ?? "") === same(title) ? markdown.slice(match[0].length).replace(/^\s*\n/, "") : markdown;
-}
-
 export interface FeedMaterialInput {
   url: string;
   title: string;
@@ -76,29 +44,12 @@ export interface FeedMaterialInput {
 }
 
 const ID = /^[a-f0-9]{16}$/;
+/** Records only: <id>.json, never a view's <id>.<view>.json beside it. */
+const RECORD_FILE = /^[a-f0-9]{16}\.json$/;
 
-function isHtml(mediaType: string): boolean {
-  return mediaType === "text/html" || mediaType === "application/xhtml+xml";
-}
-
-type Fallback = Parameters<typeof extractMetadata>[0]["fallback"];
-
-/** The extracted layer of a record from the extractor's own fields, the page (when HTML) and the item it came from. */
-function extractedFor(record: Pick<StoredRecord, "finalUrl" | "mediaType" | "origin" | "fetchedAt" | "itemMeta">, fallback: Fallback, html?: Uint8Array): MaterialMeta {
-  return extractMetadata({
-    ...(html && isHtml(record.mediaType) ? { html } : {}),
-    url: record.finalUrl, mediaType: record.mediaType, origin: record.origin, fetchedAt: record.fetchedAt, fallback,
-    ...(record.itemMeta ? { item: record.itemMeta } : {}),
-  });
-}
-
-function fallbackOf(record: Pick<StoredRecord, "title" | "byline" | "publishedAt" | "lang">): Fallback {
-  return { title: record.title, ...(record.byline ? { byline: record.byline } : {}), ...(record.publishedAt ? { publishedAt: record.publishedAt } : {}), ...(record.lang ? { lang: record.lang } : {}) };
-}
-
-/** A record with its extracted layer computed from its own fields (and the page bytes when it is HTML). */
-function withExtracted(record: StoredRecord, html?: Uint8Array): StoredRecord {
-  return { ...record, extracted: extractedFor(record, fallbackOf(record), html) };
+function failureOf(error: unknown, fallback: string): { ok: false; code: string; message: string } {
+  if (error instanceof FetchError || error instanceof PdfError) return { ok: false, code: error.code, message: error.message };
+  return { ok: false, code: "NORMALIZE_FAILED", message: error instanceof Error ? error.message : fallback };
 }
 
 /** Materials on disk: one JSON per material, an index for lists. Sources, items and events live in SQLite (db.ts). */
@@ -119,11 +70,9 @@ export class MaterialStore {
       const url = assertPublicHttpUrl(raw);
       const page = await this.fetch(url);
       const record = await this.materializeAny(page.bytes, page.mediaType, page.finalUrl, raw, origin, idFor(page.finalUrl), item);
-      await this.save(record);
-      return { ok: true, material: this.decorate(record) };
+      return { ok: true, material: this.decorate(await this.save(record)) };
     } catch (error) {
-      if (error instanceof FetchError || error instanceof PdfError) return { ok: false, code: error.code, message: error.message };
-      return { ok: false, code: "NORMALIZE_FAILED", message: error instanceof Error ? error.message : "Could not read this page." };
+      return failureOf(error, "Could not read this page.");
     }
   }
 
@@ -135,17 +84,15 @@ export class MaterialStore {
       // The article extractor only resolves http(s) bases; a synthetic origin keeps relative links well-formed.
       const locator = `https://file.local/${encodeURIComponent(name)}`;
       const record = await this.materializeAny(input.bytes, mediaType, locator, `file:///${encodeURIComponent(name)}`, "file", sha256(input.bytes).slice(7, 23));
-      await this.save(record);
-      return { ok: true, material: this.decorate(record) };
+      return { ok: true, material: this.decorate(await this.save(record)) };
     } catch (error) {
-      if (error instanceof FetchError || error instanceof PdfError) return { ok: false, code: error.code, message: error.message };
-      return { ok: false, code: "NORMALIZE_FAILED", message: error instanceof Error ? error.message : "Could not read this file." };
+      return failureOf(error, "Could not read this file.");
     }
   }
 
   /** PDFs keep their bytes on disk next to the record; pages keep their capture when the setting says so; everything else is materialized synchronously. */
   private async materializeAny(bytes: Uint8Array, mediaType: string, finalUrl: string, requestedUrl: string, origin: StoredRecord["origin"] = "web", id = idFor(finalUrl), item?: MaterialMeta): Promise<StoredRecord> {
-    if (mediaType !== "application/pdf" && !(mediaType === "application/octet-stream" && looksLikePdf(bytes))) {
+    if (!isPdf(bytes, mediaType)) {
       const record = withExtracted({ ...this.materialize(bytes, mediaType, finalUrl, requestedUrl, origin, id), ...(item ? { itemMeta: item } : {}) }, bytes);
       if (!isHtml(mediaType)) return record;
       if (!this.keepCapture()) { await rm(this.htmlPath(id), { force: true }); return record; }
@@ -158,15 +105,11 @@ export class MaterialStore {
     await writeFile(this.pdfPath(id), bytes);
     const fileName = decodeURIComponent(new URL(finalUrl).pathname.split("/").pop() ?? "").replace(/\.pdf$/i, "");
     return withExtracted({
-      id, url: requestedUrl, finalUrl, mediaType: "application/pdf", fetchedAt: new Date().toISOString(), origin,
+      id, url: requestedUrl, finalUrl, fetchedAt: new Date().toISOString(), origin,
       title: inspection.title ?? fileName ?? new URL(finalUrl).hostname,
       ...(inspection.author ? { byline: inspection.author } : {}),
-      ...(inspection.sampleText ? { plain: inspection.sampleText } : {}),
       ...(item ? { itemMeta: item } : {}),
-      readingMinutes: Math.max(1, Math.round(inspection.pages * MINUTES_PER_PDF_PAGE)),
-      pdf: { pages: inspection.pages, byteLength: bytes.byteLength, textLayer: inspection.textLayer },
-      quality: { completeness: "declared_full", conformance: "conformant", identityConfidence: origin === "file" ? "derived" : "strong", safety: "safe", warnings: [] },
-      problems: [],
+      ...pdfContent(inspection, bytes.byteLength, origin),
     });
   }
 
@@ -174,13 +117,13 @@ export class MaterialStore {
     const fetchedAt = new Date().toISOString();
     const base = { id, url: requestedUrl, finalUrl, mediaType, fetchedAt, origin };
     if (isHtml(mediaType)) {
-      const outcome = normalizeArticleCapture({ budget: BUDGET, capture: { baseLocator: finalUrl, bytes, contentIdentity: sha256(bytes), mediaType } });
+      const outcome = normalizeArticleCapture({ budget: NORMALIZE_BUDGET, capture: { baseLocator: finalUrl, bytes, contentIdentity: sha256(bytes), mediaType } });
       if (!outcome.ok) {
         const plain = outcome.fallbackText ?? "";
         return { ...base, title: new URL(finalUrl).hostname, plain, readingMinutes: readingMinutes(plain), quality: degradedQuality(outcome.problems), problems: outcome.problems };
       }
       const { article } = outcome;
-      const parts = pick(article.materialization);
+      const parts = pickRepresentations(article.materialization);
       return {
         ...base,
         title: article.title.trim() || titleFromHtml(bytes) || new URL(finalUrl).hostname,
@@ -188,9 +131,7 @@ export class MaterialStore {
         ...(article.publishedAt ? { publishedAt: article.publishedAt } : {}),
         ...(article.lang ? { lang: article.lang } : {}),
         ...(article.dir ? { dir: article.dir } : {}),
-        ...(parts.reader ? { reader: parts.reader } : {}),
-        ...(parts.markdown ? { markdown: parts.markdown } : {}),
-        ...(parts.plain ? { plain: parts.plain } : {}),
+        ...parts,
         readingMinutes: readingMinutes(parts.plain ?? parts.markdown ?? ""),
         quality: article.materialization.quality,
         problems: outcome.problems,
@@ -220,18 +161,14 @@ export class MaterialStore {
     const id = createHash("sha256").update(`${title}\n${fetchedAt}`).digest("hex").slice(0, 16);
     const url = `quire://artifact/${id}`;
     const record = withExtracted({ id, url, finalUrl: url, mediaType: "text/markdown", fetchedAt, origin: "agent", lineage, title, ...markdownParts(withoutTitleHeading(input.markdown, title), url) });
-    await this.save(record);
-    return this.decorate(record);
+    return this.decorate(await this.save(record));
   }
 
   /** Re-runs extraction on the stored capture (or the record's own fields) and replaces the extracted layer; overrides stay. */
   async refreshMetadata(id: string): Promise<MaterialRecord> {
-    const record = await this.read(id);
-    if (!record) throw new Error(`Material ${id} is not in the library.`);
+    const record = await this.require(id);
     const html = isHtml(record.mediaType) ? await this.readOptional(this.htmlPath(id)) : undefined;
-    const next = withExtracted(record, html);
-    await this.save(next);
-    return this.decorate(next);
+    return this.decorate(await this.save(withExtracted(record, html)));
   }
 
   /** BibTeX entries for the given materials, in the given order, separated by blank lines; unknown ids are skipped. */
@@ -251,18 +188,81 @@ export class MaterialStore {
 
   /** The agent rebuilt this material into a cleaner artifact; the Library offers the artifact in its place. */
   async setRebuiltAs(id: string, artifactId: string): Promise<MaterialRecord> {
-    const record = await this.read(id);
-    if (!record) throw new Error(`Material ${id} is not in the library.`);
+    const record = await this.require(id);
     const artifact = await this.read(artifactId);
     if (!artifact || artifact.origin !== "agent") throw new Error(`Artifact ${artifactId} is not in the library.`);
-    const next = { ...record, rebuiltAs: artifactId };
-    await this.save(next);
-    return this.decorate(next);
+    return this.decorate(await this.save({ ...record, rebuiltAs: artifactId }));
   }
 
-  private async save(record: StoredRecord) {
+  // --- Views: the record is the primary rendering; the others are stored beside it (material-views.ts). ---
+
+  /** Lists another rendering on the record (available for a later fetch, or failed with its reason); the primary view cannot be replaced. */
+  async registerView(id: string, view: MaterialView): Promise<MaterialRecord> {
+    const record = await this.require(id);
+    if (view.id === primaryViewOf(record) || view.status === "ready") throw new Error(`View ${view.id} of ${id} cannot be registered: it is the primary view or claims to be stored.`);
+    return this.decorate(await this.save({ ...record, views: upsertView(viewsOf(record), view) }));
+  }
+
+  /** Fetches a listed view and stores it beside the record; the view is marked ready, or failed with the message (never silently). */
+  async fetchView(id: string, viewId: MaterialViewId): Promise<OpenUrlResult> {
+    const record = await this.read(id);
+    if (!record) return { ok: false, code: "MATERIAL_NOT_FOUND", message: `Material ${id} is not in the library.` };
+    const view = viewsOf(record).find((entry) => entry.id === viewId);
+    if (!view) return { ok: false, code: "VIEW_UNKNOWN", message: `This material has no ${viewId} view.` };
+    if (view.status === "ready") return { ok: false, code: "VIEW_ALREADY_STORED", message: `The ${view.label} view is stored already.` };
+    try {
+      const page = await this.fetch(assertPublicHttpUrl(view.url));
+      const content = await this.materializeView(page.bytes, page.mediaType, page.finalUrl, id, viewId, record.origin);
+      const next = { ...record, views: upsertView(viewsOf(record), readyView(view, content, page.bytes.byteLength)) };
+      return { ok: true, material: this.decorate(await this.save(next)) };
+    } catch (error) {
+      const failure = failureOf(error, `Could not read the ${view.label} view.`);
+      await this.save({ ...record, views: upsertView(viewsOf(record), failedView(view, failure.message)) });
+      return failure;
+    }
+  }
+
+  /** A view's content in the shape the readers take: a PDF's inspection with its bytes stored, or a page through the article pipeline. */
+  private async materializeView(bytes: Uint8Array, mediaType: string, finalUrl: string, id: string, view: MaterialViewId, origin: StoredRecord["origin"]): Promise<MaterialViewContent> {
+    const pdf = isPdf(bytes, mediaType);
+    if (!mediaTypeFitsView(view, pdf ? "application/pdf" : mediaType)) throw new FetchError("VIEW_TYPE_MISMATCH", `The ${view} view answered ${mediaType}.`);
     await mkdir(this.dir, { recursive: true });
-    await writeFile(join(this.dir, `${record.id}.json`), JSON.stringify(record), "utf8");
+    if (pdf) {
+      const content = { view, ...pdfContent(await inspectPdf(bytes), bytes.byteLength, origin) };
+      await writeViewContent(this.dir, id, content, bytes);
+      return content;
+    }
+    const content = { ...primaryContentOf(this.materialize(bytes, mediaType, finalUrl, finalUrl, origin, id)), view };
+    await writeViewContent(this.dir, id, content);
+    return content;
+  }
+
+  /** Content of a stored view; the primary view's is assembled from the record. Undefined when nothing is stored. */
+  async getView(id: string, view: MaterialViewId): Promise<MaterialViewContent | undefined> {
+    const record = await this.read(id);
+    if (!record) return undefined;
+    if (view === primaryViewOf(record)) return primaryContentOf(record);
+    return readViewContent(this.dir, id, view);
+  }
+
+  /** Makes a stored view the one the reader opens first: the record takes its content, the old primary becomes a stored view. */
+  async setPrimaryView(id: string, view: MaterialViewId): Promise<MaterialRecord> {
+    const record = withPrimaryView(await this.require(id));
+    if (view === primaryViewOf(record)) return this.decorate(record);
+    const entry = viewsOf(record).find((candidate) => candidate.id === view);
+    if (!entry || entry.status !== "ready") throw new Error(`The ${view} view of ${id} is not stored; fetch it first.`);
+    const incoming = await readViewContent(this.dir, id, view);
+    if (!incoming) throw new Error(`The ${view} view of ${id} is listed as stored but its file is missing.`);
+    await swapPrimaryFiles(this.dir, id, primaryContentOf(record), incoming);
+    return this.decorate(await this.save(withContent(record, incoming)));
+  }
+
+  /** Writes the record with its views made explicit, and returns what was written. */
+  private async save(record: StoredRecord): Promise<StoredRecord> {
+    const stored = withPrimaryView(record);
+    await mkdir(this.dir, { recursive: true });
+    await writeFile(join(this.dir, `${stored.id}.json`), JSON.stringify(stored), "utf8");
+    return stored;
   }
 
   private decorate(record: StoredRecord): MaterialRecord {
@@ -288,8 +288,7 @@ export class MaterialStore {
       quality: { completeness: "declared_full", conformance: "conformant", identityConfidence: "medium", safety: "safe", warnings: [] },
       problems: [{ code: "FEED_CONTENT_FALLBACK", recoverBy: "reopen", scope: "capture", severity: "warning" }],
     });
-    await this.save(record);
-    return this.decorate(record);
+    return this.decorate(await this.save(record));
   }
 
   /** Materializes every eval snapshot (corpus/<slug>/page.html.gz + meta.json) that is not in the library yet. */
@@ -313,7 +312,7 @@ export class MaterialStore {
     return result;
   }
 
-  private pdfPath(id: string) { return join(this.dir, `${id}.pdf`); }
+  private pdfPath(id: string) { return primaryPdfPath(this.dir, id); }
   private htmlPath(id: string) { return join(this.dir, `${id}.html`); }
 
   private async readOptional(path: string): Promise<Uint8Array | undefined> {
@@ -321,10 +320,13 @@ export class MaterialStore {
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
   }
 
-  /** Bytes of a stored PDF. Undefined when the id is unknown or the material is not a PDF. */
-  async bytes(id: string): Promise<Uint8Array | undefined> {
+  /** Bytes of a stored PDF: the primary one, or a view's. Undefined when the id is unknown or nothing is stored for it. */
+  async bytes(id: string, view?: MaterialViewId): Promise<Uint8Array | undefined> {
     if (!ID.test(id)) return undefined;
-    return this.readOptional(this.pdfPath(id));
+    if (view === undefined) return this.readOptional(this.pdfPath(id));
+    const record = await this.read(id);
+    if (!record) return undefined;
+    return this.readOptional(view === primaryViewOf(record) ? this.pdfPath(id) : viewPdfPath(this.dir, id, view));
   }
 
   /** The captured page as readable text with its block structure; undefined when nothing was captured. */
@@ -334,14 +336,15 @@ export class MaterialStore {
     return bytes ? captureTextOf(new TextDecoder("utf-8", { fatal: false }).decode(bytes)) : undefined;
   }
 
-  /** Removes the records and the bytes next to them, and the overrides; returns how many records existed. */
+  /** Removes the records, the bytes and view files next to them, and the overrides; returns how many records existed. */
   async delete(ids: readonly string[]): Promise<number> {
     const invalid = ids.find((id) => !ID.test(id));
     if (invalid !== undefined) throw new Error(`Not a material id: ${invalid}`);
     let deleted = 0;
     for (const id of ids) {
       if (await this.read(id)) deleted += 1;
-      await Promise.all([this.pdfPath(id), this.htmlPath(id), join(this.dir, `${id}.json`)].map((path) => rm(path, { force: true })));
+      const paths = [this.pdfPath(id), this.htmlPath(id), join(this.dir, `${id}.json`), ...viewFilePaths(this.dir, id)];
+      await Promise.all(paths.map((path) => rm(path, { force: true })));
       this.meta?.remove(id);
     }
     return deleted;
@@ -351,6 +354,12 @@ export class MaterialStore {
     if (!ID.test(id)) return undefined;
     const bytes = await this.readOptional(join(this.dir, `${id}.json`));
     return bytes ? (JSON.parse(new TextDecoder().decode(bytes)) as StoredRecord) : undefined;
+  }
+
+  private async require(id: string): Promise<StoredRecord> {
+    const record = await this.read(id);
+    if (!record) throw new Error(`Material ${id} is not in the library.`);
+    return record;
   }
 
   async get(id: string): Promise<MaterialRecord | undefined> {
@@ -363,7 +372,7 @@ export class MaterialStore {
     const words = query.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 8);
     if (words.length === 0) return [];
     await mkdir(this.dir, { recursive: true });
-    const files = (await readdir(this.dir)).filter((name) => name.endsWith(".json"));
+    const files = (await readdir(this.dir)).filter((name) => RECORD_FILE.test(name));
     const metas = this.meta?.all() ?? new Map<string, MaterialMeta>();
     const hits: MaterialSummary[] = [];
     for (const name of files) {
@@ -377,7 +386,7 @@ export class MaterialStore {
 
   async list(): Promise<MaterialSummary[]> {
     await mkdir(this.dir, { recursive: true });
-    const files = (await readdir(this.dir)).filter((name) => name.endsWith(".json"));
+    const files = (await readdir(this.dir)).filter((name) => RECORD_FILE.test(name));
     const records = await Promise.all(files.map(async (name) => JSON.parse(await readFile(join(this.dir, name), "utf8")) as StoredRecord));
     const metas = this.meta?.all() ?? new Map<string, MaterialMeta>();
     return records

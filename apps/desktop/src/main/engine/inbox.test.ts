@@ -44,6 +44,8 @@ describe("readItem", () => {
     expect(result.material).toMatchObject({ mediaType: "application/pdf", origin: "feed" });
     // The PDF's Info title wins; the Atom entry supplies the authors, abstract and category the PDF cannot.
     expect(result.material).toMatchObject({ kind: "preprint", title: "Attention is not all you need", byline: "Mara Lindqvist, Tomasz Nowak", publishedAt: "2026-09-17T17:59:12.000Z", meta: { arxivId: "2409.12345", publication: "arXiv", abstract: "From the Atom feed.", extra: "arXiv: 2409.12345 [cs.CL]" } });
+    // The PDF is the primary view; the HTML rendering arXiv has not produced yet stays listed for a later fetch.
+    expect(result.material).toMatchObject({ primaryView: "pdf", readyViews: ["pdf"], views: [{ id: "pdf", status: "ready", pdf: { pages: 2 } }, { id: "web", label: "Web page", url: "https://arxiv.org/html/2409.12345", mediaType: "text/html", status: "available" }] });
     expect(items.get(item.id)).toMatchObject({ materialId: result.material.id });
     expect(items.get(item.id)?.openedAt).toBeDefined();
     expect(events.list("opened").map((e) => e.ref)).toEqual([item.id]);
@@ -55,6 +57,37 @@ describe("readItem", () => {
     expect(fetch.calls).toHaveLength(2);
     expect(materialized).toBe(1);
     expect(events.list("opened")).toHaveLength(2);
+  });
+
+  it("reads the arXiv HTML rendering as the primary view and lists the PDF as available", async () => {
+    const fetch = fetcherOf(async (url) => {
+      if (url.pathname.startsWith("/pdf/")) throw new Error("the PDF must not be fetched on Read");
+      return { bytes: html("Paper"), mediaType: "text/html", finalUrl: url.toString() };
+    });
+    const store = new MaterialStore(root, fetch);
+    const items = new ItemStore(db);
+    items.upsert({ id: "arxiv", title: "arXiv cs.CL", kind: "arxiv" }, [{ externalId: "2409.12345", title: "Paper", link: "https://arxiv.org/abs/2409.12345", publishedAt: "2026-09-17T00:00:00.000Z", gist: "", readingMinutes: 20, signals: { math: true }, summaryOnly: false }]);
+    const result = await readItem(items.inbox()[0]!.id, { items, events: new EventStore(db), store, warn: () => { throw new Error("no warning expected"); } });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(fetch.calls).toEqual(["https://arxiv.org/html/2409.12345"]);
+    expect(result.material).toMatchObject({ mediaType: "text/html", primaryView: "web", readyViews: ["web"], views: [{ id: "web", status: "ready" }, { id: "pdf", label: "PDF", url: "https://arxiv.org/pdf/2409.12345", mediaType: "application/pdf", status: "available" }] });
+    expect(await store.get(result.material.id)).toMatchObject({ views: [{ id: "web" }, { id: "pdf", status: "available" }] });
+  });
+
+  it("keeps the HTML failure on the web view when arXiv broke for a reason other than a missing rendering", async () => {
+    const pdf = new Uint8Array(await readFile(join(__dirname, "__fixtures__", "two-pages.pdf")));
+    const fetch = fetcherOf(async (url) => {
+      if (url.pathname.startsWith("/html/")) throw new FetchError("HTTP_503", "The page answered 503.");
+      return { bytes: pdf, mediaType: "application/pdf", finalUrl: url.toString() };
+    });
+    const store = new MaterialStore(root, fetch);
+    const items = new ItemStore(db);
+    items.upsert({ id: "arxiv", title: "arXiv cs.CL", kind: "arxiv" }, [{ externalId: "2409.12345", title: "Paper", link: "https://arxiv.org/abs/2409.12345", publishedAt: "2026-09-17T00:00:00.000Z", gist: "", readingMinutes: 20, signals: { math: true }, summaryOnly: false }]);
+    const result = await keepItem(items.inbox()[0]!.id, { items, events: new EventStore(db), store, warn: () => {} });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.material).toMatchObject({ primaryView: "pdf", readyViews: ["pdf"], views: [{ id: "pdf", status: "ready" }, { id: "web", status: "failed", error: "The page answered 503." }] });
   });
 
   it("reports both failures when neither arXiv rendering can be read", async () => {

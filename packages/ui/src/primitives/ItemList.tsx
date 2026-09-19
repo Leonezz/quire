@@ -1,5 +1,6 @@
 import { Button, Collection, GridList, GridListHeader, GridListItem, GridListSection, composeRenderProps, type GridListItemProps, type GridListProps, type GridListSectionProps } from "react-aria-components";
 import { Bookmark, GripVertical } from "lucide-react";
+import { Icon } from "./Icon";
 import { cx } from "../cx";
 
 /**
@@ -81,7 +82,7 @@ export function ItemRow({ title, source, time, gist, minutes, signals = [], stat
       {({ allowsDragging }) => (<>
       {allowsDragging ? (
         // The keyboard path for reordering: → from the row focuses the grip; Enter lifts, ↑/↓ move, Enter drops, Esc cancels.
-        <Button slot="drag" aria-label={`Drag ${title}`} className="absolute right-1.5 top-1/2 grid size-6 -translate-y-1/2 cursor-grab place-items-center rounded-control text-label-3 opacity-0 outline-none transition-opacity duration-100 group-data-[hovered]:opacity-100 group-data-[focus-visible]:opacity-100 data-[focus-visible]:opacity-100 data-[focus-visible]:ring-[3px] data-[focus-visible]:ring-accent-ring [&>svg]:size-[15px]"><GripVertical /></Button>
+        <Button slot="drag" aria-label={`Drag ${title}`} className="absolute right-1.5 top-1/2 grid size-7 -translate-y-1/2 cursor-grab place-items-center rounded-control text-label-3 opacity-0 outline-none transition-opacity duration-100 group-data-[hovered]:opacity-100 group-data-[focus-visible]:opacity-100 data-[focus-visible]:opacity-100 data-[focus-visible]:ring-[3px] data-[focus-visible]:ring-accent-ring [&>svg:not(.icon)]:size-icon-md"><GripVertical /></Button>
       ) : null}
       {health ? (
         <span role="img" aria-label={healthLabel[health]} className={cx("mt-[7px] block size-[7px] rounded-full", health === "ok" && "bg-green", health === "paused" && "bg-orange", health === "failing" && "bg-red")} />
@@ -97,7 +98,7 @@ export function ItemRow({ title, source, time, gist, minutes, signals = [], stat
           <span className={cx("min-w-0 flex-1 truncate text-[14.5px] leading-5 tracking-[-.01em]", state === "read" ? "font-medium text-label-2" : "font-semibold text-label")}>{title}</span>
           {tag ? <span className={cx("whitespace-nowrap rounded-pill px-[7px] py-px text-[10.5px] font-medium leading-[14px]", tag === "summary" ? "bg-fill text-label-2" : tag === "rebuilt" ? "bg-accent-soft text-accent-text" : "bg-purple-soft text-purple-text")}>{tagLabel[tag]}</span> : null}
           {time ? <span className="whitespace-nowrap text-[11.5px] tabular-nums text-label-3">{time}</span> : null}
-          {kept ? <Bookmark role="img" aria-label="kept" className="size-3 shrink-0 self-center fill-current text-label-3" /> : null}
+          {kept ? <Icon of={Bookmark} size="sm" label="kept" className="self-center fill-current text-label-3" /> : null}
         </div>
         <div className="flex min-w-0 items-center gap-1.5 text-[12.5px] leading-[17px] text-label-2">
           <span className="min-w-0 truncate">{source}</span>

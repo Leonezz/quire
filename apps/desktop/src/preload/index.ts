@@ -15,7 +15,7 @@ const api: ReadApi = {
   openUrl: (url) => ipcRenderer.invoke("material:openUrl", url),
   openFile: (input) => ipcRenderer.invoke("material:openFile", input),
   getMaterial: (id) => ipcRenderer.invoke("material:get", id),
-  getMaterialBytes: (id) => ipcRenderer.invoke("material:bytes", id),
+  getMaterialBytes: (id, view) => ipcRenderer.invoke("material:bytes", id, view),
   resolveImage: (url) => ipcRenderer.invoke("image:resolve", url),
   listAnnotations: (materialId) => ipcRenderer.invoke("annotation:list", materialId),
   saveAnnotation: (annotation) => ipcRenderer.invoke("annotation:save", annotation),
@@ -78,5 +78,9 @@ const api: ReadApi = {
     ipcRenderer.on("agent:sessions:changed", handler);
     return () => ipcRenderer.removeListener("agent:sessions:changed", handler);
   },
+  // Views: one material, several renderings.
+  fetchMaterialView: (id, view) => ipcRenderer.invoke("material:fetchView", id, view),
+  getMaterialView: (id, view) => ipcRenderer.invoke("material:getView", id, view),
+  setPrimaryView: (id, view) => ipcRenderer.invoke("material:setPrimaryView", id, view),
 };
 contextBridge.exposeInMainWorld("read", api);

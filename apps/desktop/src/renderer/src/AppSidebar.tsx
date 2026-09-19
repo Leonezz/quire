@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from "react";
 import { BookOpen, FileText, Inbox as InboxIcon, ListOrdered, PanelLeft, Settings as SettingsIcon, Sparkles, Tag } from "lucide-react";
-import { Button, Popover, Sidebar, SidebarItem, SidebarSection, ToolbarButton, type SidebarHealth } from "@read/ui";
+import { Button, Icon, Popover, Sidebar, SidebarItem, SidebarSection, ToolbarButton, type SidebarHealth } from "@read/ui";
 import type { ItemRecord, SourceRecord, TagCount } from "../../shared/contracts";
 import { sourceHealth } from "./format";
 import { CUT_LABELS, LIBRARY_CUTS, scopeKey, scopeOfKey, type Scope } from "./useScope";
@@ -73,7 +73,7 @@ export function AppSidebar({ width, scope, onScope, inbox, queueCount, conversat
         </SidebarSection>
       </Sidebar>
       <div className="px-2.5 pb-2.5 pt-1">
-        <Button variant="quiet" size="sm" className="w-full justify-start gap-2 px-2.5 text-[13px] font-medium text-label" onPress={onOpenSettings}><SettingsIcon className="size-4 text-label-2" />Settings</Button>
+        <Button variant="quiet" size="sm" className="w-full justify-start gap-2 px-2.5 text-[13px] font-medium text-label" onPress={onOpenSettings}><Icon of={SettingsIcon} size="md" className="text-label-2" />Settings</Button>
       </div>
       <Popover triggerRef={allTagsRef} isOpen={tagsOpen} onOpenChange={setTagsOpen} placement="right top" aria-label="All tags" className="max-h-[420px] w-[240px] overflow-auto p-1.5">
         <ul className="m-0 grid list-none gap-px p-0">

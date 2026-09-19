@@ -1,4 +1,4 @@
-import type { Annotation, MaterialRecord, MaterialSummary, OpenUrlResult, ReadApi } from "../../shared/contracts";
+import type { Annotation, MaterialRecord, MaterialSummary, MaterialViewContent, OpenUrlResult, ReadApi } from "../../shared/contracts";
 import sample from "./dev/sample-material.json";
 import samplePdf from "./dev/sample-pdf.json";
 import samplePlain from "./dev/sample-plaintext.json";
@@ -17,8 +17,8 @@ const samplePdfMaterial = samplePdf as unknown as MaterialRecord;
 // A page the extractor could not read: plain text with a capture, so the rebuild flow has something to rebuild.
 const samplePlainMaterial = samplePlain as unknown as MaterialRecord;
 const samples = [sampleMaterial, samplePdfMaterial, samplePlainMaterial];
-function summaryOf({ id, url, title, byline, publishedAt, fetchedAt, readingMinutes, origin, mediaType, quality, lineage, tags, kind, rebuiltAs }: MaterialRecord): MaterialSummary {
-  return { id, url, title, fetchedAt, readingMinutes, origin, mediaType, quality, tags: tags ?? [], kind: kind ?? kindOfRecord({ origin, mediaType, url }), ...(byline ? { byline } : {}), ...(publishedAt ? { publishedAt } : {}), ...(lineage ? { lineage } : {}), ...(rebuiltAs ? { rebuiltAs } : {}) };
+function summaryOf({ id, url, title, byline, publishedAt, fetchedAt, readingMinutes, origin, mediaType, quality, lineage, tags, kind, rebuiltAs, readyViews }: MaterialRecord): MaterialSummary {
+  return { id, url, title, fetchedAt, readingMinutes, origin, mediaType, quality, tags: tags ?? [], kind: kind ?? kindOfRecord({ origin, mediaType, url }), readyViews, ...(byline ? { byline } : {}), ...(publishedAt ? { publishedAt } : {}), ...(lineage ? { lineage } : {}), ...(rebuiltAs ? { rebuiltAs } : {}) };
 }
 const unavailable: OpenUrlResult = { ok: false, code: "PREVIEW_MODE", message: "The engine is not available in the browser preview. Run the desktop app to add material." };
 
@@ -29,8 +29,9 @@ async function corpusIndex(): Promise<MaterialSummary[]> {
   // The Vite dev server answers unknown paths with index.html (200), so the type is the real signal.
   if (response.status === 404 || !(response.headers.get("content-type") ?? "").includes("json")) return [];
   if (!response.ok) throw new Error(`Preview corpus index failed: HTTP ${response.status}`);
-  // The exported index predates tags and kinds; the M3 overlay (previewM3.ts) fills the tags in from the overrides.
-  return ((await response.json()) as Omit<MaterialSummary, "tags" | "kind">[]).map((entry) => ({ ...entry, tags: [], kind: kindOfRecord(entry) }));
+  // The exported index predates tags, kinds and views; the M3 overlay (previewM3.ts) fills the tags in from the overrides.
+  type IndexEntry = Omit<MaterialSummary, "tags" | "kind" | "readyViews"> & Partial<Pick<MaterialSummary, "readyViews">>;
+  return ((await response.json()) as IndexEntry[]).map((entry) => ({ ...entry, tags: [], kind: kindOfRecord(entry), readyViews: entry.readyViews ?? [] }));
 }
 
 async function corpusMaterial(id: string): Promise<MaterialRecord | undefined> {
@@ -91,6 +92,20 @@ const browserPreview: ReadApi = {
     return new Uint8Array(await response.arrayBuffer());
   },
   listMaterials: previewListMaterials,
+  // Views: the preview stores nothing, so only a record's own (primary) view can be read, and nothing can be fetched or promoted.
+  fetchMaterialView: async () => unavailable,
+  getMaterialView: async (id, view): Promise<MaterialViewContent | undefined> => {
+    const material = await previewGetMaterial(id);
+    if (!material || material.primaryView !== view) return undefined;
+    const { mediaType, pdf, reader, markdown, plain, readingMinutes, quality, problems } = material;
+    return { view, mediaType, pdf, reader, markdown, plain, readingMinutes, quality, problems };
+  },
+  setPrimaryView: async (id, view) => {
+    const material = await previewGetMaterial(id);
+    if (!material) throw new Error(`Preview: no material ${id}.`);
+    if (material.primaryView === view) return material;
+    throw new Error("The engine is not available in the browser preview. Run the desktop app to switch views.");
+  },
 };
 
 export const read: ReadApi = typeof window !== "undefined" && "read" in window && window.read ? window.read : browserPreview;

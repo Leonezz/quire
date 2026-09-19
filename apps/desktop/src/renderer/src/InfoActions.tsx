@@ -46,9 +46,9 @@ export function InfoActions({ material, onSaved }: { material: MaterialRecord; o
   return (
     <div className="grid gap-2">
       <div className="flex flex-wrap items-center gap-1.5">
-        <Button size="sm" isDisabled={busy !== undefined} onPress={() => void copyCitation()}><Quote className="size-3.5" />Copy citation</Button>
-        <Button size="sm" isDisabled={busy !== undefined} onPress={() => void copyBibtex()}><Copy className="size-3.5" />Copy BibTeX</Button>
-        <Button size="sm" variant="quiet" isDisabled={busy !== undefined || !canRefresh(material)} onPress={() => void refresh()}><RefreshCw className={`size-3.5 ${busy === "refresh" ? "animate-spin" : ""}`} />Refresh from source</Button>
+        <Button size="sm" isDisabled={busy !== undefined} onPress={() => void copyCitation()}><Quote />Copy citation</Button>
+        <Button size="sm" isDisabled={busy !== undefined} onPress={() => void copyBibtex()}><Copy />Copy BibTeX</Button>
+        <Button size="sm" variant="quiet" isDisabled={busy !== undefined || !canRefresh(material)} onPress={() => void refresh()}><RefreshCw className={busy === "refresh" ? "animate-spin" : ""} />Refresh from source</Button>
       </div>
       {status ? <p role={status.tone === "error" ? "alert" : "status"} className={`m-0 text-[12px] ${status.tone === "error" ? "text-red-text" : "text-label-3"}`}>{status.text}</p> : null}
     </div>

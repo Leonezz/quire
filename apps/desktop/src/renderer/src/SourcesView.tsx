@@ -63,7 +63,7 @@ export function SourcesView({ sources, selectedId, onSelect, refresh, onOpenLink
     finally { setBusy(undefined); }
   };
 
-  const toolbar = <ContentToolbar actions={<Button size="sm" variant="quiet" className="gap-1" onPress={onAdd}><Plus className="size-3.5" />Add source</Button>} trailing={shell.trailing} />;
+  const toolbar = <ContentToolbar actions={<Button size="sm" variant="quiet" className="gap-1" onPress={onAdd}><Plus />Add source</Button>} trailing={shell.trailing} />;
 
   return (
     <>

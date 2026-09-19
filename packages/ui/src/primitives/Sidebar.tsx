@@ -56,7 +56,7 @@ export function SidebarItem({ icon, label, count, busy = false, attention, healt
         cls,
       ))}
     >
-      {icon ? <span className="shrink-0 text-label-2 [&>svg]:size-4 group-data-[selected]:text-accent">{icon}</span> : null}
+      {icon ? <span className="shrink-0 text-label-2 [&>svg:not(.icon)]:size-icon-md group-data-[selected]:text-accent">{icon}</span> : null}
       {health ? <span role="img" aria-label={healthLabel[health]} className={cx("size-[7px] shrink-0 rounded-full", health === "ok" && "bg-green", health === "paused" && "bg-orange", health === "failing" && "bg-red")} /> : null}
       <span className={cx("min-w-0 flex-1 truncate text-[13px] leading-5", quiet ? "text-label-3" : "font-medium text-label")}>{label}</span>
       {attention ? <i aria-label="needs attention" className="size-[7px] rounded-full bg-orange" /> : null}

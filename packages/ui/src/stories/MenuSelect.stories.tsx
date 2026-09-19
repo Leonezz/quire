@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, within } from "storybook/test";
 import { useState } from "react";
 import { BookOpen } from "lucide-react";
+import { Icon } from "../primitives/Icon";
 import { MenuSelect, type MenuSelectOption } from "../primitives/MenuSelect";
 
 const meta = { title: "Primitives/MenuSelect", parameters: { layout: "padded" } } satisfies Meta;
@@ -19,7 +20,7 @@ function Frame() {
   const [value, setValue] = useState("any");
   return (
     <div className="grid w-[320px] gap-3">
-      <MenuSelect aria-label="Type" icon={<BookOpen className="size-3.5" />} value={value} options={kinds} onChange={setValue} />
+      <MenuSelect aria-label="Type" icon={<Icon of={BookOpen} size="sm" />} value={value} options={kinds} onChange={setValue} />
       <p className="text-[12.5px] text-label-2">Chosen: {value}</p>
     </div>
   );

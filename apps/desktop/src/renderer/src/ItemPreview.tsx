@@ -1,5 +1,5 @@
 import { Bookmark } from "lucide-react";
-import { Button, Kbd, type ButtonVariant } from "@read/ui";
+import { Button, Icon, Kbd, type ButtonVariant } from "@read/ui";
 import type { ItemRecord } from "../../shared/contracts";
 import { timeOf, dayLabel } from "./format";
 
@@ -20,7 +20,7 @@ export function InlineError({ title, message, link, onOpenLink }: { title: strin
 export function KeptNoticeLine({ title, onOpen }: { title: string; onOpen: () => void }) {
   return (
     <div role="status" className="mx-9 mt-4 flex items-center gap-2 rounded-card bg-accent-soft px-3 py-2 text-[12.5px] text-label">
-      <Bookmark className="size-3.5 shrink-0 fill-current text-accent" />
+      <Icon of={Bookmark} size="sm" className="fill-current text-accent" />
       <span className="min-w-0 truncate">Kept <span className="text-label-2">{title}</span></span>
       <span className="text-label-3">·</span>
       <Button variant="plain" size="sm" className="h-6 px-1.5 text-[12.5px]" onPress={onOpen}>Open in Library</Button>
@@ -41,7 +41,7 @@ export function ItemPreview({ item, actions, busy, failure, error, kept, onOpenL
           <span className={`whitespace-nowrap rounded-pill px-2 py-px text-[11.5px] font-medium ${item.summaryOnly ? "bg-orange-soft text-orange-text" : "bg-fill"}`}>{item.sourceKind === "arxiv" ? "arXiv abstract" : item.summaryOnly ? "summary only" : "feed full text"}</span>
         </div>
         <h1 className="mb-1.5 mt-2.5 text-[24px] font-bold leading-[29px] tracking-[-.02em] text-balance">{item.title}</h1>
-        <div className="flex flex-wrap gap-x-3 text-[12.5px] text-label-2"><span>{when}</span><span>{item.readingMinutes} min</span>{item.openedAt ? <span>opened {dayLabel(item.openedAt).toLowerCase()}</span> : null}{item.keptAt ? <span className="inline-flex items-center gap-1"><Bookmark className="size-3 fill-current" />kept</span> : null}</div>
+        <div className="flex flex-wrap gap-x-3 text-[12.5px] text-label-2"><span>{when}</span><span>{item.readingMinutes} min</span>{item.openedAt ? <span>opened {dayLabel(item.openedAt).toLowerCase()}</span> : null}{item.keptAt ? <span className="inline-flex items-center gap-1"><Icon of={Bookmark} size="sm" className="fill-current" />kept</span> : null}</div>
       </div>
       <div className="flex flex-wrap items-center gap-2 px-9 py-[18px]">
         {primary ? <Button variant={primary.variant ?? "primary"} onPress={primary.onPress} isDisabled={busy}>{primary.label} <Kbd>{primary.kbd}</Kbd></Button> : null}

@@ -1,3 +1,4 @@
+import { Children, isValidElement, type ReactNode } from "react";
 import { Button as AriaButton, composeRenderProps, type ButtonProps as AriaButtonProps } from "react-aria-components";
 import { cx } from "../cx";
 
@@ -20,13 +21,26 @@ const sizes: Record<ButtonSize, string> = {
   md: "h-8 px-3.5 text-[13.5px] leading-[18px]",
   sm: "h-7 px-[11px] text-[12.5px] leading-[16px]",
 };
+// A glyph alone: a square with no padding of its own (a caller's px-0 would lose to px-[11px]), at least 28px to hit.
+const iconOnlySizes: Record<ButtonSize, string> = { md: "h-8 min-w-8 px-0", sm: "h-7 min-w-7 px-0" };
+// The icon slot: a raw glyph beside text follows the button's size; a glyph alone is always md; an explicit <Icon size> wins.
+const iconSlot = { md: "[&>svg:not(.icon)]:size-icon-md [&>svg:not(.icon)]:shrink-0", sm: "[&>svg:not(.icon)]:size-icon-sm [&>svg:not(.icon)]:shrink-0" } as const;
+
+/** One element and nothing else (text nodes count, so `:only-child` cannot tell). */
+function isIconOnly(children: AriaButtonProps["children"]): boolean {
+  if (typeof children === "function") return false;
+  const items = Children.toArray(children as ReactNode);
+  return items.length === 1 && isValidElement(items[0]);
+}
 
 /** The one button. Variants are roles, not colours: primary is the single next step on a surface. */
 export function Button({ variant = "default", size = "md", className, ...props }: ButtonProps) {
+  const iconOnly = isIconOnly(props.children);
+  const slot = iconSlot[size === "sm" && iconOnly ? "md" : size];
   return (
     <AriaButton
       {...props}
-      className={composeRenderProps(className, (cls) => cx(base, variants[variant], sizes[size], cls))}
+      className={composeRenderProps(className, (cls) => cx(base, variants[variant], iconOnly ? iconOnlySizes[size] : sizes[size], slot, cls))}
     />
   );
 }

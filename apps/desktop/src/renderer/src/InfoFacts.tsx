@@ -1,4 +1,5 @@
 import { ChevronRight } from "lucide-react";
+import { Icon } from "@read/ui";
 import type { MaterialRecord } from "../../shared/contracts";
 import { ArtifactLineage } from "./ArtifactLineage";
 import { RebuildAction, type RebuildProps } from "./RebuildBanner";
@@ -28,7 +29,7 @@ export function InfoFacts({ material, onOpenLink, onOpenMaterial, onRebuild, reb
   const url = material.finalUrl || material.url;
   return (
     <details className="group">
-      <summary className="mb-2 inline-flex cursor-default list-none items-center gap-1 rounded-pill py-0.5 pr-2 text-[11px] font-semibold uppercase tracking-[.07em] text-label-3 outline-none hover:text-label-2 focus-visible:ring-[3px] focus-visible:ring-accent-ring [&::-webkit-details-marker]:hidden"><ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />About</summary>
+      <summary className="mb-2 inline-flex cursor-default list-none items-center gap-1 rounded-pill py-0.5 pr-2 text-[11px] font-semibold uppercase tracking-[.07em] text-label-3 outline-none hover:text-label-2 focus-visible:ring-[3px] focus-visible:ring-accent-ring [&::-webkit-details-marker]:hidden"><Icon of={ChevronRight} size="sm" className="transition-transform group-open:rotate-90" />About</summary>
       <dl className="m-0 grid gap-1.5">
         {material.origin === "agent" ? null : (
           <Fact label="Source"><a href={url} className="text-accent-text no-underline hover:underline" onClick={(event) => { event.preventDefault(); onOpenLink(url); }}>{material.origin === "file" ? decodeURIComponent(material.url.replace("file:///", "")) : url}</a></Fact>

@@ -1,5 +1,6 @@
-import type { ItemRecord, MaterialMeta, MaterialRecord, OpenUrlResult } from "../../shared/contracts";
+import type { ItemRecord, MaterialMeta, MaterialRecord, MaterialView, OpenUrlResult } from "../../shared/contracts";
 import { arxivHtmlUrl, arxivIdOf, arxivPdfUrl } from "./arxiv";
+import { viewLabel } from "./material-views";
 import type { EventStore } from "./events";
 import type { ItemStore } from "./items";
 import type { MaterialStore } from "./materials";
@@ -14,14 +15,30 @@ export interface ReadItemDeps {
   warn: (message: string) => void;
 }
 
+/** arXiv answers 404 for a paper it has not rendered as HTML (yet); anything else is a real failure worth showing. */
+function isNoHtmlRendering(code: string): boolean {
+  return code === "HTTP_404" || code === "HTTP_410";
+}
+
+/** The other arXiv rendering, listed on the material so the reader can fetch it later. */
+async function withArxivView(store: MaterialStore, result: { ok: true; material: MaterialRecord }, view: MaterialView): Promise<OpenUrlResult> {
+  return { ok: true, material: await store.registerView(result.material.id, view) };
+}
+
+/**
+ * The HTML rendering is read as the primary view and the PDF listed as available; when arXiv has
+ * no HTML rendering the PDF is read instead and the HTML listed as available, or as failed with
+ * the reason when the HTML fetch broke for any other cause.
+ */
 async function materializeArxiv(item: ItemRecord, store: MaterialStore, meta: MaterialMeta | undefined): Promise<OpenUrlResult> {
   const id = arxivIdOf(item.link);
   if (!id) return { ok: false, code: "ARXIV_ID_INVALID", message: `Not an arXiv link: ${item.link}` };
   const html = await store.openUrl(arxivHtmlUrl(id), "feed", meta);
-  if (html.ok) return html;
+  if (html.ok) return withArxivView(store, html, { id: "pdf", label: viewLabel("pdf"), url: arxivPdfUrl(id), mediaType: "application/pdf", status: "available" });
   const pdf = await store.openUrl(arxivPdfUrl(id), "feed", meta);
-  if (pdf.ok) return pdf;
-  return { ok: false, code: pdf.code, message: `Neither the HTML rendering (${html.message}) nor the PDF (${pdf.message}) of ${id} could be read.` };
+  if (!pdf.ok) return { ok: false, code: pdf.code, message: `Neither the HTML rendering (${html.message}) nor the PDF (${pdf.message}) of ${id} could be read.` };
+  const web: MaterialView = { id: "web", label: viewLabel("web"), url: arxivHtmlUrl(id), mediaType: "text/html", ...(isNoHtmlRendering(html.code) ? { status: "available" } : { status: "failed", error: html.message }) };
+  return withArxivView(store, pdf, web);
 }
 
 async function materializeFeedItem(item: ItemRecord, deps: ReadItemDeps, meta: MaterialMeta | undefined): Promise<OpenUrlResult> {

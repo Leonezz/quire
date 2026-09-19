@@ -4,7 +4,7 @@ import { itemHits, materialHits, mergeHits, searchWords } from "./search";
 
 const material = (over: Partial<MaterialSummary>): MaterialSummary => ({
   id: "0123456789abcdef", url: "https://www.example.com/post", title: "A post", fetchedAt: "2026-09-18T10:00:00Z", readingMinutes: 3, origin: "web", mediaType: "text/html",
-  quality: { completeness: "declared_full", conformance: "conformant", identityConfidence: "strong", safety: "safe", warnings: [] }, tags: [], kind: "webpage", ...over,
+  quality: { completeness: "declared_full", conformance: "conformant", identityConfidence: "strong", safety: "safe", warnings: [] }, tags: [], kind: "webpage", readyViews: ["web"], ...over,
 });
 const item = (over: Partial<ItemRecord>): ItemRecord => ({
   id: "i1", sourceId: "s1", sourceTitle: "Systems Notes", sourceKind: "feed", title: "Cache keys", gist: "", link: "https://x/y", publishedAt: "2026-09-17T08:00:00Z", fetchedAt: "2026-09-17T09:00:00Z", readingMinutes: 4, signals: {}, summaryOnly: false, ...over,

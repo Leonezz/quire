@@ -22,6 +22,7 @@ import { MetaStore } from "./engine/meta";
 import { SettingsStore } from "./engine/settings";
 import { SessionStore } from "./engine/agent-sessions";
 import { registerM3Handlers } from "./ipc-m3";
+import { isMaterialViewId } from "./engine/material-views";
 
 const userData = app.getPath("userData");
 const settings = new SettingsStore(join(userData, "settings.json"), userData, { warn: (message) => console.warn(`[settings] ${message}`) });
@@ -42,6 +43,11 @@ const EVENT_KINDS: readonly ReadingEventKind[] = ["opened", "finished", "kept", 
 
 function boundedString(value: unknown, max: number, code: string): string {
   if (typeof value !== "string" || value.length === 0 || value.length > max) throw new Error(code);
+  return value;
+}
+
+function annotationView(value: unknown) {
+  if (!isMaterialViewId(value)) throw new Error("IPC_INVALID_ANNOTATION");
   return value;
 }
 
@@ -96,12 +102,17 @@ ipcMain.handle("annotation:save", (_event, annotation: unknown) => {
   return annotations.save({
     id: boundedString(value.id, 64, "IPC_INVALID_ID"), materialId: boundedString(value.materialId, 64, "IPC_INVALID_ID"),
     locator: boundedString(value.locator, 20_000, "IPC_INVALID_ANNOTATION"), quote: typeof value.quote === "string" ? value.quote.slice(0, 20_000) : "",
-    ...(typeof value.note === "string" ? { note: value.note.slice(0, 20_000) } : {}), kind, color, createdAt: "", updatedAt: "",
+    ...(typeof value.note === "string" ? { note: value.note.slice(0, 20_000) } : {}),
+    ...(value.view !== undefined ? { view: annotationView(value.view) } : {}),
+    kind, color, createdAt: "", updatedAt: "",
   });
 });
 ipcMain.handle("annotation:delete", (_event, materialId: unknown, id: unknown) => annotations.delete(boundedString(materialId, 64, "IPC_INVALID_ID"), boundedString(id, 64, "IPC_INVALID_ID")));
 ipcMain.handle("image:resolve", (_event, url: unknown) => images.resolve(boundedString(url, 4096, "IPC_INVALID_URL")));
-ipcMain.handle("material:bytes", (_event, id: unknown) => store.bytes(boundedString(id, 64, "IPC_INVALID_ID")));
+ipcMain.handle("material:bytes", (_event, id: unknown, view: unknown) => {
+  if (view !== undefined && !isMaterialViewId(view)) throw new Error("IPC_INVALID_VIEW");
+  return store.bytes(boundedString(id, 64, "IPC_INVALID_ID"), view);
+});
 ipcMain.handle("material:list", () => store.list());
 
 // --- M1: sources, the Inbox / Queue loop, reading events, search ------------------------

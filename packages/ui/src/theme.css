@@ -52,6 +52,15 @@
   --shadow-glass: var(--glass-shadow);
 }
 
+/* Icon scale (see tokens.css): size-icon-sm / md / lg are the only sizes a glyph takes; primitives
+   apply them to their icon slot ([&>svg]:size-icon-md), text uses <Icon size="sm">. */
+@utility size-icon-sm { width: var(--icon-sm); height: var(--icon-sm); }
+@utility size-icon-md { width: var(--icon-md); height: var(--icon-md); }
+@utility size-icon-lg { width: var(--icon-lg); height: var(--icon-lg); }
+/* Every lucide glyph, even one drawn without <Icon>, gets the one stroke weight. */
+svg.lucide { stroke-width: var(--icon-stroke); }
+svg.lucide > * { vector-effect: non-scaling-stroke; }
+
 /* Glass surface: the one place backdrop-filter lives. */
 @utility glass {
   background: var(--glass);

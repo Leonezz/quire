@@ -36,6 +36,16 @@ describe("AnnotationStore", () => {
     await expect(store.deleteAll("../etc")).rejects.toThrow("ANNOTATION_INVALID_MATERIAL");
   });
 
+  it("keeps the view an annotation belongs to and rejects unknown view ids", async () => {
+    const store = new AnnotationStore(root);
+    const onPdf = await store.save({ ...base, id: "aaaaaaaaaaaaaaaa", view: "pdf", locator: "pdf-region:1:0.1,0.2,0.3,0.4" });
+    expect(onPdf.view).toBe("pdf");
+    await store.save({ ...base, id: "bbbbbbbbbbbbbbbb", view: "web" });
+    await store.save({ ...base, id: "cccccccccccccccc" });
+    expect((await store.list(material)).map((a) => a.view)).toEqual(["pdf", "web", undefined]);
+    await expect(store.save({ ...base, id: "dddddddddddddddd", view: "epub" as never })).rejects.toThrow("ANNOTATION_INVALID_VIEW");
+  });
+
   it("rejects malformed ids and empty locators loudly", async () => {
     const store = new AnnotationStore(root);
     await expect(store.save({ ...base, id: "nope" })).rejects.toThrow("ANNOTATION_INVALID_ID");

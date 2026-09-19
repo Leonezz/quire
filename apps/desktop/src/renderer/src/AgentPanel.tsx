@@ -100,17 +100,17 @@ export function AgentPanel({ context, subject: rawSubject, sessionId, onSessionC
   };
   const placeholder = !available ? "The agent is not available" : armedTask !== "ask" ? `${taskLabel[armedTask]}…` : context.kind === "library" ? "Ask about your library…" : `Ask about ${context.kind === "selection" ? "this selection" : subject}…`;
   const emptyHint = context.kind === "library" ? "Ask across everything you kept, or pick an action above." : `Ask about ${context.kind === "selection" ? "the selected passage" : subject}, or pick an action above.`;
-  const iconButton = "size-7 min-w-0 shrink-0 px-0";
+  const iconButton = "shrink-0";
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
       <InspectorSection title="Context">
         <div className="flex min-w-0 items-center gap-1.5">
           <span className="inline-flex h-[26px] min-w-0 items-center rounded-pill bg-content px-2.5 text-[12.5px] font-medium shadow-[0_0_0_1px_var(--separator)]"><span className="truncate">{contextLabel(context, subject)}</span></span>
-          {context.kind === "selection" && onClearSelection ? <Button variant="quiet" size="sm" aria-label="Drop the selection" className={iconButton} onPress={onClearSelection}><X className="size-3.5" /></Button> : null}
-          {openMaterialButton && context.kind !== "library" ? <Button variant="quiet" size="sm" className="h-7 gap-1 px-2 text-[12px]" onPress={() => onOpenMaterial(context.materialId)}>Open material<ArrowUpRight className="size-3.5" /></Button> : null}
+          {context.kind === "selection" && onClearSelection ? <Button variant="quiet" size="sm" aria-label="Drop the selection" className={iconButton} onPress={onClearSelection}><X /></Button> : null}
+          {openMaterialButton && context.kind !== "library" ? <Button variant="quiet" size="sm" className="h-7 gap-1 px-2 text-[12px]" onPress={() => onOpenMaterial(context.materialId)}>Open material<ArrowUpRight /></Button> : null}
           <span className="ml-auto flex shrink-0 items-center gap-0.5">
-            <Button variant="quiet" size="sm" aria-label="New conversation" className={iconButton} isDisabled={running || turns.length === 0} onPress={newConversation}><Plus className="size-3.5" /></Button>
+            <Button variant="quiet" size="sm" aria-label="New conversation" className={iconButton} isDisabled={running || turns.length === 0} onPress={newConversation}><Plus /></Button>
             <SessionsMenu sessions={contextSessions} currentId={agent.sessionId} onOpen={(id) => void loadSession(id)} onDelete={async (id) => { await sessions.remove(id); if (id === agent.sessionId) newConversation(); }} />
           </span>
         </div>
@@ -163,7 +163,13 @@ function TurnView({ turn, titleOf, onOpenLink, onOpenMaterial, onRetry }: { turn
       {turn.answer || turn.status === "running" ? (
         <AgentTurn role="agent">
           {turn.answer ? <AgentMarkdown text={turn.answer} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} titleOf={titleOf} sources={turn.sources} /> : null}
-          {turn.status === "running" ? <span role="status" aria-label="Answering" className="mt-1 inline-block h-[15px] w-[7px] animate-pulse rounded-[2px] bg-label-3 align-text-bottom" /> : null}
+          {turn.status === "running" ? (
+            // The caret alone while the answer streams; with "Thinking…" while the bridge has not started the turn yet.
+            <span role="status" aria-label={turn.pending ? "Thinking" : "Answering"} className="mt-1 inline-flex items-center gap-1.5 align-text-bottom text-[12.5px] text-label-3">
+              <i aria-hidden="true" className="inline-block h-[15px] w-[7px] animate-pulse rounded-[2px] bg-label-3" />
+              {turn.pending ? "Thinking…" : null}
+            </span>
+          ) : null}
         </AgentTurn>
       ) : null}
       {turn.status === "interrupted" ? <p className="text-[12.5px] text-label-3">Stopped{turn.error ? ` · ${turn.error}` : "."}</p> : null}

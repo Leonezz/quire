@@ -4,7 +4,7 @@ import { filterOf, inCut } from "./useLibrary";
 
 const material = (over: Partial<MaterialSummary>): MaterialSummary => ({
   id: "m", url: "https://example.org", title: "T", fetchedAt: "2026-01-01T00:00:00Z", readingMinutes: 3, origin: "web", mediaType: "text/html",
-  quality: { completeness: "declared_full", conformance: "conformant", identityConfidence: "strong", safety: "safe", warnings: [] }, tags: [], kind: "webpage", ...over,
+  quality: { completeness: "declared_full", conformance: "conformant", identityConfidence: "strong", safety: "safe", warnings: [] }, tags: [], kind: "webpage", readyViews: ["web"], ...over,
 });
 
 describe("library cuts", () => {

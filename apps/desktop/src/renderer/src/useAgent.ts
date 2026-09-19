@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AgentContext, AgentFailureCode, AgentSession, AgentTask, AgentTurnRecord } from "../../shared/contracts";
 import { read } from "./api";
-import { agentStore, useAgentRun, useAgentStatus, type RunState } from "./agentStore";
+import { agentStore, newPendingKey, useAgentRun, useAgentStatus, type RunState } from "./agentStore";
 import { contextKeyOf } from "./useAgentSessions";
 
 export interface ToolActivity { key: string; name: string; status: "running" | "done" | "failed"; summary?: string | undefined }
@@ -21,6 +21,8 @@ export interface AgentTurnState {
   code?: AgentFailureCode | undefined;
   /** The material ids the agent retrieved in this turn — the only trustworthy citations. Undefined for stored turns without them. */
   sources?: readonly string[] | undefined;
+  /** Asked, and the bridge has not started the turn yet ("Thinking…" rather than a streaming answer). */
+  pending?: boolean | undefined;
 }
 
 /** A question the bridge refused to start (busy, unavailable, signed out): shown inline, the words kept for Retry. */
@@ -45,12 +47,13 @@ export function turnsOfSession(records: readonly AgentTurnRecord[], labelOf: Lab
   }, []);
 }
 
-/** The live run as a panel turn. */
+/** The live run as a panel turn. Its id follows the start time, which survives the move from a pending key to the session id. */
 export function turnOfRun(run: RunState, labelOf: LabelOf): AgentTurnState {
   const { outcome } = run;
   return {
-    id: `run-${run.sessionId}`, task: run.task, prompt: run.prompt, label: labelOf(run.task, run.prompt), tools: run.tools,
+    id: `run-${run.startedAt}`, task: run.task, prompt: run.prompt, label: labelOf(run.task, run.prompt), tools: run.tools,
     answer: outcome?.text ?? run.answer, status: outcome?.status ?? "running", error: outcome?.message, code: outcome?.code, sources: outcome?.sources,
+    pending: run.pending === true,
   };
 }
 
@@ -90,7 +93,9 @@ export function useAgent(context: AgentContext, { sessionId: namedSessionId, lab
   const [loadingSession, setLoadingSession] = useState(true);
   const [askFailure, setAskFailure] = useState<AskFailure | undefined>(undefined);
   const [stopError, setStopError] = useState<string | undefined>(undefined);
-  const run = useAgentRun(sessionId);
+  // A question asked before this panel had a session: the store shows it under this key until the bridge names one.
+  const pendingKey = useRef<string | undefined>(undefined);
+  const run = useAgentRun(sessionId, pendingKey);
   const threadKey = contextKeyOf(context);
   const contextRef = useRef(context);
   contextRef.current = context;
@@ -102,6 +107,7 @@ export function useAgent(context: AgentContext, { sessionId: namedSessionId, lab
   useEffect(() => { onSessionChangeRef.current?.(sessionId); }, [sessionId]);
 
   const showSession = useCallback((next: AgentSession | undefined) => {
+    pendingKey.current = undefined;
     sessionRef.current = next?.id;
     setSessionId(next?.id);
     setSession(next);
@@ -116,7 +122,7 @@ export function useAgent(context: AgentContext, { sessionId: namedSessionId, lab
       const next = id ? await read.getAgentSession(id) : undefined;
       if (generation.current !== mine) return;
       if (id && !next) {
-        if (quiet) { sessionRef.current = id; setSessionId(id); setSession(undefined); return; }
+        if (quiet) { pendingKey.current = undefined; sessionRef.current = id; setSessionId(id); setSession(undefined); return; }
         showSession(undefined); setSessionError("That conversation is no longer stored."); return;
       }
       showSession(next);
@@ -166,14 +172,20 @@ export function useAgent(context: AgentContext, { sessionId: namedSessionId, lab
   const ask = useCallback(async (task: AgentTask, text: string) => {
     setAskFailure(undefined);
     const request = { context: contextRef.current, task, text, ...(threadId ? { threadId } : {}), ...(sessionRef.current ? { sessionId: sessionRef.current } : {}) };
+    // Without a session the run shows under a key of this panel's; the store re-keys it when the bridge names the session.
+    const key = request.sessionId ? undefined : newPendingKey();
+    pendingKey.current = key;
+    const forget = () => { if (pendingKey.current === key) pendingKey.current = undefined; };
     try {
-      const result = await agentStore.ask(request);
+      const result = await agentStore.ask(request, key);
       if (result.ok) {
         if (result.sessionId !== sessionRef.current) { sessionRef.current = result.sessionId; setSessionId(result.sessionId); void loadSession(result.sessionId, { quiet: true }); }
         return;
       }
+      forget();
       setAskFailure({ code: result.code, message: result.message, task, text });
     } catch (cause: unknown) {
+      forget();
       setAskFailure({ code: "TURN_FAILED", message: cause instanceof Error ? cause.message : "The agent did not answer.", task, text });
     }
   }, [threadId, loadSession]);

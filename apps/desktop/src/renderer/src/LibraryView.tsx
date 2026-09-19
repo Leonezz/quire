@@ -92,8 +92,8 @@ export function LibraryView({ library, selected, onSelectionChange, onOpenLink, 
   const actionBar = ids.length > 0 ? (
     <div className="flex items-center gap-2 border-t border-separator px-3 py-1.5 text-[12.5px] text-label-2">
       <span className="min-w-0 truncate">{bibtex ? <span role={bibtex.tone === "error" ? "alert" : "status"} className={bibtex.tone === "error" ? "text-red-text" : ""}>{bibtex.text}</span> : `${ids.length} selected`}</span>
-      <Button size="sm" variant="quiet" className="ml-auto" onPress={() => void copyBibtex()}><Copy className="size-3.5" />Copy BibTeX</Button>
-      <Button size="sm" variant="quiet" className="text-red-text" onPress={() => { setDeleteError(undefined); setConfirming(true); }}><Trash2 className="size-3.5" />Delete {ids.length} <Kbd>⌫</Kbd></Button>
+      <Button size="sm" variant="quiet" className="ml-auto" onPress={() => void copyBibtex()}><Copy />Copy BibTeX</Button>
+      <Button size="sm" variant="quiet" className="text-red-text" onPress={() => { setDeleteError(undefined); setConfirming(true); }}><Trash2 />Delete {ids.length} <Kbd>⌫</Kbd></Button>
     </div>
   ) : undefined;
   const empty = searching ? "Nothing matches your search." : narrowed ? "Nothing here yet." : "Nothing kept yet — press ⌘N and paste a page URL to read it here.";

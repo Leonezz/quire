@@ -13,6 +13,7 @@ const extracted = { kind: "webpage" as const, title: "Extracted title", creators
 const record = (overrides?: MaterialRecord["overrides"]): MaterialRecord => ({
   id: "m1", url: "https://example.org/a", finalUrl: "https://example.org/a", title: overrides?.title ?? extracted.title, fetchedAt: "2026-09-18T00:00:00.000Z", readingMinutes: 3, origin: "web", mediaType: "text/html",
   quality: { completeness: "declared_full", conformance: "conformant", identityConfidence: "strong", safety: "safe", warnings: [] }, tags: [], kind: "webpage", problems: [],
+  views: [{ id: "web", label: "Web", url: "https://example.org/a", mediaType: "text/html", status: "ready" }], primaryView: "web", readyViews: ["web"],
   extracted, ...(overrides ? { overrides } : {}), meta: { ...extracted, ...(overrides ?? {}) },
 });
 

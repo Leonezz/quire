@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { AgentEvent, AgentSession, AgentTurnRecord } from "../../shared/contracts";
-import { flush, mockRead } from "./testApi";
+import type { AgentEvent, AgentResult, AgentSession, AgentTurnRecord } from "../../shared/contracts";
+import { deferred, flush, mockRead } from "./testApi";
 
 const api = vi.hoisted(() => ({ read: {} as ReturnType<typeof import("./testApi").mockRead> }));
 vi.mock("./api", () => ({ get read() { return api.read; }, isPreview: true }));
@@ -158,6 +158,43 @@ describe("useAgent", () => {
     expect(material.result.current.turns[0]).toEqual(expect.objectContaining({ status: "interrupted", error: "stopped" }));
     expect(material.result.current.running).toBe(false);
     expect(library.result.current.running).toBe(true);
+  });
+
+  it("shows the question at once, before the bridge answers, and adopts the session it names", async () => {
+    const asked = deferred<AgentResult>();
+    const { emit } = setup({ agentAsk: vi.fn(() => asked.promise) });
+    await act(() => agentStore.start());
+    const { result } = mount();
+    await act(flush);
+    let asking: Promise<void> = Promise.resolve();
+    act(() => { asking = result.current.ask("explain", ""); });
+    // Before the promise resolves: the turn is there, running, and the panel has no session yet.
+    expect(result.current.sessionId).toBeUndefined();
+    expect(result.current.running).toBe(true);
+    expect(result.current.turns).toEqual([expect.objectContaining({ label: "explain:", status: "running", pending: true, answer: "" })]);
+    const id = result.current.turns[0]?.id;
+    emit({ type: "delta", sessionId: "s1", turnId: "t1", delta: "Ear" });
+    await act(async () => { asked.resolve({ ok: true, sessionId: "s1", turnId: "t1" }); await asking; await flush(); });
+    expect(result.current.sessionId).toBe("s1");
+    expect(result.current.turns).toEqual([expect.objectContaining({ id, label: "explain:", status: "running", pending: false, answer: "Ear" })]);
+    emit({ type: "delta", sessionId: "s1", turnId: "t1", delta: "ly" });
+    expect(result.current.turns[0]?.answer).toBe("Early");
+  });
+
+  it("takes the shown question away again when the bridge refuses it", async () => {
+    const asked = deferred<AgentResult>();
+    setup({ agentAsk: vi.fn(() => asked.promise) });
+    await act(() => agentStore.start());
+    const { result } = mount();
+    await act(flush);
+    let asking: Promise<void> = Promise.resolve();
+    act(() => { asking = result.current.ask("ask", "q"); });
+    expect(result.current.turns).toHaveLength(1);
+    expect(result.current.running).toBe(true);
+    await act(async () => { asked.resolve({ ok: false, code: "TURN_RUNNING", message: "busy" }); await asking; });
+    expect(result.current.turns).toEqual([]);
+    expect(result.current.running).toBe(false);
+    expect(result.current.askFailure).toEqual({ code: "TURN_RUNNING", message: "busy", task: "ask", text: "q" });
   });
 
   it("shows a refusal inline and keeps the words for Retry", async () => {

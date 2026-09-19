@@ -38,8 +38,8 @@ export function NotesPanel({ material, annotations, error, activeId, draft, onDr
             ) : null}
             <div className="mt-2 flex items-center gap-1">
               {draft?.id !== annotation.id && !annotation.note ? <Button variant="plain" size="sm" onPress={() => onDraftChange({ id: annotation.id, value: "" })}>Add note</Button> : null}
-              <Button variant="quiet" size="sm" aria-label="Copy citation" onPress={() => void copyText(citationFor(material, annotation, sectionFor(annotation)))}><Copy className="size-3.5" /></Button>
-              <Button variant="quiet" size="sm" aria-label="Delete" onPress={() => onDelete(annotation.id)}><Trash2 className="size-3.5" /></Button>
+              <Button variant="quiet" size="sm" aria-label="Copy citation" onPress={() => void copyText(citationFor(material, annotation, sectionFor(annotation)))}><Copy /></Button>
+              <Button variant="quiet" size="sm" aria-label="Delete" onPress={() => onDelete(annotation.id)}><Trash2 /></Button>
             </div>
           </li>
         ))}

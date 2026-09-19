@@ -75,7 +75,7 @@ export function InboxView({ items, selectedId, onSelect, refresh, onOpenLink, on
               <ItemPreview item={current} busy={busy !== undefined} failure={failure?.itemId === current.id ? failure : undefined} error={decisionError?.itemId === current.id ? decisionError.message : undefined} kept={keptLine} onOpenLink={onOpenLink}
                 actions={[
                   { label: busy === "read" ? "Opening…" : "Read now", kbd: "↵", onPress: () => void readNow(current.id) },
-                  { label: busy === "keep" ? "Keeping…" : "Keep", kbd: "k", icon: <Bookmark className="size-3.5" />, onPress: () => void keep(current.id) },
+                  { label: busy === "keep" ? "Keeping…" : "Keep", kbd: "k", icon: <Bookmark />, onPress: () => void keep(current.id) },
                   { label: "Queue", kbd: "q", onPress: () => void decide(current.id, "queue") },
                   { label: "Dismiss", kbd: "e", variant: "quiet", onPress: () => void decide(current.id, "dismiss") },
                 ]} />

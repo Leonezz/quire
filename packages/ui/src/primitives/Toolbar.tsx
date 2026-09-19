@@ -36,7 +36,7 @@ export function ToolbarButton({ className, ...props }: ToggleButtonProps) {
       className={composeRenderProps(className, (cls) => cx(
         "inline-flex h-7 min-w-7 items-center justify-center gap-1.5 rounded-control px-1.5 text-label-2 outline-none transition-colors duration-100",
         "data-[hovered]:bg-fill data-[hovered]:text-label data-[selected]:bg-fill-2 data-[selected]:text-label data-[disabled]:opacity-40",
-        "data-[focus-visible]:ring-[3px] data-[focus-visible]:ring-accent-ring [&>svg]:size-4",
+        "data-[focus-visible]:ring-[3px] data-[focus-visible]:ring-accent-ring [&>svg:not(.icon)]:size-icon-md",
         cls,
       ))}
     />
@@ -51,7 +51,7 @@ export function AskButton({ className, ...props }: ToggleButtonProps) {
       className={composeRenderProps(className, (cls) => cx(
         "inline-flex h-7 items-center gap-1.5 rounded-pill pl-2 pr-2.5 text-[12.5px] font-medium text-label-2 outline-none shadow-[inset_0_0_0_1px_var(--separator)] transition-colors duration-100",
         "data-[hovered]:bg-fill data-[hovered]:text-label data-[selected]:bg-purple-soft data-[selected]:text-purple-text data-[selected]:shadow-none",
-        "data-[focus-visible]:ring-[3px] data-[focus-visible]:ring-accent-ring [&>svg]:size-3.5",
+        "data-[focus-visible]:ring-[3px] data-[focus-visible]:ring-accent-ring [&>svg:not(.icon)]:size-icon-md",
         cls,
       ))}
     />

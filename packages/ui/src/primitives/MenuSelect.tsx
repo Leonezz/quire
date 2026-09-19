@@ -1,4 +1,5 @@
 import { ChevronDown } from "lucide-react";
+import { Icon } from "./Icon";
 import { Button, type ButtonSize, type ButtonVariant } from "./Button";
 import { Menu, MenuItem, MenuTrigger } from "./Menu";
 import { cx } from "../cx";
@@ -37,7 +38,7 @@ export function MenuSelect({ value, options, onChange, icon, size = "sm", varian
       <Button size={size} variant={variant} isDisabled={isDisabled} aria-label={`${props["aria-label"]}: ${current?.label ?? placeholder}`} className={cx("min-w-0 gap-1", className)}>
         {icon}
         <span className="truncate">{current?.label ?? placeholder}</span>
-        <ChevronDown className="size-3 shrink-0 opacity-60" />
+        <Icon of={ChevronDown} size="sm" className="opacity-60" />
       </Button>
       <Menu aria-label={props["aria-label"]} selectionMode="single" disallowEmptySelection selectedKeys={[value]}
         onSelectionChange={(keys) => { const key = keys === "all" ? undefined : [...keys][0]; if (key !== undefined && String(key) !== value) onChange(String(key)); }}>
