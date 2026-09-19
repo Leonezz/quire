@@ -93,7 +93,7 @@ export interface CorpusImportResult {
   failed: { slug: string; message: string }[];
 }
 
-export interface ReadApi extends ReadApiM1, ReadApiM2, ReadApiM3, ReadApiViews {
+export interface ReadApi extends ReadApiM1, ReadApiM2, ReadApiM3, ReadApiViews, ReadApiUpdates {
   version: string;
   platform: string;
   /** Fires after the main process changed the library on its own (an import); the renderer reloads the list. */
@@ -449,6 +449,8 @@ export interface Settings {
   agentReasoningEffort: "" | "low" | "medium" | "high";
   /** Where materials, images and the database live (read-only, for the sheet). */
   dataDirectory: string;
+  /** Check GitHub Releases for a newer alpha on launch and daily (default true). */
+  checkUpdatesAutomatically: boolean;
 }
 
 export interface AgentTurnRecord {
@@ -542,4 +544,28 @@ export interface ReadApiViews {
   getMaterialView: (id: string, view: MaterialViewId) => Promise<MaterialViewContent | undefined>;
   /** Makes a ready view the one the reader opens first. */
   setPrimaryView: (id: string, view: MaterialViewId) => Promise<MaterialRecord>;
+}
+
+// ---------------------------------------------------------------------------
+// Updates: GitHub Releases (alpha channel). Signed builds install in place; unsigned ones offer the download.
+// ---------------------------------------------------------------------------
+
+export type UpdateState =
+  | { phase: "idle"; current: string; checkedAt?: string }
+  | { phase: "checking"; current: string }
+  | { phase: "up-to-date"; current: string; checkedAt: string }
+  /** A newer release exists. `canInstall` is true when the running build can replace itself (signed macOS build). */
+  | { phase: "available"; current: string; latest: string; notes?: string; url: string; canInstall: boolean; checkedAt: string }
+  | { phase: "downloading"; current: string; latest: string; percent: number }
+  | { phase: "ready"; current: string; latest: string }
+  | { phase: "error"; current: string; message: string; checkedAt: string };
+
+export interface ReadApiUpdates {
+  getUpdateState: () => Promise<UpdateState>;
+  checkForUpdates: () => Promise<UpdateState>;
+  /** Downloads (when not yet) and restarts into the new version; rejects when the build cannot install itself. */
+  installUpdate: () => Promise<void>;
+  onUpdateState: (listener: (state: UpdateState) => void) => () => void;
+  /** Opens the release page in the browser (the manual path). */
+  openReleasePage: () => Promise<void>;
 }
