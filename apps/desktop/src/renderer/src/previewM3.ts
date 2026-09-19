@@ -89,6 +89,8 @@ export interface PreviewM3 extends ReadApiM3 {
   onLibraryChanged: (listener: () => void) => () => void;
   /** The demo agent rebuilt a material: the artifact is stored, the material marked, and library:changed fires. */
   markRebuilt: (materialId: string, artifact: MaterialRecord) => void;
+  /** Another preview store changed what the library lists (a view was fetched or made primary): library:changed fires. */
+  notifyLibraryChanged: () => void;
 }
 
 export function createPreviewM3(deps: { getMaterial: (id: string) => Promise<MaterialRecord | undefined>; listMaterials: () => Promise<MaterialSummary[]> }): PreviewM3 {
@@ -117,6 +119,7 @@ export function createPreviewM3(deps: { getMaterial: (id: string) => Promise<Mat
     listMaterials,
     onLibraryChanged: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
     markRebuilt: (materialId, artifact) => { recordRebuild(materialId, artifact); notify(); },
+    notifyLibraryChanged: notify,
 
     queryLibrary: async (filter) => queryLibrary(await listMaterials(), filter),
     updateMaterialMeta: async (id, patch) => {

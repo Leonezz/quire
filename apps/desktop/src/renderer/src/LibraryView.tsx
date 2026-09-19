@@ -11,12 +11,14 @@ import { hostLabel } from "./ArtifactLineage";
 import { InlineError } from "./ItemPreview";
 import { isTypingTarget, timeOf } from "./format";
 import { KIND_LABELS, publicationOf } from "./materialMeta";
+import { viewLabel } from "./materialViews";
 import type { Library } from "./useLibrary";
 
-/** "Preprint · arxiv.org": the bibliographic kind, then the publication when there is one, else where it came from. */
-function rowSource(item: MaterialSummary): string {
+/** "Preprint · arxiv.org · Web + PDF": the bibliographic kind, then the publication when there is one, else where it came from, then the stored views when there are several. */
+export function rowSource(item: MaterialSummary): string {
   const where = publicationOf(item) ?? (item.origin === "agent" ? "Agent" : item.origin === "file" ? "Local file" : hostLabel({ ...item, finalUrl: item.url }));
-  return `${KIND_LABELS[item.kind]} · ${where}`;
+  const views = item.readyViews.length > 1 ? ` · ${item.readyViews.map(viewLabel).join(" + ")}` : "";
+  return `${KIND_LABELS[item.kind]} · ${where}${views}`;
 }
 function rowTag(item: MaterialSummary): { tag: "artifact" | "rebuilt" | "summary" } | Record<string, never> {
   if (item.origin === "agent") return { tag: "artifact" };

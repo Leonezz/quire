@@ -1,4 +1,4 @@
-import type { Annotation, MaterialRecord, MaterialSummary, MaterialViewContent, OpenUrlResult, ReadApi } from "../../shared/contracts";
+import type { Annotation, MaterialRecord, MaterialSummary, OpenUrlResult, ReadApi } from "../../shared/contracts";
 import sample from "./dev/sample-material.json";
 import samplePdf from "./dev/sample-pdf.json";
 import samplePlain from "./dev/sample-plaintext.json";
@@ -7,6 +7,7 @@ import { createPreviewM2, previewArtifacts } from "./previewM2";
 import { createPreviewM3 } from "./previewM3";
 import { kindOfRecord } from "./previewMeta";
 import { rebuiltArtifacts } from "./previewRebuild";
+import { createPreviewViews } from "./previewViews";
 
 // In Electron the preload bridge provides window.read. In a plain browser (Vite dev
 // server, Storybook) there is no engine, so reading works against one sample material
@@ -52,11 +53,22 @@ function writePreviewAnnotations(materialId: string, annotations: Annotation[]) 
 
 const baseGetMaterial = async (id: string) => [...samples, ...previewArtifacts(), ...rebuiltArtifacts()].find((material) => material.id === id) ?? (await corpusMaterial(id));
 const baseListMaterials = async () => [...samples.map(summaryOf), ...previewArtifacts().map(summaryOf), ...rebuiltArtifacts().map(summaryOf), ...(await corpusIndex())];
+// Views: the sample article's PDF view is fetched from public/dev/sample.pdf (the same file the PDF sample reads);
+// nothing else can be fetched in a browser, and such a fetch is recorded as failed (see previewViews.ts).
+const previewViews = createPreviewViews({
+  getMaterial: baseGetMaterial, listMaterials: baseListMaterials,
+  pdfUrlOf: (id, view) => (view.url.startsWith("/") ? view.url : id === samplePdfMaterial.id ? "/dev/sample.pdf" : undefined),
+});
 // Metadata overrides, tags, deletion, keep and settings: localStorage (see previewM3.ts). Its list and record
-// carry the overrides and hide what was deleted, so everything else reads through it.
-const previewM3 = createPreviewM3({ getMaterial: baseGetMaterial, listMaterials: baseListMaterials });
+// carry the overrides (over the view statuses) and hide what was deleted, so everything else reads through it.
+const previewM3 = createPreviewM3({ getMaterial: previewViews.getMaterial, listMaterials: previewViews.listMaterials });
 const previewGetMaterial = previewM3.getMaterial;
 const previewListMaterials = previewM3.listMaterials;
+const requirePreviewMaterial = async (id: string) => {
+  const record = await previewGetMaterial(id);
+  if (!record) throw new Error("This material is no longer in the library.");
+  return record;
+};
 
 const browserPreview: ReadApi = {
   // Sources, Inbox, Queue, events and search: seeded into localStorage (see previewM1.ts).
@@ -85,26 +97,19 @@ const browserPreview: ReadApi = {
   deleteAnnotation: async (materialId, id) => { writePreviewAnnotations(materialId, previewAnnotations(materialId).filter((item) => item.id !== id)); },
   // No engine in the preview: images stay placeholders (the page CSP blocks remote hosts anyway).
   resolveImage: async () => undefined,
-  getMaterialBytes: async (id) => {
-    if (id !== samplePdfMaterial.id) return undefined;
-    const response = await fetch("/dev/sample.pdf");
-    if (!response.ok) throw new Error(`Preview PDF missing: put any PDF at apps/desktop/src/renderer/public/dev/sample.pdf (HTTP ${response.status}).`);
-    return new Uint8Array(await response.arrayBuffer());
-  },
+  getMaterialBytes: previewViews.getMaterialBytes,
   listMaterials: previewListMaterials,
-  // Views: the preview stores nothing, so only a record's own (primary) view can be read, and nothing can be fetched or promoted.
-  fetchMaterialView: async () => unavailable,
-  getMaterialView: async (id, view): Promise<MaterialViewContent | undefined> => {
-    const material = await previewGetMaterial(id);
-    if (!material || material.primaryView !== view) return undefined;
-    const { mediaType, pdf, reader, markdown, plain, readingMinutes, quality, problems } = material;
-    return { view, mediaType, pdf, reader, markdown, plain, readingMinutes, quality, problems };
+  // Views (previewViews.ts): a fetch (stored, or recorded as failed) or a new primary changes the record, so the list and open readers reload.
+  fetchMaterialView: async (id, view) => {
+    const result = await previewViews.fetchMaterialView(id, view);
+    if (result.ok || result.code !== "VIEW_ALREADY_STORED") previewM3.notifyLibraryChanged();
+    return result.ok ? { ok: true, material: await requirePreviewMaterial(id) } : result;
   },
+  getMaterialView: previewViews.getMaterialView,
   setPrimaryView: async (id, view) => {
-    const material = await previewGetMaterial(id);
-    if (!material) throw new Error(`Preview: no material ${id}.`);
-    if (material.primaryView === view) return material;
-    throw new Error("The engine is not available in the browser preview. Run the desktop app to switch views.");
+    await previewViews.setPrimaryView(id, view);
+    previewM3.notifyLibraryChanged();
+    return requirePreviewMaterial(id);
   },
 };
 

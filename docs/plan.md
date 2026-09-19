@@ -85,6 +85,12 @@
 - 实现：`agentAsk` 立即返回 `{ sessionId, turnId }`；事件全部带 `sessionId`；主进程 `runs` 注册表 + `listAgentRuns()` 快照；CodexClient 按 thread 维护多个 turn（`TURN_RUNNING` 只针对同一会话）；`agentInterrupt(sessionId)`；退出时进行中的 turn 记为 interrupted；窗口未聚焦时完成 / 失败发系统通知并可点开会话。渲染层 `agentStore`（useSyncExternalStore）启动取快照后跟事件，面板成为纯视图；侧栏 Agent 条目显示运行中数量，Agent 视图把运行中的会话排前。
 - 已验（桌面 app 真实 turn）：提问后立刻切到 Inbox，侧栏显示 Agent 1（转圈），Agent 视图列出"answering…"，切回后继续显示；主进程 223 个测试（含并行线程、按会话中断、退出孤儿）。
 
+### 第 11 刀：多视图、图标标尺、即时气泡 — 已完成 2026-09-19（`119188e` + 后续提交）
+- 多视图：一个材料可有 web / pdf / markdown 多个渲染（`views` 带 ready / available / failed 状态，`primaryView`），非主视图存在 `<id>.<view>.json`（PDF 另有 `<id>.<view>.pdf`）；arXiv 读取时 HTML 作主视图、PDF 登记为可按需获取（HTML 404 时反之）；批注带 `view`，Notes 按视图分组、跨视图跳转先切视图；阅读器工具栏 Segmented 切换（`v` 循环），Info › About 列出视图并可 Fetch / Retry / Make primary；Library 行显示 "Web + PDF"。实测：arXiv 论文 HTML 主视图 + 按需取 PDF（25 页），切换正常。
+- 图标：根因是尺寸在每个调用点各自写死（12–16px）且原语本身把图标缩到 14px，lucide 的 24 格描边 2 在 12–14px 下又小又细。根治：tokens `--icon-sm/md/lg`（14/18/22）+ 1.75 非缩放描边，`Icon` 原语与各原语的 slot 规则接管尺寸，删除全部调用点尺寸类，`icon-scale.test.ts` 守卫扫描源码防回退；顺带修了 icon-only Button 被 padding 顺序挤压的问题。
+- Agent 快捷按钮：`ask()` 按下即在 store 里同步建 pending run，气泡与"Thinking…"当帧出现，输入框立即清空，`agentAsk` 返回后重绑真实 sessionId（先到的事件合并）。
+- 推后：普通网页的 `citation_pdf_url` 登记为 PDF 视图（metadata-sources 尚未解析该标签）；重新打开已在库中的 URL 会重置为单视图。
+
 ## 评测集导入 app
 - Developer 菜单 → Import Evaluation Corpus（⌘⇧I，仅开发检出可见）把 `eval/corpus` 全部快照按当前抽取器入库；2026-09-18 实测 64 篇导入、0 失败。浏览器预览也直接列出导出后的语料（`EXPORT=1`）。
 - 第二轮独立评审（`eval/quality-review-2.md`）：46 通过 / 4 轻微 / 14 严重（首轮 36 / 6 / 22）；随后又修了 Paul Graham 脚注、卡片链接的 Markdown、尾部 discuss / read-my-book 段。剩余主要是站点级残留（Quanta、Stratechery 的相关文章卡片），留给 L3 profile。

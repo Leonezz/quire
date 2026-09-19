@@ -2,11 +2,13 @@ import { ChevronRight } from "lucide-react";
 import { Icon } from "@read/ui";
 import type { MaterialRecord } from "../../shared/contracts";
 import { ArtifactLineage } from "./ArtifactLineage";
+import { InfoViews } from "./InfoViews";
 import { RebuildAction, type RebuildProps } from "./RebuildBanner";
+import type { MaterialViewController } from "./useMaterialView";
 
 const originLabel: Record<MaterialRecord["origin"], string> = { web: "Web page", feed: "From a feed", file: "Local file", agent: "Written by the agent" };
 
-function bytesLabel(bytes: number): string {
+export function bytesLabel(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -25,7 +27,7 @@ function Fact({ label, children }: { label: string; children: React.ReactNode })
 }
 
 /** What is known about the material and cannot be edited: where it came from, when, how well it extracted, what it became. Collapsed by default. */
-export function InfoFacts({ material, onOpenLink, onOpenMaterial, onRebuild, rebuild = "idle", rebuildError }: { material: MaterialRecord; onOpenLink: (url: string) => void; onOpenMaterial: (id: string) => void } & Partial<RebuildProps>) {
+export function InfoFacts({ material, views, onOpenLink, onOpenMaterial, onRebuild, rebuild = "idle", rebuildError }: { material: MaterialRecord; views?: MaterialViewController | undefined; onOpenLink: (url: string) => void; onOpenMaterial: (id: string) => void } & Partial<RebuildProps>) {
   const url = material.finalUrl || material.url;
   return (
     <details className="group">
@@ -42,6 +44,7 @@ export function InfoFacts({ material, onOpenLink, onOpenMaterial, onRebuild, reb
         {material.pdf ? <Fact label="Size">{bytesLabel(material.pdf.byteLength)}</Fact> : null}
         {material.capture ? <Fact label="Capture">{bytesLabel(material.capture.byteLength)} · {material.capture.mediaType}</Fact> : null}
         {material.lang ? <Fact label="Language">{material.lang}{material.dir === "rtl" ? " · right to left" : ""}</Fact> : null}
+        {views ? <Fact label="Views"><InfoViews views={views} onOpenLink={onOpenLink} /></Fact> : null}
         {material.rebuiltAs || onRebuild ? (
           <Fact label="Rebuilt"><RebuildAction material={material} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError} onOpenMaterial={onOpenMaterial} /></Fact>
         ) : null}

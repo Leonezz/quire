@@ -4,12 +4,15 @@ import { AgentPanel } from "./AgentPanel";
 import { InfoPanel } from "./InfoPanel";
 import { NotesPanel, type NoteDraft } from "./NotesPanel";
 import type { RebuildProps } from "./RebuildBanner";
+import type { MaterialViewController } from "./useMaterialView";
 
 export type ReaderPanel = "info" | "notes" | "agent";
 const PANEL_TITLES: Record<ReaderPanel, string> = { info: "Info", notes: "Notes", agent: "Agent" };
 
 export interface ReaderInspectorProps {
   material: MaterialRecord;
+  /** The chosen view and the switch: the Notes panel groups by view, the Info panel lists and manages them. */
+  views: MaterialViewController;
   /** Which panel is open; the toolbar's Info / Notes / Ask (and i / n / ⌘J) decide. */
   panel: ReaderPanel;
   onClose: () => void;
@@ -40,12 +43,12 @@ export interface ReaderInspectorProps {
 
 /** The reader's side panel, shared by the article and PDF readers: one of Info (i), Notes (n), Agent (⌘J), with its name and × on top. */
 export function ReaderInspector(props: ReaderInspectorProps) {
-  const { material, panel, onClose, subject, agentContext, onClearSelection, annotations, annotationsError, activeAnnotation, noteDraft, onNoteDraftChange, onJump, onUpdateNote, onDeleteAnnotation, sectionFor, onMaterialSaved, onOpenLink, onOpenMaterial, onOpenSettings, agentSessionId, onAgentSessionChange, onRebuild, rebuild = "idle", rebuildError } = props;
+  const { material, views, panel, onClose, subject, agentContext, onClearSelection, annotations, annotationsError, activeAnnotation, noteDraft, onNoteDraftChange, onJump, onUpdateNote, onDeleteAnnotation, sectionFor, onMaterialSaved, onOpenLink, onOpenMaterial, onOpenSettings, agentSessionId, onAgentSessionChange, onRebuild, rebuild = "idle", rebuildError } = props;
   return (
     <Panel title={PANEL_TITLES[panel]} onClose={onClose} className="h-full">
-      {panel === "info" ? <InfoPanel material={material} onSaved={onMaterialSaved} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError} /> : null}
+      {panel === "info" ? <InfoPanel material={material} views={views} onSaved={onMaterialSaved} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError} /> : null}
       {panel === "notes" ? (
-        <NotesPanel material={material} annotations={annotations} error={annotationsError} activeId={activeAnnotation} draft={noteDraft} onDraftChange={onNoteDraftChange}
+        <NotesPanel material={material} view={views.view} annotations={annotations} error={annotationsError} activeId={activeAnnotation} draft={noteDraft} onDraftChange={onNoteDraftChange}
           onJump={onJump} onUpdateNote={onUpdateNote} onDelete={onDeleteAnnotation} sectionFor={sectionFor} />
       ) : null}
       {panel === "agent" ? (

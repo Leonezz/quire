@@ -8,6 +8,7 @@ export function mockRead(overrides: Partial<ReadApi> = {}): ReadApi {
     "detectSource", "addSource", "listSources", "syncSource", "syncAllSources", "pauseSource", "removeSource", "onSourcesChanged", "listInbox", "listQueue", "getItem", "readItem", "decideItem", "reorderQueue", "recordReadingEvent", "readingStats", "search",
     "agentStatus", "agentAsk", "agentInterrupt", "listAgentRuns", "agentLogin", "onAgentEvent", "onAgentOpenSession",
     "queryLibrary", "updateMaterialMeta", "refreshMetadata", "exportBibtex", "listTags", "deleteMaterials", "keepItem", "getSettings", "updateSettings", "listAgentSessions", "getAgentSession", "deleteAgentSession", "onAgentSessionsChanged",
+    "fetchMaterialView", "getMaterialView", "setPrimaryView",
   ];
   const base = Object.fromEntries(names.map((name) => [name, vi.fn(async () => { throw new Error(`read.${name} is not stubbed in this test`); })])) as unknown as ReadApi;
   const subscriptions = { onLibraryChanged: () => () => undefined, onSourcesChanged: () => () => undefined, onAgentEvent: () => () => undefined, onAgentOpenSession: () => () => undefined, onAgentSessionsChanged: () => () => undefined };

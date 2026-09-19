@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { Annotation, AnnotationColor, AnnotationKind, MaterialRecord } from "../../shared/contracts";
+import type { Annotation, AnnotationColor, AnnotationKind, MaterialRecord, MaterialViewId } from "../../shared/contracts";
 import { read } from "./api";
 import { creatorsText, displayDate } from "./materialMeta";
 
@@ -28,8 +28,9 @@ export function useAnnotations(materialId: string) {
     return () => { cancelled = true; };
   }, [materialId]);
 
-  const add = useCallback(async (input: { locator: string; quote: string; kind: AnnotationKind; color: AnnotationColor; note?: string }) => {
-    const draft: Annotation = { id: newId(), materialId, locator: input.locator, quote: input.quote, kind: input.kind, color: input.color, ...(input.note ? { note: input.note } : {}), createdAt: "", updatedAt: "" };
+  /** `view` names the view the locator belongs to (the one being read); an annotation without it counts as the primary view's. */
+  const add = useCallback(async (input: { locator: string; quote: string; kind: AnnotationKind; color: AnnotationColor; note?: string; view?: MaterialViewId }) => {
+    const draft: Annotation = { id: newId(), materialId, locator: input.locator, quote: input.quote, kind: input.kind, color: input.color, ...(input.note ? { note: input.note } : {}), ...(input.view ? { view: input.view } : {}), createdAt: "", updatedAt: "" };
     const saved = await read.saveAnnotation(draft);
     setAnnotations((current) => [...current, saved]);
     return saved;

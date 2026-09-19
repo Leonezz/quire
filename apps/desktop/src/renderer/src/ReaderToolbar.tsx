@@ -4,6 +4,7 @@ import { AskButton, Kbd, Toolbar, ToolbarButton, ToolbarGroup, ToolbarTitle } fr
 import type { ReaderPanel } from "./ReaderInspector";
 import { ReadingSettings } from "./ReadingSettings";
 import type { ReadingPrefs } from "./readingPrefs";
+import { ViewSwitch, type ViewSwitchProps } from "./ViewSwitch";
 
 export interface ReaderToolbarProps {
   title: string;
@@ -19,10 +20,12 @@ export interface ReaderToolbarProps {
   onPrefsChange: (prefs: ReadingPrefs) => void;
   /** The shell's Add · Search, at the far right of the segment. */
   trailing?: ReactNode;
+  /** The material's views (Web · PDF · Markdown); the switch shows only when there are at least two. */
+  views?: ViewSwitchProps | undefined;
 }
 
-/** The toolbar's content segment while a material is open: title · where · progress, then Contents (t) · Info (i) · Notes (n) · Aa · Ask (⌘J), then the shell's icons. */
-export function ReaderToolbar({ title, subtitle, badge, tocPinned, tocDisabled = false, onTocChange, panel, onPanelChange, prefs, onPrefsChange, trailing }: ReaderToolbarProps) {
+/** The toolbar's content segment while a material is open: title · where · progress, then the view switch (v) · Contents (t) · Info (i) · Notes (n) · Aa · Ask (⌘J), then the shell's icons. */
+export function ReaderToolbar({ title, subtitle, badge, tocPinned, tocDisabled = false, onTocChange, panel, onPanelChange, prefs, onPrefsChange, trailing, views }: ReaderToolbarProps) {
   const toggle = (which: ReaderPanel) => (on: boolean) => onPanelChange(on ? which : null);
   return (
     <Toolbar aria-label="Reader toolbar" className="titlebar-drag">
@@ -30,6 +33,7 @@ export function ReaderToolbar({ title, subtitle, badge, tocPinned, tocDisabled =
       <ToolbarTitle title={title} subtitle={subtitle} />
       <ToolbarGroup>
         <span className={`mr-1.5 inline-flex h-[20px] items-center rounded-pill px-2 text-[11px] font-medium ${badge.low ? "bg-orange-soft text-orange-text" : "bg-fill text-label-2"}`}>{badge.text}</span>
+        {views ? <ViewSwitch {...views} /> : null}
         <ToolbarButton aria-label="Contents (t)" isSelected={tocPinned} isDisabled={tocDisabled} onChange={onTocChange}><List /></ToolbarButton>
         <ToolbarButton aria-label="Info (i)" isSelected={panel === "info"} onChange={toggle("info")}><Info /></ToolbarButton>
         <ToolbarButton aria-label="Notes (n)" isSelected={panel === "notes"} onChange={toggle("notes")}><Highlighter /></ToolbarButton>
