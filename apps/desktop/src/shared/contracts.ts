@@ -17,6 +17,8 @@ export interface MaterialSummary {
   /** User tags from the metadata overrides. */
   tags: string[];
   kind: MaterialKind;
+  /** Ids of the views that are stored (e.g. ["web", "pdf"]), for list rows. */
+  readyViews: MaterialViewId[];
   /** Where it appeared (journal, blog, site), from the effective metadata, for list rows. */
   publication?: string;
   /** Set when the agent rebuilt this material into a cleaner artifact (its id). */
@@ -41,6 +43,9 @@ export interface MaterialRecord extends MaterialSummary {
   overrides?: MaterialMeta;
   /** extracted with overrides applied; `title`, `byline` (from creators), `publishedAt` (from date) and `tags` above mirror it. */
   meta: MaterialMeta;
+  /** Every way to read this material; the record's own content is the `primaryView`. Single-view materials list one entry. */
+  views: MaterialView[];
+  primaryView: MaterialViewId;
   lang?: string;
   dir?: "ltr" | "rtl";
   /** Reader representation: schema id and JSON payload (v2 preferred, v1 otherwise). */
@@ -73,6 +78,8 @@ export interface Annotation {
   quote: string;
   note?: string;
   kind: AnnotationKind;
+  /** The view the locator belongs to ("web" text-quote, "pdf" regions); absent means the material's primary view. */
+  view?: MaterialViewId;
   color: AnnotationColor;
   createdAt: string;
   updatedAt: string;
@@ -86,7 +93,7 @@ export interface CorpusImportResult {
   failed: { slug: string; message: string }[];
 }
 
-export interface ReadApi extends ReadApiM1, ReadApiM2, ReadApiM3 {
+export interface ReadApi extends ReadApiM1, ReadApiM2, ReadApiM3, ReadApiViews {
   version: string;
   platform: string;
   /** Fires after the main process changed the library on its own (an import); the renderer reloads the list. */
@@ -103,8 +110,8 @@ export interface ReadApi extends ReadApiM1, ReadApiM2, ReadApiM3 {
   listAnnotations: (materialId: string) => Promise<Annotation[]>;
   saveAnnotation: (annotation: Annotation) => Promise<Annotation>;
   deleteAnnotation: (materialId: string, id: string) => Promise<void>;
-  /** Raw bytes of a stored PDF; undefined when the material has none. */
-  getMaterialBytes: (id: string) => Promise<Uint8Array | undefined>;
+  /** Raw bytes of a stored PDF; undefined when the material has none. With a view id, that view's bytes. */
+  getMaterialBytes: (id: string, view?: MaterialViewId) => Promise<Uint8Array | undefined>;
   listMaterials: () => Promise<MaterialSummary[]>;
 }
 
@@ -493,4 +500,46 @@ export interface ReadApiM3 {
   deleteAgentSession: (id: string) => Promise<void>;
   /** Fires after sessions changed on the main side (a turn was appended, a session deleted). */
   onAgentSessionsChanged: (listener: () => void) => () => void;
+}
+
+// ---------------------------------------------------------------------------
+// Views: one material, several ways to read it (the arXiv HTML rendering and the PDF; a page and a file).
+// ---------------------------------------------------------------------------
+
+export type MaterialViewId = "web" | "pdf" | "markdown";
+
+/** A way to read the material. Only `ready` views have content stored; `available` ones are fetched on demand. */
+export interface MaterialView {
+  id: MaterialViewId;
+  label: string;
+  url: string;
+  mediaType: string;
+  status: "ready" | "available" | "failed";
+  fetchedAt?: string;
+  byteLength?: number;
+  pdf?: PdfInfo;
+  /** Why the last fetch failed, when status is "failed". */
+  error?: string;
+}
+
+/** The content of one view, in the same shape the readers already take. */
+export interface MaterialViewContent {
+  view: MaterialViewId;
+  mediaType: string;
+  pdf?: PdfInfo;
+  reader?: MaterialRecord["reader"];
+  markdown?: string;
+  plain?: string;
+  readingMinutes: number;
+  quality: ContentNormalizationQuality;
+  problems: NormalizationProblem[];
+}
+
+export interface ReadApiViews {
+  /** Fetches an `available` view (e.g. the arXiv PDF) and stores it; the record's `views` then lists it as ready. */
+  fetchMaterialView: (id: string, view: MaterialViewId) => Promise<OpenUrlResult>;
+  /** Content of a ready view; undefined when the view is not stored. The primary view's content is also on the record itself. */
+  getMaterialView: (id: string, view: MaterialViewId) => Promise<MaterialViewContent | undefined>;
+  /** Makes a ready view the one the reader opens first. */
+  setPrimaryView: (id: string, view: MaterialViewId) => Promise<MaterialRecord>;
 }
