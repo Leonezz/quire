@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Panel, SplitGroup, SplitPanel, SplitSeparator, useSplitPanelRef, useSplitSizes, type Selection } from "@read/ui";
 import type { AgentContext } from "../../shared/contracts";
 import { AddSheet } from "./AddSheet";
@@ -22,6 +22,7 @@ import { useLists } from "./useLists";
 import { CUT_LABELS, scopeFamily, useScope, type Scope } from "./useScope";
 
 const SIDEBAR_KEY = "read:layout:sidebar-collapsed";
+const SIDEBAR_MIN = 180;
 const SIDEBAR_DEFAULT = 220;
 const LIBRARY_CONTEXT: AgentContext = { kind: "library" };
 
@@ -58,15 +59,32 @@ export function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(loadSidebarCollapsed);
   const sidebarRef = useSplitPanelRef();
   const shellSizes = useSplitSizes("shell");
+  const storedSidebar = shellSizes.sizeOf("sidebar", SIDEBAR_DEFAULT);
+  const sidebarWidth = storedSidebar >= SIDEBAR_MIN ? storedSidebar : SIDEBAR_DEFAULT;
 
   // The reading theme applies to the whole window, whether or not a reader is open.
   useEffect(() => { applyTheme(loadPrefs().theme); }, []);
+  // The panel library sizes panes with flex-grow and jumps on collapse; a transition on that property, enabled
+  // only for the toggle, turns the jump into a slide without fighting the library's own layout or drag resizing.
+  const [sidebarSliding, setSidebarSliding] = useState(false);
+  const slidingRef = useRef(false);
   const toggleSidebar = useCallback(() => {
     const panel = sidebarRef.current;
-    if (!panel) return;
-    // A panel collapsed since mount has no "most recent size" to expand to, so the remembered width is set outright.
-    if (panel.isCollapsed()) panel.resize(shellSizes.sizeOf("sidebar", SIDEBAR_DEFAULT)); else panel.collapse();
-  }, [sidebarRef, shellSizes]);
+    if (!panel || slidingRef.current) return;
+    const expanding = panel.isCollapsed();
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (!reduced) { slidingRef.current = true; setSidebarSliding(true); }
+    // The transition class lands on the next paint; the size change follows it so the first frame animates too.
+    window.setTimeout(() => {
+      if (expanding) panel.resize(sidebarWidth); else panel.collapse();
+      // The collapsed state is read back from the panel itself once it settled, whatever the resize callbacks reported.
+      window.setTimeout(() => {
+        slidingRef.current = false; setSidebarSliding(false);
+        const collapsed = panel.isCollapsed();
+        setSidebarCollapsed(collapsed); saveSidebarCollapsed(collapsed);
+      }, reduced ? 0 : 240);
+    }, reduced ? 0 : 16);
+  }, [sidebarRef, sidebarWidth]);
   const openSettings = useCallback((section?: SettingsSection) => setSettings({ open: true, section }), []);
 
   useEffect(() => {
@@ -168,7 +186,7 @@ export function App() {
   const shellError = lists.error ?? routeError;
   const shell: ShellSlots = {
     listToolbar: <ListToolbar title={heading.title} count={heading.count} inset={sidebarCollapsed} onShowSidebar={toggleSidebar}
-      search={libraryScope ? { value: library.query, onChange: library.setQuery } : undefined} sort={libraryScope ? { value: library.sort, onChange: library.setSort } : undefined} />,
+      sort={libraryScope ? { value: library.sort, onChange: library.setSort } : undefined} />,
     trailing: <ShellActions addOpen={addOpen} onAdd={setAddOpen} searchOpen={searchOpen} onSearch={setSearchOpen} />,
     // The shell's Agent (the Library context) stands wherever no reader with its own panel is open; the Agent scope is the conversation itself.
     agentPanel: askOpen ? (
@@ -194,17 +212,20 @@ export function App() {
   })();
 
   return (
+    // The panel library owns the panes' inline styles (no class hook), so the slide is a CSS rule keyed on this attribute.
+    <div className="h-full" data-sidebar-sliding={sidebarSliding ? "true" : undefined}>
     <SplitGroup id="shell" aria-label="Window" className="h-full">
       {/* A collapsible panel mounted below its minimum starts collapsed: that is how the hidden sidebar comes back hidden. */}
-      <SplitPanel id="sidebar" panelRef={sidebarRef} defaultSize={sidebarCollapsed ? 0 : shellSizes.sizeOf("sidebar", SIDEBAR_DEFAULT)} minSize={180} maxSize={320} collapsible collapsedSize={0} className="overflow-hidden"
+      <SplitPanel id="sidebar" panelRef={sidebarRef} defaultSize={sidebarCollapsed ? 0 : sidebarWidth} minSize={SIDEBAR_MIN} maxSize={320} collapsible collapsedSize={0} className="overflow-hidden"
         onResize={(size, id, previous) => {
-          shellSizes.onResize("sidebar")(size, id, previous);
+          // Only a settled width at or above the minimum is worth remembering.
+          if (size.inPixels >= SIDEBAR_MIN) shellSizes.onResize("sidebar")(size, id, previous);
           // The mount report is a measurement in progress; the collapsed state follows real changes only.
           if (previous === undefined) return;
           const collapsed = size.inPixels === 0;
           setSidebarCollapsed(collapsed); saveSidebarCollapsed(collapsed);
         }}>
-        <AppSidebar scope={scope} onScope={setScope} inbox={lists.inbox} queueCount={lists.queue.length} conversationCount={agentSessions.sessions.length} tags={library.tags} sources={lists.sources} onHide={toggleSidebar} onOpenSettings={() => openSettings()} />
+        <AppSidebar width={sidebarWidth} scope={scope} onScope={setScope} inbox={lists.inbox} queueCount={lists.queue.length} conversationCount={agentSessions.sessions.length} tags={library.tags} sources={lists.sources} onHide={toggleSidebar} onOpenSettings={() => openSettings()} />
       </SplitPanel>
       {/* With the sidebar hidden the separator takes no room, so the list segment starts at the window's edge. */}
       <SplitSeparator aria-label="Resize sidebar" hit={sidebarCollapsed ? 0 : 10} footprint={sidebarCollapsed ? 0 : 1} line="always" className={sidebarCollapsed ? "invisible" : ""} />
@@ -218,5 +239,6 @@ export function App() {
       <SearchPalette open={searchOpen} onOpenChange={setSearchOpen} onOpenMaterial={showMaterial} onOpenItem={(id) => void openItemHit(id)} />
       <SettingsSheet open={settings.open} section={settings.section} onClose={() => setSettings({ open: false })} />
     </SplitGroup>
+    </div>
   );
 }

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { ArrowDownWideNarrow, ChevronDown, PanelLeft, Plus, Search as SearchIcon } from "lucide-react";
-import { Button, Menu, MenuItem, MenuTrigger, Search, Toolbar, ToolbarButton, ToolbarGroup } from "@read/ui";
+import { Button, Menu, MenuItem, MenuTrigger, Toolbar, ToolbarButton, ToolbarGroup } from "@read/ui";
 import { SORT_LABELS, type LibrarySort } from "./useLibrary";
 
 const SORTS = Object.keys(SORT_LABELS) as LibrarySort[];
@@ -34,19 +34,17 @@ export interface ListToolbarProps {
   /** The sidebar is hidden: the segment reaches the window's left edge, keeps the traffic lights' 80px clear, and carries the sidebar button. */
   inset: boolean;
   onShowSidebar: () => void;
-  /** The Library's search field (Library and tag scopes only). */
-  search?: { value: string; onChange: (value: string) => void } | undefined;
   sort?: { value: LibrarySort; onChange: (sort: LibrarySort) => void } | undefined;
 }
 
 /** The toolbar's list segment: "Inbox · 47", the search field in Library scopes, the sort at the far right. */
-export function ListToolbar({ title, count, inset, onShowSidebar, search, sort }: ListToolbarProps) {
+export function ListToolbar({ title, count, inset, onShowSidebar, sort }: ListToolbarProps) {
   return (
-    <header aria-label="List toolbar" className={`titlebar-drag flex h-[52px] min-w-0 items-center gap-2 overflow-hidden border-b border-separator pr-2.5 ${inset ? "pl-[80px]" : "pl-3.5"}`}>
-      {inset ? <ToolbarButton aria-label="Show sidebar (⌘\\)" isSelected={false} onChange={onShowSidebar} className="shrink-0"><PanelLeft /></ToolbarButton> : null}
+    // With the sidebar hidden the segment starts under the traffic lights: 92px keeps the toggle clear of them, as Mail does.
+    <header aria-label="List toolbar" className={`titlebar-drag flex h-[52px] min-w-0 items-center gap-2.5 overflow-hidden border-b border-separator pr-2.5 ${inset ? "pl-[92px]" : "pl-3.5"}`}>
+      {inset ? <ToolbarButton aria-label="Show sidebar (⌘\\)" isSelected={false} onChange={onShowSidebar} className="reader-enter shrink-0"><PanelLeft /></ToolbarButton> : null}
       <strong className="min-w-[64px] shrink truncate text-[13.5px] font-semibold leading-[18px] tracking-[-.01em] text-label">{title} <span className="font-medium tabular-nums text-label-3">· {count}</span></strong>
-      {search ? <Search aria-label="Search the library" placeholder="Search" value={search.value} onChange={search.onChange} className="ml-auto h-7 min-w-[40px] max-w-[220px] flex-1 px-2.5 text-[13px]" /> : null}
-      {sort ? <div className={search ? "" : "ml-auto"}><SortMenu sort={sort.value} onChange={sort.onChange} compact={inset && search !== undefined} /></div> : null}
+      {sort ? <div className="ml-auto"><SortMenu sort={sort.value} onChange={sort.onChange} compact={false} /></div> : null}
     </header>
   );
 }

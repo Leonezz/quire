@@ -9,6 +9,8 @@ const TOP_TAGS = 8;
 const ALL_TAGS_KEY = "tags:all";
 
 export interface AppSidebarProps {
+  /** The panel's remembered width in pixels; the inner layout keeps it during the slide. */
+  width: number;
   scope: Scope;
   onScope: (scope: Scope) => void;
   inbox: ItemRecord[];
@@ -32,7 +34,7 @@ export function undecidedBySource(inbox: readonly ItemRecord[]): Map<string, num
  * every scope in one list — Inbox · Queue · Agent, the Library's cuts, the most used tags, every
  * source with its health — and Settings pinned at the bottom.
  */
-export function AppSidebar({ scope, onScope, inbox, queueCount, conversationCount, tags, sources, onHide, onOpenSettings }: AppSidebarProps) {
+export function AppSidebar({ width, scope, onScope, inbox, queueCount, conversationCount, tags, sources, onHide, onOpenSettings }: AppSidebarProps) {
   const [tagsOpen, setTagsOpen] = useState(false);
   const allTagsRef = useRef<HTMLDivElement>(null);
   const undecided = useMemo(() => undecidedBySource(inbox), [inbox]);
@@ -45,7 +47,8 @@ export function AppSidebar({ scope, onScope, inbox, queueCount, conversationCoun
   };
 
   return (
-    <div className="grid h-full min-h-0 grid-rows-[52px_minmax(0,1fr)_auto] overflow-hidden">
+    // Fixed to the remembered width so the content slides behind the edge while the panel animates instead of squashing.
+    <div className="grid h-full min-h-0 grid-rows-[52px_minmax(0,1fr)_auto] overflow-hidden" style={{ width }}>
       <div className="titlebar-drag flex items-center justify-end pr-2">
         <ToolbarButton aria-label="Hide sidebar (⌘\\)" isSelected={false} onChange={onHide}><PanelLeft /></ToolbarButton>
       </div>
