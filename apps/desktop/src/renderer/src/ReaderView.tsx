@@ -243,7 +243,7 @@ export function ReaderView({ material, onBack, onOpenLink, onOpenMaterial, onPro
         ) : null}
         <div ref={viewportRef} className="reader-viewport overflow-auto px-14 pb-[120px] pt-12" style={prefsStyle(prefs)}>
           <article ref={bodyRef} className="reader-body" style={{ textAlign: prefs.justify ? "justify" : "start" }}>
-            <p className="mb-3 text-[13px] font-medium text-accent-text">{host}</p>
+            {lineageCount ? <button type="button" className="mb-3 block cursor-default border-0 bg-transparent p-0 text-[13px] font-medium text-accent-text hover:underline" onClick={() => setInspectorTab("info")}>{host} · sources in Info</button> : <p className="mb-3 text-[13px] font-medium text-accent-text">{host}</p>}
             <h1>{material.title}</h1>
             <div className="mb-8 flex flex-wrap gap-x-3 text-[12.5px] text-label-2">
               {material.byline ? <span>{material.byline}</span> : null}
@@ -251,7 +251,6 @@ export function ReaderView({ material, onBack, onOpenLink, onOpenMaterial, onPro
               <span>{material.readingMinutes} min</span>
               {material.origin === "agent" ? null : <a href={material.finalUrl} onClick={(event) => { event.preventDefault(); onOpenLink(material.finalUrl); }}>Open original ↗</a>}
             </div>
-            {lineageCount ? <p className="-mt-5 mb-8 text-[12.5px] text-label-2">Written from {lineageCount} {lineageCount === 1 ? "material" : "materials"} · <button type="button" className="cursor-default border-0 bg-transparent p-0 text-[12.5px] text-accent-text hover:underline" onClick={() => setInspectorTab("info")}>see the sources in Info</button></p> : null}
             <QualityBanner material={material} low={quality.low} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onRebuild={onRebuild} rebuild={rebuild} />
             <ReaderDocumentSurface
               schema={material.reader?.schema ?? "none"}

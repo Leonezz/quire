@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openDatabase } from "./db";
-import { MaterialStore, imageUrlsOf } from "./materials";
+import { MaterialStore, withoutTitleHeading, imageUrlsOf } from "./materials";
 import { MetaStore } from "./meta";
 
 let root = "";
@@ -203,5 +203,13 @@ describe("MaterialStore.search", () => {
     expect((await store.search("prompt leaks")).map((m) => m.title)).toEqual(["Cache keys"]);
     expect((await store.search("cache nothing")).length).toBe(0);
     expect(await store.search("   ")).toEqual([]);
+  });
+});
+
+describe("withoutTitleHeading", () => {
+  it("drops a leading H1 that repeats the title and keeps any other", () => {
+    expect(withoutTitleHeading("# A  Title\n\nBody", "a title")).toBe("Body");
+    expect(withoutTitleHeading("# Other\n\nBody", "A title")).toBe("# Other\n\nBody");
+    expect(withoutTitleHeading("Body", "A title")).toBe("Body");
   });
 });

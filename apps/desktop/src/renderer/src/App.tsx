@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { BookOpen, Inbox as InboxIcon, ListOrdered, PanelLeft, Plus, Radio, Search as SearchIcon, Settings as SettingsIcon, Sparkles } from "lucide-react";
-import { AskButton, Kbd, Search, Segment, Segmented, Sidebar, SidebarItem, SidebarSection, SplitGroup, SplitPanel, SplitSeparator, Toolbar, ToolbarButton, ToolbarGroup, ToolbarTitle, useSplitPanelRef, useSplitSizes, type Selection } from "@read/ui";
+import { AskButton, Kbd, Segment, Segmented, Sidebar, SidebarItem, SidebarSection, SplitGroup, SplitPanel, SplitSeparator, Toolbar, ToolbarButton, ToolbarGroup, ToolbarTitle, useSplitPanelRef, useSplitSizes, type Selection } from "@read/ui";
 import { AddSheet } from "./AddSheet";
 import { InboxView, type InboxGrouping } from "./InboxView";
 import { QueueView } from "./QueueView";
@@ -149,6 +149,31 @@ export function App() {
   const shellAsk = view !== "agent" && !readerOpen;
   const inspectorOpen = askOpen && shellAsk;
 
+  const toolbar = (
+    <Toolbar aria-label="Toolbar" className="titlebar-drag">
+      <ToolbarGroup><ToolbarButton aria-label={sidebarCollapsed ? "Show sidebar (⌘\\)" : "Hide sidebar (⌘\\)"} isSelected={false} onChange={toggleSidebar}><PanelLeft /></ToolbarButton></ToolbarGroup>
+      <ToolbarTitle title={titles[view]} subtitle={subtitle} />
+      <ToolbarGroup>
+        {view === "inbox" ? <Segmented aria-label="Group by" selectedKeys={[grouping]} onSelectionChange={(keys) => { const key = [...keys][0]; if (key) setGrouping(key as InboxGrouping); }}><Segment id="date">Date</Segment><Segment id="source">Source</Segment></Segmented> : null}
+        <ToolbarButton aria-label="Add (⌘N)" isSelected={addOpen} onChange={(on) => setAddOpen(on)}><Plus /></ToolbarButton>
+        <ToolbarButton aria-label="Search (⌘K)" isSelected={searchOpen} onChange={(on) => setSearchOpen(on)}><SearchIcon /></ToolbarButton>
+        {shellAsk ? <AskButton aria-label="Ask" isSelected={askOpen} onChange={setAskOpen}><Sparkles />Ask<Kbd>⌘J</Kbd></AskButton> : null}
+        <ToolbarButton aria-label="Settings (⌘,)" isSelected={settings.open} onChange={(on) => { if (on) openSettings(); else setSettings({ open: false }); }}><SettingsIcon /></ToolbarButton>
+      </ToolbarGroup>
+    </Toolbar>
+  );
+  const inspector = inspectorOpen ? (
+    <>
+      <SplitSeparator aria-label="Resize Agent panel" hit={12} footprint={12} line="hover" />
+      <SplitPanel id="inspector" defaultSize={shellSizes.sizeOf("inspector", 360)} minSize={300} maxSize={520} onResize={shellSizes.onResize("inspector")}>
+        {/* The shell inspector is the Agent alone: one panel, so no tab strip. */}
+        <aside aria-label="Agent" className="glass flex h-full min-h-0 flex-col overflow-auto rounded-panel px-4 pb-4 pt-4">
+          <AgentPanel context={{ kind: "library" }} onOpenMaterial={showMaterial} onOpenLink={openLink} onOpenSettings={() => openSettings("agent")} />
+        </aside>
+      </SplitPanel>
+    </>
+  ) : null;
+
   return (
     <SplitGroup id="shell" aria-label="Window" className="h-full p-3">
       {/* A collapsible panel mounted below its minimum starts collapsed: that is how the hidden sidebar comes back hidden. */}
@@ -170,27 +195,23 @@ export function App() {
           </SidebarSection>
         </Sidebar>
       </SplitPanel>
+      {/* With the sidebar hidden, a drag gutter keeps the toolbar clear of the traffic lights. */}
+      {sidebarCollapsed ? <div aria-hidden="true" className="titlebar-drag w-[68px] shrink-0" /> : null}
       <SplitSeparator aria-label="Resize sidebar" hit={12} footprint={12} line="hover" className={sidebarCollapsed ? "invisible w-0" : ""} />
       <SplitPanel id="main" minSize={640}>
+        {view === "library" ? (
+          <SplitGroup id="content" aria-label="Content" className="h-full min-h-0">
+            <SplitPanel id="view" minSize={480}>
+              <LibraryView library={library} toolbar={toolbar} selected={librarySelected} onSelectionChange={setLibrarySelected} onOpenLink={openLink} onOpenMaterial={showMaterial} onOpenSettings={() => openSettings("agent")} />
+            </SplitPanel>
+            {inspector}
+          </SplitGroup>
+        ) : (
         <div className="grid h-full grid-rows-[56px_minmax(0,1fr)] gap-3">
-          <Toolbar aria-label="Toolbar" className={`titlebar-drag ${sidebarCollapsed ? "pl-[92px]" : ""}`}>
-            <ToolbarGroup><ToolbarButton aria-label={sidebarCollapsed ? "Show sidebar (⌘\\)" : "Hide sidebar (⌘\\)"} isSelected={false} onChange={toggleSidebar}><PanelLeft /></ToolbarButton></ToolbarGroup>
-            <ToolbarTitle title={titles[view]} subtitle={subtitle} />
-            <ToolbarGroup>
-              {view === "inbox" ? <Segmented aria-label="Group by" selectedKeys={[grouping]} onSelectionChange={(keys) => { const key = [...keys][0]; if (key) setGrouping(key as InboxGrouping); }}><Segment id="date">Date</Segment><Segment id="source">Source</Segment></Segmented> : null}
-              {view === "library" ? <Search aria-label="Filter the library" placeholder="Filter titles, authors, tags…" value={library.state.query} onChange={library.setQuery} className="h-8 w-[220px] text-[13px]" /> : null}
-              <ToolbarButton aria-label="Add (⌘N)" isSelected={addOpen} onChange={(on) => setAddOpen(on)}><Plus /></ToolbarButton>
-              <ToolbarButton aria-label="Search (⌘K)" isSelected={searchOpen} onChange={(on) => setSearchOpen(on)}><SearchIcon /></ToolbarButton>
-              {shellAsk ? <AskButton aria-label="Ask" isSelected={askOpen} onChange={setAskOpen}><Sparkles />Ask<Kbd>⌘J</Kbd></AskButton> : null}
-              <ToolbarButton aria-label="Settings (⌘,)" isSelected={settings.open} onChange={(on) => { if (on) openSettings(); else setSettings({ open: false }); }}><SettingsIcon /></ToolbarButton>
-            </ToolbarGroup>
-          </Toolbar>
-
+          {toolbar}
           <SplitGroup id="content" aria-label="Content" className="min-h-0">
             <SplitPanel id="view" minSize={480}>
-              {view === "library" ? (
-                <LibraryView library={library} selected={librarySelected} onSelectionChange={setLibrarySelected} onOpenLink={openLink} onOpenMaterial={showMaterial} onOpenSettings={() => openSettings("agent")} />
-              ) : view === "agent" ? (
+              {view === "agent" ? (
                 <AgentView sessions={agentSessions} onOpenMaterial={showMaterial} onOpenLink={openLink} onOpenSettings={() => openSettings("agent")} />
               ) : (
                 <div className="flex h-full min-h-0 flex-col gap-3">
@@ -201,19 +222,10 @@ export function App() {
                 </div>
               )}
             </SplitPanel>
-            {inspectorOpen ? (
-              <>
-                <SplitSeparator aria-label="Resize Agent panel" hit={12} footprint={12} line="hover" />
-                <SplitPanel id="inspector" defaultSize={shellSizes.sizeOf("inspector", 360)} minSize={300} maxSize={520} onResize={shellSizes.onResize("inspector")}>
-                  {/* The shell inspector is the Agent alone: one panel, so no tab strip. */}
-                  <aside aria-label="Agent" className="glass flex h-full min-h-0 flex-col overflow-auto rounded-panel px-4 pb-4 pt-4">
-                    <AgentPanel context={{ kind: "library" }} onOpenMaterial={showMaterial} onOpenLink={openLink} onOpenSettings={() => openSettings("agent")} />
-                  </aside>
-                </SplitPanel>
-              </>
-            ) : null}
+            {inspector}
           </SplitGroup>
         </div>
+        )}
       </SplitPanel>
       <AddSheet open={addOpen} busy={addBusy} error={addError} onClose={() => { setAddOpen(false); setAddError(undefined); }} onSubmit={(url) => void submitUrl(url)} onSubscribed={(result) => void subscribed(result)} />
       <SearchPalette open={searchOpen} onOpenChange={setSearchOpen} onOpenMaterial={showMaterial} onOpenItem={(id) => void openItemHit(id)} />

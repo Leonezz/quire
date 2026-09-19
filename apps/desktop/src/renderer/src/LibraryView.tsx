@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { ArrowDownWideNarrow, ChevronDown, Tag, Trash2 } from "lucide-react";
-import { Button, ConfirmSheet, ItemList, ItemRow, Kbd, Menu, MenuItem, MenuTrigger, Segment, Segmented, SplitGroup, SplitPanel, SplitSeparator, useSplitSizes, type Selection } from "@read/ui";
+import { Button, ConfirmSheet, ItemList, ItemRow, Kbd, Menu, MenuItem, MenuTrigger, Search, Segment, Segmented, SplitGroup, SplitPanel, SplitSeparator, useSplitSizes, type Selection } from "@read/ui";
 import type { MaterialSummary } from "../../shared/contracts";
 import { read } from "./api";
 import { ErrorBoundary } from "./ErrorBoundary";
@@ -31,6 +31,7 @@ function FilterBar({ library }: { library: Library }) {
   const { state, tags, setKind, setTag, setSort } = library;
   return (
     <div className="grid gap-1.5 border-b border-separator-soft px-2.5 pb-2 pt-2.5">
+      <Search aria-label="Filter the library" placeholder="Filter titles, authors, tags…" value={state.query} onChange={library.setQuery} className="h-8 text-[13px]" />
       <Segmented aria-label="Kind" className="flex" selectedKeys={[state.kind]} onSelectionChange={(keys) => { const key = [...keys][0]; if (key) setKind(key as LibraryKind); }}>
         {(Object.keys(kindLabels) as LibraryKind[]).map((kind) => <Segment key={kind} id={kind} className="flex-1 px-1.5 text-[12px]">{kindLabels[kind]}</Segment>)}
       </Segmented>
@@ -58,7 +59,7 @@ function FilterBar({ library }: { library: Library }) {
  * The Library: the filtered list on the left (multi-select with ⇧ / ⌘, ⌫ deletes after asking),
  * the reader of the one selected material on the right.
  */
-export function LibraryView({ library, selected, onSelectionChange, onOpenLink, onOpenMaterial, onOpenSettings }: { library: Library; selected: Selection; onSelectionChange: (selection: Selection) => void; onOpenLink: (url: string) => void; onOpenMaterial: (id: string) => void; onOpenSettings: () => void }) {
+export function LibraryView({ library, toolbar, selected, onSelectionChange, onOpenLink, onOpenMaterial, onOpenSettings }: { library: Library; /** The shell toolbar, shown above the list so the reader's own title bar takes the top row. */ toolbar: ReactNode; selected: Selection; onSelectionChange: (selection: Selection) => void; onOpenLink: (url: string) => void; onOpenMaterial: (id: string) => void; onOpenSettings: () => void }) {
   const { materials, state, error, loading } = library;
   const sizes = useSplitSizes("library");
   const [confirming, setConfirming] = useState(false);
@@ -94,8 +95,10 @@ export function LibraryView({ library, selected, onSelectionChange, onOpenLink, 
 
   return (
     <>
-    <SplitGroup id="library" aria-label="Library" className="min-h-0 flex-1 gap-3">
+    <SplitGroup id="library" aria-label="Library" className="h-full min-h-0 flex-1">
       <SplitPanel id="list" defaultSize={sizes.sizeOf("list", 320)} minSize={280} maxSize={560} onResize={sizes.onResize("list")}>
+        <div className="grid h-full grid-rows-[56px_minmax(0,1fr)] gap-3">
+        {toolbar}
         <section className={`flex h-full min-h-0 flex-col overflow-hidden ${panelClass}`}>
           <FilterBar library={library} />
           {error ? <div className="p-3"><InlineError title="The library could not be loaded." message={error} /></div> : null}
@@ -116,6 +119,7 @@ export function LibraryView({ library, selected, onSelectionChange, onOpenLink, 
             </div>
           ) : null}
         </section>
+        </div>
       </SplitPanel>
       <SplitSeparator aria-label="Resize list" hit={12} footprint={12} line="hover" />
       <SplitPanel id="reader" minSize={420}>

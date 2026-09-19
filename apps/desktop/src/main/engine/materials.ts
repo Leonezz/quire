@@ -52,6 +52,14 @@ function markdownParts(content: string, baseUri: string): Pick<StoredRecord, "re
   };
 }
 
+/** The reader prints the title itself, so a leading "# Title" line that repeats it would show twice. */
+export function withoutTitleHeading(markdown: string, title: string): string {
+  const match = /^\s*#\s+(.+?)\s*\n/.exec(markdown);
+  if (!match) return markdown;
+  const same = (text: string) => text.replace(/\s+/g, " ").trim().toLowerCase();
+  return same(match[1] ?? "") === same(title) ? markdown.slice(match[0].length).replace(/^\s*\n/, "") : markdown;
+}
+
 export interface FeedMaterialInput {
   url: string;
   title: string;
@@ -202,7 +210,7 @@ export class MaterialStore {
     const fetchedAt = new Date().toISOString();
     const id = createHash("sha256").update(`${title}\n${fetchedAt}`).digest("hex").slice(0, 16);
     const url = `quire://artifact/${id}`;
-    const record: StoredRecord = { id, url, finalUrl: url, mediaType: "text/markdown", fetchedAt, origin: "agent", lineage, title, ...markdownParts(input.markdown, url) };
+    const record: StoredRecord = { id, url, finalUrl: url, mediaType: "text/markdown", fetchedAt, origin: "agent", lineage, title, ...markdownParts(withoutTitleHeading(input.markdown, title), url) };
     await this.save(record);
     return this.decorate(record);
   }
