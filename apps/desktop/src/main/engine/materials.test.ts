@@ -98,18 +98,25 @@ describe("MaterialStore overrides", () => {
     const { id } = opened.material;
     expect(opened.material.tags).toEqual([]);
     expect(opened.material).not.toHaveProperty("overrides");
-    meta.update(id, { title: "Cache keys, annotated", byline: "Ada", publishedAt: "2026-09-01T00:00:00.000Z", tags: ["systems"], note: "keep" });
+    expect(opened.material).toMatchObject({ kind: "webpage", extracted: { kind: "webpage", title: "Cache keys", url: "https://example.test/cache" }, meta: { kind: "webpage", title: "Cache keys" } });
+    const overrides = { title: "Cache keys, annotated", creators: [{ role: "author" as const, name: "Ada" }], date: "2026-09-01T00:00:00.000Z", tags: ["systems"], note: "keep", kind: "blogPost" as const };
+    await meta.update(id, overrides);
     const record = (await store.get(id))!;
-    expect(record).toMatchObject({ title: "Cache keys, annotated", byline: "Ada", publishedAt: "2026-09-01T00:00:00.000Z", tags: ["systems"], overrides: { title: "Cache keys, annotated", byline: "Ada", publishedAt: "2026-09-01T00:00:00.000Z", tags: ["systems"], note: "keep" } });
-    expect(JSON.parse(await readFile(join(root, "materials", `${id}.json`), "utf8"))).toMatchObject({ title: "Cache keys" });
-    expect((await store.list())[0]).toMatchObject({ id, title: "Cache keys, annotated", byline: "Ada", tags: ["systems"] });
+    expect(record).toMatchObject({ title: "Cache keys, annotated", byline: "Ada", publishedAt: "2026-09-01T00:00:00.000Z", tags: ["systems"], kind: "blogPost", overrides, meta: { ...overrides, url: "https://example.test/cache" } });
+    expect(record.extracted).toMatchObject({ kind: "webpage", title: "Cache keys" });
+    expect(JSON.parse(await readFile(join(root, "materials", `${id}.json`), "utf8"))).toMatchObject({ title: "Cache keys", extracted: { kind: "webpage", title: "Cache keys" } });
+    expect((await store.list())[0]).toMatchObject({ id, title: "Cache keys, annotated", byline: "Ada", tags: ["systems"], kind: "blogPost" });
     expect((await store.list())[0]).not.toHaveProperty("rebuiltAs");
+    // A partial date is kept on meta.date but yields no publishedAt; clearing the title falls back to the extracted one.
+    await meta.update(id, { date: "2026-09", title: "" });
+    expect(await store.get(id)).toMatchObject({ title: "Cache keys", meta: { date: "2026-09" } });
+    expect(await store.get(id)).not.toHaveProperty("publishedAt");
 
     const artifact = await store.saveArtifact({ title: "Cache keys (rebuilt)", markdown: "# Cache keys\n\nClean.", lineage: [id] });
     expect(artifact.tags).toEqual([]);
     expect((await store.setRebuiltAs(id, artifact.id)).rebuiltAs).toBe(artifact.id);
     expect((await store.list()).find((m) => m.id === id)?.rebuiltAs).toBe(artifact.id);
-    expect((await store.get(id))?.title).toBe("Cache keys, annotated");
+    expect((await store.get(id))?.title).toBe("Cache keys");
     await expect(store.setRebuiltAs(id, "0000000000000000")).rejects.toThrow(/Artifact 0000000000000000 is not in the library/);
     await expect(store.setRebuiltAs(id, id)).rejects.toThrow(/is not in the library/);
     await expect(store.setRebuiltAs("0000000000000000", artifact.id)).rejects.toThrow(/Material 0000000000000000 is not in the library/);
@@ -118,6 +125,70 @@ describe("MaterialStore overrides", () => {
     expect(meta.get(id)).toBeUndefined();
     expect((await store.list()).map((m) => m.id)).toEqual([artifact.id]);
     db.close();
+  });
+});
+
+const taggedArticle = `<!doctype html><html lang="en"><head><title>Calibrated abstention</title>
+<meta name="citation_title" content="Calibrated Abstention for Long-Context QA"><meta name="citation_author" content="Lindqvist, Mara"><meta name="citation_author" content="Nowak, Tomasz">
+<meta name="citation_journal_title" content="Journal of Retrieval"><meta name="citation_publication_date" content="2026/05/12"><meta name="citation_doi" content="10.1234/jr.2026.0042"></head>
+<body><article><h1>Calibrated abstention</h1>${"<p>Two harnesses cache the tokenised prompt keyed on the question text alone, so a changed system prompt silently reuses the old one. The fix is a cache key that includes the full rendered prompt hash.</p>".repeat(12)}</article></body></html>`;
+
+describe("MaterialStore metadata", () => {
+  it("extracts the declared metadata of a page into the record, derives byline and publishedAt, and searches the new fields", async () => {
+    const store = new MaterialStore(root, async (url) => ({ bytes: new TextEncoder().encode(taggedArticle), mediaType: "text/html", finalUrl: url.toString() }));
+    const opened = await store.openUrl("https://journal.example.test/articles/42");
+    if (!opened.ok) throw new Error(opened.message);
+    expect(opened.material).toMatchObject({
+      kind: "journalArticle", title: "Calibrated Abstention for Long-Context QA", byline: "Mara Lindqvist, Tomasz Nowak", publishedAt: "2026-05-12T00:00:00.000Z",
+      meta: { kind: "journalArticle", publication: "Journal of Retrieval", doi: "10.1234/jr.2026.0042", date: "2026-05-12", accessed: opened.material.fetchedAt, creators: [{ family: "Lindqvist" }, { family: "Nowak" }] },
+    });
+    expect((await store.list())[0]).toMatchObject({ kind: "journalArticle", byline: "Mara Lindqvist, Tomasz Nowak", publishedAt: "2026-05-12T00:00:00.000Z" });
+    expect((await store.search("nowak retrieval")).map((m) => m.id)).toEqual([opened.material.id]);
+    expect((await store.search("10.1234/jr.2026.0042")).map((m) => m.id)).toEqual([opened.material.id]);
+    expect(await store.search("nowak nothing")).toEqual([]);
+  });
+
+  it("derives the extracted layer of a record saved before the model at read time, and refreshMetadata persists a real one from the capture", async () => {
+    const store = new MaterialStore(root, async (url) => ({ bytes: new TextEncoder().encode(taggedArticle), mediaType: "text/html", finalUrl: url.toString() }));
+    const opened = await store.openUrl("https://journal.example.test/articles/42");
+    if (!opened.ok) throw new Error(opened.message);
+    const { id } = opened.material;
+    const path = join(root, "materials", `${id}.json`);
+    const stored = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+    const { extracted: _extracted, ...legacy } = stored;
+    const { writeFile } = await import("node:fs/promises");
+    await writeFile(path, JSON.stringify({ ...legacy, title: "Calibrated abstention", byline: "Mara Lindqvist and Tomasz Nowak", publishedAt: "2026-05-12T00:00:00.000Z" }));
+    const derived = (await store.get(id))!;
+    expect(derived).toMatchObject({ kind: "webpage", title: "Calibrated abstention", byline: "Mara Lindqvist, Tomasz Nowak", publishedAt: "2026-05-12T00:00:00.000Z", extracted: { kind: "webpage", creators: [{ name: "Mara Lindqvist" }, { name: "Tomasz Nowak" }] } });
+    expect(derived.meta.doi).toBeUndefined();
+    const refreshed = await store.refreshMetadata(id);
+    expect(refreshed).toMatchObject({ kind: "journalArticle", title: "Calibrated Abstention for Long-Context QA", meta: { doi: "10.1234/jr.2026.0042" } });
+    expect(JSON.parse(await readFile(path, "utf8"))).toMatchObject({ extracted: { kind: "journalArticle", doi: "10.1234/jr.2026.0042" } });
+    await expect(store.refreshMetadata("0000000000000000")).rejects.toThrow(/is not in the library/);
+  });
+
+  it("merges the item's metadata under the page's when a subscription item is read", async () => {
+    const store = new MaterialStore(root, pageFetcher("Retrieval Without Regret"));
+    const item = { kind: "preprint" as const, arxivId: "2409.12345", publication: "arXiv", creators: [{ role: "author" as const, name: "Mara Lindqvist" }], abstract: "From the Atom feed.", extra: "arXiv: 2409.12345 [cs.CL]", date: "2026-09-17T17:59:12.000Z" };
+    const opened = await store.openUrl("https://arxiv.org/html/2409.12345v1", "feed", item);
+    if (!opened.ok) throw new Error(opened.message);
+    expect(opened.material).toMatchObject({ kind: "preprint", title: "Retrieval Without Regret", byline: "Mara Lindqvist", publishedAt: "2026-09-17T17:59:12.000Z", meta: { arxivId: "2409.12345", publication: "arXiv", abstract: "From the Atom feed.", extra: "arXiv: 2409.12345 [cs.CL]" } });
+    expect(JSON.parse(await readFile(join(root, "materials", `${opened.material.id}.json`), "utf8"))).toMatchObject({ itemMeta: item });
+    expect((await store.refreshMetadata(opened.material.id)).meta.abstract).toBe("From the Atom feed.");
+    expect(await store.exportBibtex([opened.material.id])).toMatch(/^@misc\{lindqvist2026retrieval,\n {2}author = \{Mara Lindqvist\},\n {2}title = \{\{Retrieval Without Regret\}\},\n {2}eprint = \{2409\.12345\},\n {2}archivePrefix = \{arXiv\},\n {2}primaryClass = \{cs\.CL\}/);
+  });
+
+  it("exports BibTeX in the order given, skipping unknown ids, and refuses when none resolves", async () => {
+    const store = new MaterialStore(root, async (url) => ({ bytes: new TextEncoder().encode(taggedArticle), mediaType: "text/html", finalUrl: url.toString() }));
+    const first = await store.openUrl("https://journal.example.test/articles/42");
+    const second = await store.openFile({ name: "notes.md", mediaType: "", bytes: new TextEncoder().encode("# Notes\n\nText.") });
+    if (!first.ok || !second.ok) throw new Error("setup");
+    const out = await store.exportBibtex([second.material.id, "0000000000000000", first.material.id]);
+    expect(out.split("\n\n").map((entry) => entry.split("\n")[0])).toEqual([`@misc{notes,`, "@article{lindqvist2026calibrated,"]);
+    await expect(store.exportBibtex(["0000000000000000"])).rejects.toThrow(/None of these materials is in the library: 0000000000000000/);
+    expect(await store.has(first.material.id)).toBe(true);
+    expect(await store.has("0000000000000000")).toBe(false);
+    expect(await store.has("../x")).toBe(false);
   });
 });
 

@@ -1,4 +1,4 @@
-import type { ItemRecord, MaterialRecord, OpenUrlResult } from "../../shared/contracts";
+import type { ItemRecord, MaterialMeta, MaterialRecord, OpenUrlResult } from "../../shared/contracts";
 import { arxivHtmlUrl, arxivIdOf, arxivPdfUrl } from "./arxiv";
 import type { EventStore } from "./events";
 import type { ItemStore } from "./items";
@@ -14,18 +14,18 @@ export interface ReadItemDeps {
   warn: (message: string) => void;
 }
 
-async function materializeArxiv(item: ItemRecord, store: MaterialStore): Promise<OpenUrlResult> {
+async function materializeArxiv(item: ItemRecord, store: MaterialStore, meta: MaterialMeta | undefined): Promise<OpenUrlResult> {
   const id = arxivIdOf(item.link);
   if (!id) return { ok: false, code: "ARXIV_ID_INVALID", message: `Not an arXiv link: ${item.link}` };
-  const html = await store.openUrl(arxivHtmlUrl(id), "feed");
+  const html = await store.openUrl(arxivHtmlUrl(id), "feed", meta);
   if (html.ok) return html;
-  const pdf = await store.openUrl(arxivPdfUrl(id), "feed");
+  const pdf = await store.openUrl(arxivPdfUrl(id), "feed", meta);
   if (pdf.ok) return pdf;
   return { ok: false, code: pdf.code, message: `Neither the HTML rendering (${html.message}) nor the PDF (${pdf.message}) of ${id} could be read.` };
 }
 
-async function materializeFeedItem(item: ItemRecord, deps: ReadItemDeps): Promise<OpenUrlResult> {
-  const page = await deps.store.openUrl(item.link, "feed");
+async function materializeFeedItem(item: ItemRecord, deps: ReadItemDeps, meta: MaterialMeta | undefined): Promise<OpenUrlResult> {
+  const page = await deps.store.openUrl(item.link, "feed", meta);
   if (page.ok) return page;
   const content = deps.items.content(item.id);
   if (!content) return page;
@@ -33,6 +33,7 @@ async function materializeFeedItem(item: ItemRecord, deps: ReadItemDeps): Promis
   const material = await deps.store.saveFromFeed({
     url: item.link, title: item.title, publishedAt: item.publishedAt, content,
     ...(item.signals.lang ? { lang: item.signals.lang } : {}),
+    ...(meta ? { meta } : {}),
   });
   return { ok: true, material };
 }
@@ -45,7 +46,8 @@ async function materialOf(item: ItemRecord, deps: ReadItemDeps): Promise<Materia
     const existing = await deps.store.get(item.materialId);
     if (existing) return { ok: true, material: existing, fresh: false };
   }
-  const result = item.sourceKind === "arxiv" ? await materializeArxiv(item, deps.store) : await materializeFeedItem(item, deps);
+  const meta = deps.items.meta(item.id);
+  const result = item.sourceKind === "arxiv" ? await materializeArxiv(item, deps.store, meta) : await materializeFeedItem(item, deps, meta);
   return result.ok ? { ...result, fresh: true } : result;
 }
 

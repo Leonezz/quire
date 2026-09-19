@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { Annotation, AnnotationColor, AnnotationKind, MaterialRecord } from "../../shared/contracts";
 import { read } from "./api";
+import { creatorsText, displayDate } from "./materialMeta";
 
 export const ANNOTATION_COLORS: { color: AnnotationColor; label: string }[] = [
   { color: "#ffd400", label: "Yellow" },
@@ -50,17 +51,23 @@ export function useAnnotations(materialId: string) {
   return { annotations, error, add, update, remove };
 }
 
-/** `quote — Title, Author (link)`: pasteable into any note. */
+/** "Title, Creators, Publication, Date (url)": the source line under a quote and at the top of an export. */
+function sourceLine(material: MaterialRecord): string {
+  const meta = material.meta;
+  const parts = [material.title, creatorsText(meta.creators), meta.publication ?? "", displayDate(meta.date)].filter(Boolean);
+  return `${parts.join(", ")} (${meta.url ?? material.finalUrl})`;
+}
+
+/** `quote — Title, Creators, Publication, Date (link)`: pasteable into any note. */
 export function citationFor(material: MaterialRecord, annotation: Pick<Annotation, "quote" | "note">, section?: string) {
-  const who = material.byline ? `, ${material.byline}` : "";
   const where = section ? ` · ${section}` : "";
   const note = annotation.note ? `\n\n${annotation.note}` : "";
-  return `> ${annotation.quote.replace(/\s+/g, " ").trim()}\n\n— ${material.title}${who} (${material.finalUrl})${where}${note}`;
+  return `> ${annotation.quote.replace(/\s+/g, " ").trim()}\n\n— ${sourceLine(material)}${where}${note}`;
 }
 
 /** Every highlight and note of a material as Markdown, in reading order. */
 export function annotationsMarkdown(material: MaterialRecord, annotations: readonly Annotation[]) {
-  const header = `# ${material.title}\n\n${material.byline ? `${material.byline} · ` : ""}${material.finalUrl}\n`;
+  const header = `# ${material.title}\n\n${sourceLine(material)}\n`;
   const body = annotations.map((annotation) => `\n> ${annotation.quote.replace(/\s+/g, " ").trim()}\n${annotation.note ? `\n${annotation.note}\n` : ""}`).join("");
   return `${header}${body}`;
 }

@@ -12,13 +12,13 @@ import { MetaStore } from "./meta";
 
 const quality = { completeness: "declared_full" as const, conformance: "conformant" as const, identityConfidence: "strong" as const, safety: "safe" as const, warnings: [] };
 function summary(overrides: Partial<MaterialSummary> & { id: string; title: string }): MaterialSummary {
-  return { url: `https://x.test/${overrides.id}`, fetchedAt: "2026-09-10T00:00:00.000Z", readingMinutes: 1, origin: "web", mediaType: "text/html", quality, tags: [], ...overrides };
+  return { url: `https://x.test/${overrides.id}`, fetchedAt: "2026-09-10T00:00:00.000Z", readingMinutes: 1, origin: "web", mediaType: "text/html", quality, tags: [], kind: "webpage", ...overrides };
 }
 
 const web = summary({ id: "1", title: "Cache keys", byline: "Ada", fetchedAt: "2026-09-12T00:00:00.000Z", publishedAt: "2026-09-01T00:00:00.000Z", tags: ["Systems"] });
-const pdf = summary({ id: "2", title: "attention is not all you need", mediaType: "application/pdf", fetchedAt: "2026-09-11T00:00:00.000Z", publishedAt: "2026-09-05T00:00:00.000Z", tags: ["ml"] });
-const feed = summary({ id: "3", title: "Momentum, revisited", origin: "feed", fetchedAt: "2026-09-13T00:00:00.000Z", tags: ["ml", "systems"] });
-const artifact = summary({ id: "4", title: "Synthesis: caches", origin: "agent", mediaType: "text/markdown", fetchedAt: "2026-09-14T00:00:00.000Z", lineage: ["1"] });
+const pdf = summary({ id: "2", title: "attention is not all you need", mediaType: "application/pdf", kind: "preprint", fetchedAt: "2026-09-11T00:00:00.000Z", publishedAt: "2026-09-05T00:00:00.000Z", tags: ["ml"] });
+const feed = summary({ id: "3", title: "Momentum, revisited", origin: "feed", kind: "blogPost", fetchedAt: "2026-09-13T00:00:00.000Z", tags: ["ml", "systems"] });
+const artifact = summary({ id: "4", title: "Synthesis: caches", origin: "agent", mediaType: "text/markdown", kind: "note", fetchedAt: "2026-09-14T00:00:00.000Z", lineage: ["1"] });
 const all = [web, pdf, feed, artifact];
 
 describe("queryLibrary", () => {
@@ -32,6 +32,13 @@ describe("queryLibrary", () => {
     expect(queryLibrary(all, { kind: "pdf" }).map((m) => m.id)).toEqual(["2"]);
     expect(queryLibrary(all, { kind: "artifact" }).map((m) => m.id)).toEqual(["4"]);
     expect(queryLibrary(all, { kind: "feed" }).map((m) => m.id)).toEqual(["3"]);
+  });
+
+  it("filters by bibliographic kind, alone or together with the coarse kind", () => {
+    expect(queryLibrary(all, { materialKind: "preprint" }).map((m) => m.id)).toEqual(["2"]);
+    expect(queryLibrary(all, { materialKind: "webpage" }).map((m) => m.id)).toEqual(["1"]);
+    expect(queryLibrary(all, { kind: "articles", materialKind: "blogPost" }).map((m) => m.id)).toEqual(["3"]);
+    expect(queryLibrary(all, { kind: "pdf", materialKind: "blogPost" })).toEqual([]);
   });
 
   it("filters by tag case-insensitively and by every word of the query over title, byline and tags", () => {

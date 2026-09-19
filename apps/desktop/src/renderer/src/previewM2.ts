@@ -36,6 +36,9 @@ const demoArtifact: MaterialRecord = {
   quality: { completeness: "declared_full", conformance: "conformant", identityConfidence: "strong", safety: "safe", warnings: [] },
   lineage: ["526130b61f003c33", "5f725f31pdf00001"],
   tags: [],
+  kind: "note",
+  extracted: { kind: "note", title: "Highlights without the DOM: a brief", date: "2026-09-18" },
+  meta: { kind: "note", title: "Highlights without the DOM: a brief", date: "2026-09-18" },
   markdown: [
     "## Highlights without the DOM",
     "",

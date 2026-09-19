@@ -31,7 +31,7 @@ export function SearchPalette({ open, onOpenChange, onOpenMaterial, onOpenItem }
   }, [query]);
 
   const items: CommandPaletteItem[] = hits.map((hit) => ({ id: keyOf(hit), title: hit.title, subtitle: hit.subtitle, kind: hit.kind === "material" ? "library" : "inbox" }));
-  const status = error ?? (searching ? "Searching…" : query.trim() ? `${hits.length} ${hits.length === 1 ? "hit" : "hits"}` : "Titles, bylines and sources across your library and inbox.");
+  const status = error ?? (searching ? "Searching…" : query.trim() ? `${hits.length} ${hits.length === 1 ? "hit" : "hits"}` : "Titles, authors and sources across your library and inbox.");
 
   return (
     <CommandPalette aria-label="Search" isOpen={open} onOpenChange={onOpenChange} placeholder="Search…" query={query} onQueryChange={setQuery} items={items}

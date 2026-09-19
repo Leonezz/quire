@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { gistOf, parseFeed } from "./feeds";
+import { feedItemMeta, gistOf, parseFeed } from "./feeds";
 
 const fixture = (name: string) => readFile(join(__dirname, "__fixtures__", name));
 const NOW = () => new Date("2026-09-18T12:00:00Z");
@@ -16,6 +16,7 @@ describe("parseFeed", () => {
     const [full, short, math] = feed.items;
     expect(full!.link).toBe("https://systems.example.test/posts/cache-keys");
     expect(full!.publishedAt).toBe("2026-09-14T09:30:00.000Z");
+    expect(full!.meta).toEqual({ kind: "blogPost", publication: "Systems Notes", date: "2026-09-14T09:30:00.000Z" });
     expect(full!.summaryOnly).toBe(false);
     expect(full!.signals).toEqual({ code: true, figures: true, lang: "en-us" });
     expect(full!.readingMinutes).toBe(1);
@@ -79,5 +80,12 @@ describe("gistOf", () => {
     const gist = gistOf("word ".repeat(200));
     expect(gist.length).toBeLessThanOrEqual(300);
     expect(gist.endsWith("…")).toBe(true);
+  });
+});
+
+describe("feedItemMeta", () => {
+  it("names the feed as the publication and calls it a newsletter only when its title says so", () => {
+    expect(feedItemMeta("Systems Notes", "2026-09-14T09:30:00.000Z")).toEqual({ kind: "blogPost", publication: "Systems Notes", date: "2026-09-14T09:30:00.000Z" });
+    for (const title of ["The Batch Newsletter", "Systems Weekly", "前端周刊", "ML Digest"]) expect(feedItemMeta(title, "2026").kind).toBe("newsletter");
   });
 });

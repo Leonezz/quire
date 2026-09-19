@@ -26,8 +26,9 @@ import { registerM3Handlers } from "./ipc-m3";
 const userData = app.getPath("userData");
 const settings = new SettingsStore(join(userData, "settings.json"), userData, { warn: (message) => console.warn(`[settings] ${message}`) });
 const db = openDatabase(join(userData, "quire.sqlite"));
-const meta = new MetaStore(db);
-const store = new MaterialStore(userData, fetchPage, { meta, keepCapture: () => settings.get().keepCapture });
+// The two stores reference each other: overrides ride on records, and related ids must name records. The checker runs only inside update(), after both exist.
+const meta: MetaStore = new MetaStore(db, { materialExists: (id): Promise<boolean> => store.has(id) });
+const store: MaterialStore = new MaterialStore(userData, fetchPage, { meta, keepCapture: () => settings.get().keepCapture });
 const images = new ImageCache(userData);
 const annotations = new AnnotationStore(userData);
 const items = new ItemStore(db);

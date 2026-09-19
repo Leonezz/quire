@@ -24,7 +24,7 @@ async function fetchEntries(source: SourceRecord, deps: SyncDeps): Promise<Fetch
     const url = arxivQueryUrl(source.locator);
     const page = await deps.fetch(assertPublicHttpUrl(url), FEED_ACCEPT);
     const feed = parseFeed(page.bytes, page.mediaType, url, now);
-    return { title: source.title, items: arxivItemsOf(feed) };
+    return { title: source.title, items: arxivItemsOf(feed, page.bytes) };
   }
   const page = await deps.fetch(assertPublicHttpUrl(source.locator), FEED_ACCEPT);
   const feed = parseFeed(page.bytes, page.mediaType, source.locator, now);

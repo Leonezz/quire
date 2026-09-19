@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { arxivCategoryFromInput, arxivIdOf, arxivItemsOf, arxivQueryUrl, isArxivCategory } from "./arxiv";
+import { arxivCategoryFromInput, arxivEntryMetaOf, arxivIdOf, arxivItemsOf, arxivQueryUrl, isArxivCategory } from "./arxiv";
 import { parseFeed } from "./feeds";
 
 describe("arXiv categories", () => {
@@ -46,5 +46,24 @@ describe("arxivItemsOf", () => {
     expect(items[1]!.publishedAt).toBe("2026-09-16T09:11:05.000Z");
     expect(items[0]).toMatchObject({ readingMinutes: 20, signals: { math: true }, summaryOnly: false });
     expect(items[0]!.content).toBeUndefined();
+    // Without the Atom bytes only what the link says is known.
+    expect(items[0]!.meta).toEqual({ kind: "preprint", publication: "arXiv", arxivId: "2409.12345", extra: "arXiv: 2409.12345", date: "2026-09-17T17:59:12.000Z" });
+  });
+
+  it("reads authors, the abstract, the published date and the primary category from the Atom entries", async () => {
+    const bytes = new Uint8Array(await readFile(join(__dirname, "__fixtures__", "arxiv-cs-cl.atom")));
+    const feed = parseFeed(bytes, "application/atom+xml", arxivQueryUrl("cs.CL"));
+    const items = arxivItemsOf(feed, bytes);
+    expect(items[0]!.meta).toEqual({
+      kind: "preprint", arxivId: "2409.12345", publication: "arXiv",
+      creators: [{ role: "author", name: "Mara Lindqvist" }, { role: "author", name: "Tomasz Nowak" }],
+      abstract: "Long-context language models answer many questions from the prompt alone, yet they retrieve anyway, paying latency for evidence they do not use. We study when retrieval helps and propose a calibrated abstention rule that predicts, from the model's own token-level uncertainty, whether the retrieved passages will change the answer. On three long-context benchmarks the rule skips 41% of retrievals with no loss in exact match, and its errors concentrate on questions the model answers wrongly with or without evidence.",
+      date: "2026-09-17T17:59:12Z", extra: "arXiv: 2409.12345 [cs.CL]",
+    });
+    expect(items[2]!.meta?.creators?.map((c) => c.name)).toEqual(["Priya Raman", "Elena Fischer", "Kwame Mensah"]);
+    const entries = arxivEntryMetaOf(bytes);
+    expect([...entries.keys()]).toEqual(["2409.12345", "2409.11876", "2409.10021"]);
+    expect(arxivEntryMetaOf(new TextEncoder().encode("<feed><entry><id>x</id><summary>a &amp; b</summary></entry></feed>")).size).toBe(0);
+    expect(arxivEntryMetaOf(new TextEncoder().encode("<feed><entry><id>http://arxiv.org/abs/2409.00001v1</id><summary>a &amp; b &#x27;c&#39;</summary></entry></feed>")).get("2409.00001")).toEqual({ kind: "preprint", arxivId: "2409.00001", publication: "arXiv", abstract: "a & b 'c'", extra: "arXiv: 2409.00001" });
   });
 });

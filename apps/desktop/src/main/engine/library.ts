@@ -37,6 +37,7 @@ export function queryLibrary(summaries: readonly MaterialSummary[], filter: Libr
   const compare = filter.sort === "published" ? byPublished : filter.sort === "title" ? byTitle : byFetched;
   return summaries
     .filter((material) => kind(material))
+    .filter((material) => !filter.materialKind || material.kind === filter.materialKind)
     .filter((material) => !tag || material.tags.some((candidate) => candidate.toLowerCase() === tag))
     .filter((material) => words.length === 0 || matchesQuery(material, words))
     .sort(compare);

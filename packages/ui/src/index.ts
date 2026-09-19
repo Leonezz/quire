@@ -33,3 +33,7 @@ export { CommandPalette } from "./primitives/CommandPalette";
 export type { CommandPaletteItem, CommandPaletteProps } from "./primitives/CommandPalette";
 export { AgentTurn, AgentToolLine, CitationPill, UNVERIFIED_CITATION_TITLE } from "./primitives/AgentTranscript";
 export type { AgentToolStatus, CitationPillProps } from "./primitives/AgentTranscript";
+export { MenuSelect } from "./primitives/MenuSelect";
+export type { MenuSelectOption, MenuSelectProps } from "./primitives/MenuSelect";
+export { CreatorRow } from "./primitives/CreatorRow";
+export type { CreatorRowProps } from "./primitives/CreatorRow";

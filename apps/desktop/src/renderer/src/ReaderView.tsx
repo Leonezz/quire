@@ -14,6 +14,7 @@ import { FindBar } from "./FindBar";
 import { ReadingSettings } from "./ReadingSettings";
 import { prefsStyle, useReadingPrefs } from "./readingPrefs";
 import { read } from "./api";
+import { headerParts } from "./materialMeta";
 import type { MaterialRecord } from "../../shared/contracts";
 
 type OutlineEntry = { id: string; label: string; level: number };
@@ -101,7 +102,9 @@ export function ReaderView({ material, onBack, onOpenLink, onOpenMaterial, onPro
   const onTaskSettled = useCallback((task: AgentTask, status: "done" | "failed" | "interrupted") => { if (task === "rebuild") setRebuild(status === "done" ? "idle" : "failed"); }, []);
   useEffect(() => { if (material.rebuiltAs) setRebuild("idle"); }, [material.rebuiltAs]);
   const onRebuild = canRebuild(material) ? startRebuild : undefined;
+  // Focus mode closes the inspector; an explicit request for a tab (button, i / n / ⌘J) leaves focus mode again.
   useEffect(() => { if (prefs.focus) setInspectorTab(null); }, [prefs.focus]);
+  useEffect(() => { if (inspectorTab !== null && prefs.focus) setPrefs({ ...prefs, focus: false }); }, [inspectorTab, prefs, setPrefs]);
   const quality = qualityLabel(material);
   const identity = material.reader ? `${material.id}:${material.reader.schema}` : material.id;
 
@@ -246,8 +249,7 @@ export function ReaderView({ material, onBack, onOpenLink, onOpenMaterial, onPro
             {lineageCount ? <button type="button" className="mb-3 block cursor-default border-0 bg-transparent p-0 text-[13px] font-medium text-accent-text hover:underline" onClick={() => setInspectorTab("info")}>{host} · sources in Info</button> : <p className="mb-3 text-[13px] font-medium text-accent-text">{host}</p>}
             <h1>{material.title}</h1>
             <div className="mb-8 flex flex-wrap gap-x-3 text-[12.5px] text-label-2">
-              {material.byline ? <span>{material.byline}</span> : null}
-              {material.publishedAt ? <span>{new Date(material.publishedAt).toLocaleDateString()}</span> : null}
+              {headerParts(material.meta).map((part) => <span key={part}>{part}</span>)}
               <span>{material.readingMinutes} min</span>
               {material.origin === "agent" ? null : <a href={material.finalUrl} onClick={(event) => { event.preventDefault(); onOpenLink(material.finalUrl); }}>Open original ↗</a>}
             </div>

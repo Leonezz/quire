@@ -1,4 +1,4 @@
-import type { MaterialRecord } from "../../shared/contracts";
+import type { MaterialMeta, MaterialRecord } from "../../shared/contracts";
 
 // What the demo agent's "rebuild" produced: the artifact records it wrote and which material each
 // rebuilt, in localStorage — so the Library row, the reader banner and the Info panel can follow
@@ -30,18 +30,23 @@ export function rebuiltArtifactOf(material: MaterialRecord): MaterialRecord {
   const id = newMaterialId();
   const body = (material.markdown ?? material.plain ?? "").trim();
   const paragraphs = body.split(/\n{2,}/).map((paragraph) => paragraph.replace(/\s+/g, " ").trim()).filter(Boolean);
+  const fetchedAt = new Date().toISOString();
+  const extracted: MaterialMeta = { kind: "note", title: `${material.title} (rebuilt)`, date: fetchedAt.slice(0, 10) };
   return {
     id,
     url: `agent://artifact/${id}`,
     finalUrl: `agent://artifact/${id}`,
     title: `${material.title} (rebuilt)`,
-    fetchedAt: new Date().toISOString(),
+    fetchedAt,
     readingMinutes: Math.max(1, material.readingMinutes),
     origin: "agent",
     mediaType: "text/markdown",
     quality: { completeness: "declared_full", conformance: "conformant", identityConfidence: "strong", safety: "safe", warnings: [] },
     lineage: [material.id],
     tags: [],
+    kind: "note",
+    extracted,
+    meta: extracted,
     markdown: [`## ${material.title}`, "", `Rebuilt by the agent from the captured page [${material.id}].`, "", ...paragraphs.flatMap((paragraph) => [paragraph, ""])].join("\n"),
     problems: [],
   };

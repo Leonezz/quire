@@ -1,10 +1,14 @@
 import type { LibraryFilter, MaterialMeta, MaterialRecord, MaterialSummary, ReadApiM3, Settings, TagCount } from "../../shared/contracts";
+import { publicationOf } from "./materialMeta";
+import { bibtexOf } from "../../shared/bibtex";
 import { keepPreviewItem } from "./previewM1";
-import { rebuiltAsOf, recordRebuild } from "./previewRebuild";
+import { extractedOfSummary, knownFieldsOf, mergeOverrides, overlayRecord, overlaySummary } from "./previewMeta";
+import { recordRebuild } from "./previewRebuild";
 import { deleteSession, getSession, listSessions, onPreviewSessionsChanged } from "./previewSessions";
 
-// The M3 half of the browser preview: metadata overrides, tags, the Library query, deletion,
-// keep and settings — all in localStorage, mirroring what the engine does with its stores.
+// The M3 half of the browser preview: metadata overrides (previewMeta.ts holds the model), tags,
+// the Library query, BibTeX, deletion, keep and settings — all in localStorage, mirroring what
+// the engine does with its stores.
 // Agent sessions come from previewSessions.ts (the demo agent writes them); a rebuild's artifact
 // and the `rebuiltAs` mark come from previewRebuild.ts.
 
@@ -12,8 +16,6 @@ const META_KEY = "read:preview-meta";
 const DELETED_KEY = "read:preview-deleted";
 const SETTINGS_KEY = "read:preview-settings";
 const PREVIEW_DATA_DIRECTORY = "~/Library/Application Support/Quire (preview: nothing is written here)";
-const MAX_TAGS = 20;
-const MAX_TAG_LENGTH = 40;
 const MIN_SYNC_MINUTES = 5;
 const MAX_SYNC_MINUTES = 1440;
 const MAX_MODEL_LENGTH = 64;
@@ -28,52 +30,9 @@ function readJson<T>(key: string, fallback: T): T {
 }
 function writeJson(key: string, value: unknown) { localStorage.setItem(key, JSON.stringify(value)); }
 
-const metaAll = () => readJson<Record<string, MaterialMeta>>(META_KEY, {});
+/** Stored overrides, minus any field from the pre-model shape (byline / publishedAt) an old preview may have written. */
+const overridesAll = (): Record<string, MaterialMeta> => Object.fromEntries(Object.entries(readJson<Record<string, Record<string, unknown>>>(META_KEY, {})).map(([id, meta]) => [id, knownFieldsOf(meta)]));
 const deletedIds = () => new Set(readJson<string[]>(DELETED_KEY, []));
-
-/** Trimmed, at most 40 characters each, deduplicated case-insensitively (first spelling wins), at most 20 — as the engine does. */
-function normalizeTags(tags: readonly string[]): string[] {
-  const seen = new Set<string>();
-  return tags.reduce<string[]>((kept, raw) => {
-    const tag = raw.trim().slice(0, MAX_TAG_LENGTH).trim();
-    const key = tag.toLowerCase();
-    if (!tag || seen.has(key) || kept.length >= MAX_TAGS) return kept;
-    seen.add(key);
-    return [...kept, tag];
-  }, []);
-}
-
-/** `undefined` keeps the stored value, an empty string (or empty array) clears it, anything else replaces it. */
-function mergeField<T extends string | string[]>(current: T | undefined, patch: T | undefined): T | undefined {
-  if (patch === undefined) return current;
-  return patch.length === 0 ? undefined : patch;
-}
-
-function mergeMeta(current: MaterialMeta, patch: MaterialMeta): MaterialMeta {
-  if (patch.publishedAt && Number.isNaN(Date.parse(patch.publishedAt))) throw new Error("The published date is not a date.");
-  const title = mergeField(current.title, patch.title?.trim());
-  const byline = mergeField(current.byline, patch.byline?.trim());
-  const publishedAt = mergeField(current.publishedAt, patch.publishedAt?.trim());
-  const note = mergeField(current.note, patch.note?.trim());
-  const tags = mergeField(current.tags, patch.tags ? normalizeTags(patch.tags) : undefined);
-  return { ...(title ? { title } : {}), ...(byline ? { byline } : {}), ...(publishedAt ? { publishedAt } : {}), ...(tags && tags.length ? { tags } : {}), ...(note ? { note } : {}) };
-}
-
-/** The effective summary: the extracted values with the overrides laid over, the tags, and the rebuilt mark. */
-export function overlaySummary<T extends MaterialSummary>(material: T, meta: MaterialMeta | undefined): T {
-  const rebuiltAs = rebuiltAsOf(material.id);
-  return {
-    ...material,
-    ...(meta?.title ? { title: meta.title } : {}),
-    ...(meta?.byline ? { byline: meta.byline } : {}),
-    ...(meta?.publishedAt ? { publishedAt: meta.publishedAt } : {}),
-    ...(rebuiltAs ? { rebuiltAs } : {}),
-    tags: meta?.tags ?? [],
-  };
-}
-function overlayRecord(material: MaterialRecord, meta: MaterialMeta | undefined): MaterialRecord {
-  return { ...overlaySummary(material, meta), ...(meta && Object.keys(meta).length ? { overrides: meta } : {}) };
-}
 
 type Kind = NonNullable<LibraryFilter["kind"]>;
 const KINDS: Record<Kind, (material: MaterialSummary) => boolean> = {
@@ -100,8 +59,9 @@ export function queryLibrary(summaries: readonly MaterialSummary[], filter: Libr
   const compare = filter.sort === "published" ? byPublished : filter.sort === "title" ? byTitle : byFetched;
   return summaries
     .filter((material) => kind(material))
+    .filter((material) => !filter.materialKind || material.kind === filter.materialKind)
     .filter((material) => !tag || material.tags.some((candidate) => candidate.toLowerCase() === tag))
-    .filter((material) => words.length === 0 || words.every((word) => `${material.title} ${material.byline ?? ""} ${material.tags.join(" ")}`.toLowerCase().includes(word)))
+    .filter((material) => words.length === 0 || words.every((word) => `${material.title} ${material.byline ?? ""} ${publicationOf(material) ?? ""} ${material.tags.join(" ")}`.toLowerCase().includes(word)))
     .sort(compare);
 }
 
@@ -138,12 +98,17 @@ export function createPreviewM3(deps: { getMaterial: (id: string) => Promise<Mat
   const getMaterial = async (id: string) => {
     if (deletedIds().has(id)) return undefined;
     const record = await deps.getMaterial(id);
-    return record ? overlayRecord(record, metaAll()[id]) : undefined;
+    return record ? overlayRecord(record, overridesAll()[id]) : undefined;
   };
   const listMaterials = async () => {
     const deleted = deletedIds();
-    const meta = metaAll();
-    return (await deps.listMaterials()).filter((material) => !deleted.has(material.id)).map((material) => overlaySummary(material, meta[material.id]));
+    const overrides = overridesAll();
+    return (await deps.listMaterials()).filter((material) => !deleted.has(material.id)).map((material) => overlaySummary(material, extractedOfSummary(material), overrides[material.id]));
+  };
+  const requireMaterial = async (id: string) => {
+    const record = await getMaterial(id);
+    if (!record) throw new Error("This material is no longer in the library.");
+    return record;
   };
   const settings = (): Settings => ({ ...SETTINGS_DEFAULTS, ...readJson<Partial<Settings>>(SETTINGS_KEY, {}), dataDirectory: PREVIEW_DATA_DIRECTORY });
 
@@ -157,17 +122,24 @@ export function createPreviewM3(deps: { getMaterial: (id: string) => Promise<Mat
     updateMaterialMeta: async (id, patch) => {
       const base = await deps.getMaterial(id);
       if (!base || deletedIds().has(id)) throw new Error("This material is no longer in the library.");
-      const all = metaAll();
-      const next = mergeMeta(all[id] ?? {}, patch);
+      const all = overridesAll();
+      const next = mergeOverrides(all[id] ?? {}, patch);
       const { [id]: _dropped, ...rest } = all;
       writeJson(META_KEY, Object.keys(next).length ? { ...rest, [id]: next } : rest);
       notify();
       return overlayRecord(base, Object.keys(next).length ? next : undefined);
     },
+    // Nothing to re-extract from in a browser: what the record declares is what it stays.
+    refreshMetadata: async (id) => requireMaterial(id),
+    exportBibtex: async (ids) => {
+      if (ids.length === 0) throw new Error("Nothing selected to export.");
+      const records = await Promise.all(ids.map(requireMaterial));
+      return records.map((record) => bibtexOf(record.meta, record.id)).join("\n\n");
+    },
     listTags: async (): Promise<TagCount[]> => {
       const deleted = deletedIds();
       const counts = new Map<string, number>();
-      for (const [id, meta] of Object.entries(metaAll())) {
+      for (const [id, meta] of Object.entries(overridesAll())) {
         if (deleted.has(id)) continue;
         for (const tag of meta.tags ?? []) counts.set(tag, (counts.get(tag) ?? 0) + 1);
       }
@@ -176,7 +148,7 @@ export function createPreviewM3(deps: { getMaterial: (id: string) => Promise<Mat
     deleteMaterials: async (ids) => {
       if (ids.length === 0) throw new Error("Nothing selected to delete.");
       writeJson(DELETED_KEY, [...new Set([...deletedIds(), ...ids])]);
-      writeJson(META_KEY, Object.fromEntries(Object.entries(metaAll()).filter(([id]) => !ids.includes(id))));
+      writeJson(META_KEY, Object.fromEntries(Object.entries(overridesAll()).filter(([id]) => !ids.includes(id))));
       for (const id of ids) localStorage.removeItem(`read:preview-annotations:${id}`);
       notify();
     },

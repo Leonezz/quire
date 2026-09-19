@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
+import type { MaterialMeta } from "../../shared/contracts";
 
 export type Database = DatabaseSync;
 
@@ -9,7 +10,7 @@ export type Database = DatabaseSync;
  * files in MaterialStore). The schema is versioned with PRAGMA user_version so later
  * milestones can migrate in place instead of guessing what an old file holds.
  */
-export const SCHEMA_VERSION = 3;
+export const SCHEMA_VERSION = 4;
 
 const SCHEMA_V1 = `
 CREATE TABLE IF NOT EXISTS sources (
@@ -114,12 +115,66 @@ function migrateToV3(db: Database) {
   if (!hasColumn(db, "agent_turns", "sources")) db.exec("ALTER TABLE agent_turns ADD COLUMN sources TEXT");
 }
 
+// V4: bibliographic metadata. The overrides become one JSON document per material (the shape of
+// MaterialMeta) instead of typed columns, and items carry what their source declared (meta).
+const SCHEMA_V4_META = `
+CREATE TABLE IF NOT EXISTS material_meta (
+  material_id TEXT PRIMARY KEY,
+  overrides TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+`;
+
+interface LegacyMetaRow { material_id: string; title: string | null; byline: string | null; published_at: string | null; tags: string; note: string | null; updated_at: string }
+
+/** The v3 typed columns as a MaterialMeta document: the byline becomes authors, the date becomes `date`. */
+export function legacyOverridesOf(row: Pick<LegacyMetaRow, "title" | "byline" | "published_at" | "tags" | "note">): MaterialMeta {
+  const creators = (row.byline ?? "").split(/,|\band\b/).map((name) => name.trim()).filter(Boolean).map((name) => ({ role: "author" as const, name }));
+  const tags = JSON.parse(row.tags) as string[];
+  return {
+    ...(row.title ? { title: row.title } : {}),
+    ...(creators.length > 0 ? { creators } : {}),
+    ...(row.published_at ? { date: row.published_at } : {}),
+    ...(tags.length > 0 ? { tags } : {}),
+    ...(row.note ? { note: row.note } : {}),
+  };
+}
+
+function migrateToV4(db: Database) {
+  if (!hasColumn(db, "items", "meta")) db.exec("ALTER TABLE items ADD COLUMN meta TEXT");
+  if (hasColumn(db, "material_meta", "overrides")) return;
+  const rows = db.prepare("SELECT material_id, title, byline, published_at, tags, note, updated_at FROM material_meta").all() as unknown as LegacyMetaRow[];
+  db.exec("BEGIN");
+  try {
+    db.exec("DROP TABLE material_meta");
+    db.exec(SCHEMA_V4_META);
+    const insert = db.prepare("INSERT INTO material_meta (material_id, overrides, updated_at) VALUES (?, ?, ?)");
+    for (const row of rows) {
+      const overrides = legacyOverridesOf(row);
+      if (Object.keys(overrides).length > 0) insert.run(row.material_id, JSON.stringify(overrides), row.updated_at);
+    }
+    db.exec("COMMIT");
+  } catch (error) {
+    db.exec("ROLLBACK");
+    throw error;
+  }
+}
+
 /** The version-1 schema as M1 shipped it; tests build old databases from it to exercise the migration. */
 export function createV1Database(path: string): Database {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
   const db = new DatabaseSync(path);
   db.exec(SCHEMA_V1);
   db.exec("PRAGMA user_version = 1");
+  return db;
+}
+
+/** The version-3 schema as M3 shipped it (typed metadata columns); tests build old databases from it to exercise the v4 migration. */
+export function createV3Database(path: string): Database {
+  const db = createV1Database(path);
+  migrateToV2(db);
+  migrateToV3(db);
+  db.exec("PRAGMA user_version = 3");
   return db;
 }
 
@@ -134,6 +189,7 @@ export function openDatabase(path: string): Database {
   if (version < 1) db.exec(SCHEMA_V1);
   if (version < 2) migrateToV2(db);
   if (version < 3) migrateToV3(db);
+  if (version < 4) migrateToV4(db);
   if (version < SCHEMA_VERSION) db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
   return db;
 }

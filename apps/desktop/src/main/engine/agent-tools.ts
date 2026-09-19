@@ -1,4 +1,4 @@
-import type { Annotation, ItemRecord, MaterialRecord, MaterialSummary, OpenUrlResult } from "../../shared/contracts";
+import type { Annotation, ItemRecord, MaterialKind, MaterialRecord, MaterialSummary, OpenUrlResult } from "../../shared/contracts";
 import type { DynamicTool, ToolCall, ToolReply } from "./codex-client";
 import { itemHits, materialHits, mergeHits, searchWords } from "./search";
 
@@ -46,9 +46,9 @@ const idSchema = { type: "string", pattern: "^[a-f0-9]{16}$", description: "A ma
 const limitSchema = { type: "integer", minimum: 1, maximum: MAX_LIST };
 
 export const agentTools: readonly DynamicTool[] = [
-  { name: "library_search", description: `Find materials (title, byline, tags or body text) and inbox items (title, source) containing every word of the query; at most 8 words are used. Use it before claiming the library has or lacks something, and to find ids for material_read. Returns up to ${SEARCH_HITS} hits with id, kind (material or item), title, subtitle. ${CITE}`,
+  { name: "library_search", description: `Find materials (title, byline, tags or body text) and inbox items (title, source) containing every word of the query; at most 8 words are used. Use it before claiming the library has or lacks something, and to find ids for material_read. Returns up to ${SEARCH_HITS} hits with id, kind (material or item), title, subtitle, and for materials their materialKind, creators, publication, date, doi and arxivId when known. ${CITE}`,
     inputSchema: { type: "object", properties: { query: { type: "string", minLength: 1, maxLength: 200 } }, required: ["query"], additionalProperties: false } },
-  { name: "library_recent", description: "The newest materials in the library (id, title, byline, publishedAt, url, readingMinutes, origin). Use it to see what the reader has been reading, or when a question is about the library as a whole.",
+  { name: "library_recent", description: "The newest materials in the library (id, title, kind, creators, publication, date, doi, arxivId, byline, publishedAt, url, readingMinutes, origin). Use it to see what the reader has been reading, or when a question is about the library as a whole.",
     inputSchema: { type: "object", properties: { limit: { ...limitSchema, description: `How many, default ${DEFAULT_RECENT}.` } }, additionalProperties: false } },
   { name: "material_read", description: `Read a material's text as Markdown, ${PAGE_CHARS} characters per call. Start at offset 0 and continue with nextOffset until it is null; read before you summarise, verify or quote. ${CITE}`,
     inputSchema: { type: "object", properties: { id: idSchema, offset: { type: "integer", minimum: 0, description: "Character offset; use the previous call's nextOffset." } }, required: ["id"], additionalProperties: false } },
@@ -90,9 +90,25 @@ function integer(args: Record<string, unknown>, key: string, fallback: number, m
   return value;
 }
 
-function recentOf(material: MaterialSummary) {
-  const { id, title, byline, publishedAt, url, readingMinutes, origin } = material;
-  return { id, title, url, readingMinutes, origin, ...(byline ? { byline } : {}), ...(publishedAt ? { publishedAt } : {}) };
+interface Bib { kind?: MaterialKind; creators?: string[]; publication?: string; date?: string; doi?: string; arxivId?: string }
+
+/** The bibliographic fields worth showing the model: the kind, who wrote it, where, when, and its identifiers. */
+function bibOf(material: MaterialRecord | undefined): Bib {
+  if (!material) return {};
+  const { kind, meta } = material;
+  const creators = (meta.creators ?? []).map((c) => c.name);
+  return {
+    kind, ...(creators.length > 0 ? { creators } : {}), ...(meta.publication ? { publication: meta.publication } : {}), ...(meta.date ? { date: meta.date } : {}),
+    ...(meta.doi ? { doi: meta.doi } : {}), ...(meta.arxivId ? { arxivId: meta.arxivId } : {}),
+  };
+}
+/** A search hit's `kind` already says material or item, so the bibliographic kind travels as materialKind. */
+function withMaterialKind({ kind, ...bib }: Bib) {
+  return { ...(kind ? { materialKind: kind } : {}), ...bib };
+}
+function recentOf(material: MaterialSummary, record: MaterialRecord | undefined) {
+  const { id, title, byline, publishedAt, url, readingMinutes, origin, kind } = material;
+  return { id, title, url, readingMinutes, origin, kind, ...(byline ? { byline } : {}), ...(publishedAt ? { publishedAt } : {}), ...bibOf(record) };
 }
 function inboxOf(item: ItemRecord) {
   const { id, title, sourceTitle, gist, link, publishedAt } = item;
@@ -125,14 +141,15 @@ async function execute(tool: string, raw: unknown, deps: ToolDeps, cache: Captur
     const args = record(raw, ["query"]);
     const query = text(args, "query", 200);
     const words = searchWords(query);
-    const hits = mergeHits(materialHits(query, await deps.store.search(query)), itemHits(deps.items.search(query))).slice(0, SEARCH_HITS);
+    const merged = mergeHits(materialHits(query, await deps.store.search(query)), itemHits(deps.items.search(query))).slice(0, SEARCH_HITS);
+    const hits = await Promise.all(merged.map(async (hit) => (hit.kind === "material" ? { ...hit, ...withMaterialKind(bibOf(await deps.store.get(hit.id))) } : hit)));
     for (const hit of hits) if (hit.kind === "material") deps.scope?.seen.add(hit.id);
     const truncated = query.trim().split(/\s+/).filter(Boolean).length > words.length;
     return { value: { hits, ...(truncated ? { note: `Only the first ${words.length} words of the query were used.` } : {}) }, summary: `library_search ${quoteOf(query)} → ${hits.length} hit${hits.length === 1 ? "" : "s"}` };
   }
   if (tool === "library_recent") {
     const limit = integer(record(raw, ["limit"]), "limit", DEFAULT_RECENT, MAX_LIST, 1);
-    const materials = (await deps.store.list()).slice(0, limit).map(recentOf);
+    const materials = await Promise.all((await deps.store.list()).slice(0, limit).map(async (summary) => recentOf(summary, await deps.store.get(summary.id))));
     for (const material of materials) deps.scope?.seen.add(material.id);
     return { value: { materials }, summary: `library_recent → ${materials.length} material${materials.length === 1 ? "" : "s"}` };
   }
@@ -145,7 +162,7 @@ async function execute(tool: string, raw: unknown, deps: ToolDeps, cache: Captur
     const content = material.markdown ?? material.plain;
     if (content === undefined) throw new Error(`Material ${id} (${material.title}) has no text to read; it is probably a scanned PDF.`);
     deps.scope?.seen.add(id);
-    const value = { id, title: material.title, ...(material.byline ? { byline: material.byline } : {}), url: material.url, ...page(content, offset) };
+    const value = { id, title: material.title, ...(material.byline ? { byline: material.byline } : {}), url: material.url, ...bibOf(material), ...page(content, offset) };
     return { value, summary: `material_read ${id} @${offset} → ${quoteOf(material.title)}` };
   }
   if (tool === "material_source") {

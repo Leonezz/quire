@@ -1,3 +1,4 @@
+import type { MaterialMeta } from "../../shared/contracts";
 import type { ItemInput } from "./items";
 import type { ParsedFeed } from "./feeds";
 
@@ -43,10 +44,48 @@ export function arxivAbsUrl(id: string): string { return `https://arxiv.org/abs/
 export function arxivHtmlUrl(id: string): string { return `https://arxiv.org/html/${id}`; }
 export function arxivPdfUrl(id: string): string { return `https://arxiv.org/pdf/${id}`; }
 
-/** The API answers Atom; parseFeed maps it and this turns each entry into a paper. */
-export function arxivItemsOf(feed: ParsedFeed): ItemInput[] {
+const ENTITIES: Record<string, string> = { amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" };
+
+function decodeXml(text: string): string {
+  return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (whole, entity: string) => {
+    if (entity[0] === "#") { const code = entity[1]?.toLowerCase() === "x" ? parseInt(entity.slice(2), 16) : parseInt(entity.slice(1), 10); return Number.isFinite(code) ? String.fromCodePoint(code) : whole; }
+    return ENTITIES[entity.toLowerCase()] ?? whole;
+  });
+}
+
+function collapse(text: string): string { return decodeXml(text).replace(/\s+/g, " ").trim(); }
+
+/**
+ * What the feed normalizer does not surface per entry: authors, the abstract and the primary
+ * category, keyed by version-free arXiv id. Read straight from the Atom, which the API keeps simple.
+ */
+export function arxivEntryMetaOf(bytes: Uint8Array): Map<string, MaterialMeta> {
+  const xml = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  const entries = new Map<string, MaterialMeta>();
+  for (const [, entry] of xml.matchAll(/<entry(?:\s[^>]*)?>([\s\S]*?)<\/entry>/g)) {
+    const id = arxivIdOf(/<id>\s*([^<]+?)\s*<\/id>/.exec(entry ?? "")?.[1] ?? "");
+    if (!id || !entry) continue;
+    const creators = [...entry.matchAll(/<author(?:\s[^>]*)?>[\s\S]*?<name>([^<]+)<\/name>[\s\S]*?<\/author>/g)].map(([, name]) => ({ role: "author" as const, name: collapse(name ?? "") })).filter((c) => c.name);
+    const abstract = collapse(/<summary(?:\s[^>]*)?>([\s\S]*?)<\/summary>/.exec(entry)?.[1] ?? "");
+    const published = /<published>\s*([^<]+?)\s*<\/published>/.exec(entry)?.[1];
+    const category = /<arxiv:primary_category\b[^>]*\bterm="([^"]+)"/.exec(entry)?.[1];
+    entries.set(id, {
+      kind: "preprint", arxivId: id, publication: "arXiv",
+      ...(creators.length > 0 ? { creators } : {}),
+      ...(abstract ? { abstract } : {}),
+      ...(published ? { date: published } : {}),
+      extra: `arXiv: ${id}${category ? ` [${category}]` : ""}`,
+    });
+  }
+  return entries;
+}
+
+/** The API answers Atom; parseFeed maps it and this turns each entry into a paper, with the entry's own metadata when the bytes are given. */
+export function arxivItemsOf(feed: ParsedFeed, bytes?: Uint8Array): ItemInput[] {
+  const metas = bytes ? arxivEntryMetaOf(bytes) : new Map<string, MaterialMeta>();
   return feed.items.map((item) => {
     const id = arxivIdOf(item.link) ?? arxivIdOf(item.externalId);
+    const meta = id ? metas.get(id) : undefined;
     return {
       externalId: id ?? item.externalId,
       title: item.title,
@@ -56,6 +95,7 @@ export function arxivItemsOf(feed: ParsedFeed): ItemInput[] {
       readingMinutes: READING_MINUTES,
       signals: { math: true },
       summaryOnly: false,
+      meta: meta ?? { kind: "preprint", publication: "arXiv", ...(id ? { arxivId: id, extra: `arXiv: ${id}` } : {}), date: item.publishedAt },
     };
   });
 }

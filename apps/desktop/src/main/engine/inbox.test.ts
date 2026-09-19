@@ -33,7 +33,8 @@ describe("readItem", () => {
     const items = new ItemStore(db);
     const events = new EventStore(db);
     const warnings: string[] = [];
-    items.upsert({ id: "arxiv", title: "arXiv cs.CL", kind: "arxiv" }, [{ externalId: "2409.12345", title: "Paper", link: "https://arxiv.org/abs/2409.12345", publishedAt: "2026-09-17T00:00:00.000Z", gist: "", readingMinutes: 20, signals: { math: true }, summaryOnly: false }]);
+    const meta = { kind: "preprint" as const, arxivId: "2409.12345", publication: "arXiv", creators: [{ role: "author" as const, name: "Mara Lindqvist" }, { role: "author" as const, name: "Tomasz Nowak" }], abstract: "From the Atom feed.", date: "2026-09-17T17:59:12Z", extra: "arXiv: 2409.12345 [cs.CL]" };
+    items.upsert({ id: "arxiv", title: "arXiv cs.CL", kind: "arxiv" }, [{ externalId: "2409.12345", title: "Paper", link: "https://arxiv.org/abs/2409.12345", publishedAt: "2026-09-17T00:00:00.000Z", gist: "", readingMinutes: 20, signals: { math: true }, summaryOnly: false, meta }]);
     const item = items.inbox()[0]!;
     let materialized = 0;
     const result = await readItem(item.id, { items, events, store, warn: (m) => warnings.push(m), onMaterialized: () => { materialized += 1; } });
@@ -41,6 +42,8 @@ describe("readItem", () => {
     if (!result.ok) return;
     expect(fetch.calls).toEqual(["https://arxiv.org/html/2409.12345", "https://arxiv.org/pdf/2409.12345"]);
     expect(result.material).toMatchObject({ mediaType: "application/pdf", origin: "feed" });
+    // The PDF's Info title wins; the Atom entry supplies the authors, abstract and category the PDF cannot.
+    expect(result.material).toMatchObject({ kind: "preprint", title: "Attention is not all you need", byline: "Mara Lindqvist, Tomasz Nowak", publishedAt: "2026-09-17T17:59:12.000Z", meta: { arxivId: "2409.12345", publication: "arXiv", abstract: "From the Atom feed.", extra: "arXiv: 2409.12345 [cs.CL]" } });
     expect(items.get(item.id)).toMatchObject({ materialId: result.material.id });
     expect(items.get(item.id)?.openedAt).toBeDefined();
     expect(events.list("opened").map((e) => e.ref)).toEqual([item.id]);
@@ -83,7 +86,7 @@ describe("readItem", () => {
     const events = new EventStore(db);
     const content = { reader: { schema: "reader.document.v2" as const, payload: JSON.stringify({ type: "root", children: [{ type: "paragraph", children: [{ type: "text", value: "Hello from the feed" }] }], losses: [] }) }, markdown: "Hello from the feed", plain: "Hello from the feed" };
     items.upsert({ id: "feed", title: "Systems Notes", kind: "feed" }, [
-      { externalId: "full", title: "Cache keys", link: "https://systems.example.test/posts/cache-keys", publishedAt: "2026-09-14T00:00:00.000Z", gist: "", readingMinutes: 2, signals: { lang: "en" }, summaryOnly: false, content },
+      { externalId: "full", title: "Cache keys", link: "https://systems.example.test/posts/cache-keys", publishedAt: "2026-09-14T00:00:00.000Z", gist: "", readingMinutes: 2, signals: { lang: "en" }, summaryOnly: false, content, meta: { kind: "newsletter", publication: "Systems Weekly" } },
       { externalId: "short", title: "Short", link: "https://systems.example.test/posts/short", publishedAt: "2026-09-13T00:00:00.000Z", gist: "", readingMinutes: 1, signals: {}, summaryOnly: true },
     ]);
     const [full, short] = items.inbox();
@@ -93,6 +96,7 @@ describe("readItem", () => {
     if (!result.ok) return;
     expect(result.material).toMatchObject({ title: "Cache keys", origin: "feed", url: "https://systems.example.test/posts/cache-keys", lang: "en", publishedAt: "2026-09-14T00:00:00.000Z", markdown: "Hello from the feed", reader: content.reader });
     expect(result.material.problems.map((p) => p.code)).toEqual(["FEED_CONTENT_FALLBACK"]);
+    expect(result.material).toMatchObject({ kind: "newsletter", meta: { kind: "newsletter", publication: "Systems Weekly", date: "2026-09-14T00:00:00.000Z", language: "en" } });
     expect(warnings).toEqual(["Could not fetch https://systems.example.test/posts/cache-keys (NETWORK: getaddrinfo ENOTFOUND); showing the feed's copy."]);
     expect(await store.get(result.material.id)).toMatchObject({ title: "Cache keys" });
     expect(items.get(full!.id)?.materialId).toBe(result.material.id);

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import type { ItemDecision, ItemRecord, ItemSignals, SourceKind, SourceRecord } from "../../shared/contracts";
+import type { ItemDecision, ItemRecord, ItemSignals, MaterialMeta, SourceKind, SourceRecord } from "../../shared/contracts";
 import type { Database } from "./db";
 
 /** Full content a feed entry carried, kept on the item so Read can fall back to it when the page cannot be fetched. */
@@ -20,6 +20,8 @@ export interface ItemInput {
   signals: ItemSignals;
   summaryOnly: boolean;
   content?: ItemContent;
+  /** What the source declared about the entry (arXiv authors and abstract, the feed's title); merged under the page's own metadata on Read. */
+  meta?: MaterialMeta;
 }
 
 export interface SourceHealth {
@@ -81,12 +83,13 @@ export class ItemStore {
   /** Inserts new entries and refreshes known ones; returns how many were new. */
   upsert(source: Pick<SourceRecord, "id" | "title" | "kind">, inputs: readonly ItemInput[]): number {
     const fetchedAt = this.now().toISOString();
-    const insert = this.db.prepare(`INSERT INTO items (${COLUMNS}, state, content_reader_schema, content_reader, content_markdown, content_plain)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'undecided', ?, ?, ?, ?)
+    const insert = this.db.prepare(`INSERT INTO items (${COLUMNS}, state, content_reader_schema, content_reader, content_markdown, content_plain, meta)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 'undecided', ?, ?, ?, ?, ?)
       ON CONFLICT (source_id, external_id) DO UPDATE SET
         source_title = excluded.source_title, title = excluded.title, gist = excluded.gist, link = excluded.link, published_at = excluded.published_at,
         reading_minutes = excluded.reading_minutes, signals = excluded.signals, summary_only = excluded.summary_only,
-        content_reader_schema = excluded.content_reader_schema, content_reader = excluded.content_reader, content_markdown = excluded.content_markdown, content_plain = excluded.content_plain`);
+        content_reader_schema = excluded.content_reader_schema, content_reader = excluded.content_reader, content_markdown = excluded.content_markdown, content_plain = excluded.content_plain,
+        meta = excluded.meta`);
     const before = this.countOf(source.id);
     this.db.exec("BEGIN");
     try {
@@ -95,6 +98,7 @@ export class ItemStore {
           itemIdFor(source.id, input.externalId), source.id, source.title, source.kind, input.externalId, input.title, input.gist, input.link, input.publishedAt, fetchedAt,
           input.readingMinutes, JSON.stringify(input.signals), input.summaryOnly ? 1 : 0,
           input.content?.reader?.schema ?? null, input.content?.reader?.payload ?? null, input.content?.markdown ?? null, input.content?.plain ?? null,
+          input.meta && Object.keys(input.meta).length > 0 ? JSON.stringify(input.meta) : null,
         );
       }
       this.db.exec("COMMIT");
@@ -127,6 +131,12 @@ export class ItemStore {
       ...(typeof row.content_plain === "string" ? { plain: row.content_plain } : {}),
     };
     return Object.keys(content).length > 0 ? content : undefined;
+  }
+
+  /** What the source declared about the entry, when it carried anything beyond title and link. */
+  meta(id: string): MaterialMeta | undefined {
+    const row = this.db.prepare("SELECT meta FROM items WHERE id = ?").get(id) as { meta: string | null } | undefined;
+    return typeof row?.meta === "string" ? (JSON.parse(row.meta) as MaterialMeta) : undefined;
   }
 
   inbox(): ItemRecord[] {

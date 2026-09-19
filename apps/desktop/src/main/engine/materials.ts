@@ -1,14 +1,21 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { gunzipSync } from "node:zlib";
 import { join } from "node:path";
-import { createMarkdownRepresentations, normalizeArticleCapture, type ContentMaterialization, type NormalizationProblem } from "@read/normalize";
+import { createMarkdownRepresentations, normalizeArticleCapture, type ContentMaterialization } from "@read/normalize";
 import type { CorpusImportResult, MaterialMeta, MaterialRecord, MaterialSummary, OpenFileInput, OpenUrlResult } from "../../shared/contracts";
+import { bibtexOf } from "../../shared/bibtex";
 import { captureTextOf } from "./capture-text";
 import { FetchError, assertPublicHttpUrl, fetchPage, type Fetcher } from "./fetch";
+import { degradedQuality, looksLikePdf, mediaTypeForName, titleFromHtml } from "./material-content";
+import { effectiveOf, searchFieldsOf, summaryOf, type StoredRecord } from "./material-record";
+import { extractMetadata } from "./metadata";
 import { PdfError, inspectPdf } from "./pdf";
 import type { MetaStore } from "./meta";
 import { readingMinutes } from "./reading-time";
+
+export type { StoredRecord } from "./material-record";
+export { imageUrlsOf } from "./material-content";
 
 const BUDGET = { maxBytes: 8 * 1024 * 1024, maxDepth: 100, maxNodes: 100_000, maxOutputBytes: 8 * 1024 * 1024 };
 const MINUTES_PER_PDF_PAGE = 2.5;
@@ -20,9 +27,6 @@ function sha256(bytes: Uint8Array): `sha256:${string}` {
 function idFor(url: string): string {
   return createHash("sha256").update(url).digest("hex").slice(0, 16);
 }
-
-/** The record as written to disk: what was extracted. Tags and overrides are laid over it on read. */
-export type StoredRecord = Omit<MaterialRecord, "tags" | "overrides">;
 
 export interface MaterialStoreOptions {
   /** The reader's overrides; without it every material reads as extracted, with no tags. */
@@ -66,6 +70,8 @@ export interface FeedMaterialInput {
   byline?: string;
   publishedAt?: string;
   lang?: string;
+  /** What the item declared (the feed's title, its kind); merged under the fallback fields. */
+  meta?: MaterialMeta;
   content: { reader?: StoredRecord["reader"]; markdown?: string; plain?: string };
 }
 
@@ -75,22 +81,24 @@ function isHtml(mediaType: string): boolean {
   return mediaType === "text/html" || mediaType === "application/xhtml+xml";
 }
 
-/** The effective record: overrides replace what was extracted, and the raw overrides ride along. */
-function withMeta(record: StoredRecord, meta: MaterialMeta | undefined): MaterialRecord {
-  const { title: _title, byline: _byline, publishedAt: _publishedAt, ...rest } = record;
-  const title = meta?.title ?? record.title;
-  const byline = meta?.byline ?? record.byline;
-  const publishedAt = meta?.publishedAt ?? record.publishedAt;
-  return {
-    ...rest, title, tags: meta?.tags ?? [],
-    ...(byline ? { byline } : {}), ...(publishedAt ? { publishedAt } : {}),
-    ...(meta && Object.keys(meta).length > 0 ? { overrides: meta } : {}),
-  };
+type Fallback = Parameters<typeof extractMetadata>[0]["fallback"];
+
+/** The extracted layer of a record from the extractor's own fields, the page (when HTML) and the item it came from. */
+function extractedFor(record: Pick<StoredRecord, "finalUrl" | "mediaType" | "origin" | "fetchedAt" | "itemMeta">, fallback: Fallback, html?: Uint8Array): MaterialMeta {
+  return extractMetadata({
+    ...(html && isHtml(record.mediaType) ? { html } : {}),
+    url: record.finalUrl, mediaType: record.mediaType, origin: record.origin, fetchedAt: record.fetchedAt, fallback,
+    ...(record.itemMeta ? { item: record.itemMeta } : {}),
+  });
 }
 
-function summaryOf(record: MaterialRecord): MaterialSummary {
-  const { id, url, title, byline, publishedAt, fetchedAt, readingMinutes, origin, mediaType, quality, lineage, tags, rebuiltAs } = record;
-  return { id, url, title, fetchedAt, readingMinutes, origin, mediaType, quality, tags, ...(byline ? { byline } : {}), ...(publishedAt ? { publishedAt } : {}), ...(lineage ? { lineage } : {}), ...(rebuiltAs ? { rebuiltAs } : {}) };
+function fallbackOf(record: Pick<StoredRecord, "title" | "byline" | "publishedAt" | "lang">): Fallback {
+  return { title: record.title, ...(record.byline ? { byline: record.byline } : {}), ...(record.publishedAt ? { publishedAt: record.publishedAt } : {}), ...(record.lang ? { lang: record.lang } : {}) };
+}
+
+/** A record with its extracted layer computed from its own fields (and the page bytes when it is HTML). */
+function withExtracted(record: StoredRecord, html?: Uint8Array): StoredRecord {
+  return { ...record, extracted: extractedFor(record, fallbackOf(record), html) };
 }
 
 /** Materials on disk: one JSON per material, an index for lists. Sources, items and events live in SQLite (db.ts). */
@@ -106,11 +114,11 @@ export class MaterialStore {
   private get dir() { return join(this.root, "materials"); }
 
   /** Fetches and materializes a public page. `origin` marks material that arrived through a subscription. */
-  async openUrl(raw: string, origin: "web" | "feed" = "web"): Promise<OpenUrlResult> {
+  async openUrl(raw: string, origin: "web" | "feed" = "web", item?: MaterialMeta): Promise<OpenUrlResult> {
     try {
       const url = assertPublicHttpUrl(raw);
       const page = await this.fetch(url);
-      const record = await this.materializeAny(page.bytes, page.mediaType, page.finalUrl, raw, origin);
+      const record = await this.materializeAny(page.bytes, page.mediaType, page.finalUrl, raw, origin, idFor(page.finalUrl), item);
       await this.save(record);
       return { ok: true, material: this.decorate(record) };
     } catch (error) {
@@ -136,9 +144,9 @@ export class MaterialStore {
   }
 
   /** PDFs keep their bytes on disk next to the record; pages keep their capture when the setting says so; everything else is materialized synchronously. */
-  private async materializeAny(bytes: Uint8Array, mediaType: string, finalUrl: string, requestedUrl: string, origin: StoredRecord["origin"] = "web", id = idFor(finalUrl)): Promise<StoredRecord> {
+  private async materializeAny(bytes: Uint8Array, mediaType: string, finalUrl: string, requestedUrl: string, origin: StoredRecord["origin"] = "web", id = idFor(finalUrl), item?: MaterialMeta): Promise<StoredRecord> {
     if (mediaType !== "application/pdf" && !(mediaType === "application/octet-stream" && looksLikePdf(bytes))) {
-      const record = this.materialize(bytes, mediaType, finalUrl, requestedUrl, origin, id);
+      const record = withExtracted({ ...this.materialize(bytes, mediaType, finalUrl, requestedUrl, origin, id), ...(item ? { itemMeta: item } : {}) }, bytes);
       if (!isHtml(mediaType)) return record;
       if (!this.keepCapture()) { await rm(this.htmlPath(id), { force: true }); return record; }
       await mkdir(this.dir, { recursive: true });
@@ -149,16 +157,17 @@ export class MaterialStore {
     await mkdir(this.dir, { recursive: true });
     await writeFile(this.pdfPath(id), bytes);
     const fileName = decodeURIComponent(new URL(finalUrl).pathname.split("/").pop() ?? "").replace(/\.pdf$/i, "");
-    return {
+    return withExtracted({
       id, url: requestedUrl, finalUrl, mediaType: "application/pdf", fetchedAt: new Date().toISOString(), origin,
       title: inspection.title ?? fileName ?? new URL(finalUrl).hostname,
       ...(inspection.author ? { byline: inspection.author } : {}),
       ...(inspection.sampleText ? { plain: inspection.sampleText } : {}),
+      ...(item ? { itemMeta: item } : {}),
       readingMinutes: Math.max(1, Math.round(inspection.pages * MINUTES_PER_PDF_PAGE)),
       pdf: { pages: inspection.pages, byteLength: bytes.byteLength, textLayer: inspection.textLayer },
       quality: { completeness: "declared_full", conformance: "conformant", identityConfidence: origin === "file" ? "derived" : "strong", safety: "safe", warnings: [] },
       problems: [],
-    };
+    });
   }
 
   private materialize(bytes: Uint8Array, mediaType: string, finalUrl: string, requestedUrl: string, origin: StoredRecord["origin"] = "web", id = idFor(finalUrl)): StoredRecord {
@@ -210,9 +219,34 @@ export class MaterialStore {
     const fetchedAt = new Date().toISOString();
     const id = createHash("sha256").update(`${title}\n${fetchedAt}`).digest("hex").slice(0, 16);
     const url = `quire://artifact/${id}`;
-    const record: StoredRecord = { id, url, finalUrl: url, mediaType: "text/markdown", fetchedAt, origin: "agent", lineage, title, ...markdownParts(withoutTitleHeading(input.markdown, title), url) };
+    const record = withExtracted({ id, url, finalUrl: url, mediaType: "text/markdown", fetchedAt, origin: "agent", lineage, title, ...markdownParts(withoutTitleHeading(input.markdown, title), url) });
     await this.save(record);
     return this.decorate(record);
+  }
+
+  /** Re-runs extraction on the stored capture (or the record's own fields) and replaces the extracted layer; overrides stay. */
+  async refreshMetadata(id: string): Promise<MaterialRecord> {
+    const record = await this.read(id);
+    if (!record) throw new Error(`Material ${id} is not in the library.`);
+    const html = isHtml(record.mediaType) ? await this.readOptional(this.htmlPath(id)) : undefined;
+    const next = withExtracted(record, html);
+    await this.save(next);
+    return this.decorate(next);
+  }
+
+  /** BibTeX entries for the given materials, in the given order, separated by blank lines; unknown ids are skipped. */
+  async exportBibtex(ids: readonly string[]): Promise<string> {
+    const records = await Promise.all(ids.map((id) => this.get(id)));
+    const found = records.filter((record): record is MaterialRecord => record !== undefined);
+    if (found.length === 0) throw new Error(`None of these materials is in the library: ${ids.join(", ")}.`);
+    return found.map((record) => bibtexOf(record.meta, record.id)).join("\n\n");
+  }
+
+  /** Whether a record exists, without reading it whole. */
+  async has(id: string): Promise<boolean> {
+    if (!ID.test(id)) return false;
+    try { await stat(join(this.dir, `${id}.json`)); return true; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
   }
 
   /** The agent rebuilt this material into a cleaner artifact; the Library offers the artifact in its place. */
@@ -232,7 +266,7 @@ export class MaterialStore {
   }
 
   private decorate(record: StoredRecord): MaterialRecord {
-    return withMeta(record, this.meta?.get(record.id));
+    return effectiveOf(record, this.meta?.get(record.id));
   }
 
   /**
@@ -241,18 +275,19 @@ export class MaterialStore {
    */
   async saveFromFeed(input: FeedMaterialInput): Promise<MaterialRecord> {
     const plain = input.content.plain ?? input.content.markdown ?? "";
-    const record: StoredRecord = {
+    const record = withExtracted({
       id: idFor(input.url), url: input.url, finalUrl: input.url, title: input.title, fetchedAt: new Date().toISOString(),
       origin: "feed", mediaType: "text/html", readingMinutes: readingMinutes(plain),
       ...(input.byline ? { byline: input.byline } : {}),
       ...(input.publishedAt ? { publishedAt: input.publishedAt } : {}),
       ...(input.lang ? { lang: input.lang } : {}),
+      ...(input.meta ? { itemMeta: input.meta } : {}),
       ...(input.content.reader ? { reader: input.content.reader } : {}),
       ...(input.content.markdown ? { markdown: input.content.markdown } : {}),
       ...(input.content.plain ? { plain: input.content.plain } : {}),
       quality: { completeness: "declared_full", conformance: "conformant", identityConfidence: "medium", safety: "safe", warnings: [] },
       problems: [{ code: "FEED_CONTENT_FALLBACK", recoverBy: "reopen", scope: "capture", severity: "warning" }],
-    };
+    });
     await this.save(record);
     return this.decorate(record);
   }
@@ -323,7 +358,7 @@ export class MaterialStore {
     return record ? this.decorate(record) : undefined;
   }
 
-  /** Every word of the query must appear in the title, byline, tags or the first 200k characters of the text. */
+  /** Every word of the query must appear in the title, creators, publication, abstract, identifiers, tags or the first 200k characters of the text. */
   async search(query: string): Promise<MaterialSummary[]> {
     const words = query.toLowerCase().split(/\s+/).filter(Boolean).slice(0, 8);
     if (words.length === 0) return [];
@@ -333,8 +368,8 @@ export class MaterialStore {
     const hits: MaterialSummary[] = [];
     for (const name of files) {
       const stored = JSON.parse(await readFile(join(this.dir, name), "utf8")) as StoredRecord;
-      const record = withMeta(stored, metas.get(stored.id));
-      const haystack = `${record.title}\n${record.byline ?? ""}\n${(record.tags ?? []).join(" ")}\n${(record.plain ?? record.markdown ?? "").slice(0, 200_000)}`.toLowerCase();
+      const record = effectiveOf(stored, metas.get(stored.id));
+      const haystack = `${searchFieldsOf(record)}\n${(record.plain ?? record.markdown ?? "").slice(0, 200_000)}`.toLowerCase();
       if (words.every((word) => haystack.includes(word))) hits.push(summaryOf(record));
     }
     return hits.sort((a, b) => b.fetchedAt.localeCompare(a.fetchedAt));
@@ -346,50 +381,7 @@ export class MaterialStore {
     const records = await Promise.all(files.map(async (name) => JSON.parse(await readFile(join(this.dir, name), "utf8")) as StoredRecord));
     const metas = this.meta?.all() ?? new Map<string, MaterialMeta>();
     return records
-      .map((record) => summaryOf(withMeta(record, metas.get(record.id))))
+      .map((record) => summaryOf(effectiveOf(record, metas.get(record.id))))
       .sort((a, b) => b.fetchedAt.localeCompare(a.fetchedAt));
   }
-}
-
-const MAX_PREFETCH_IMAGES = 80;
-
-/** Image sources referenced by the reader document, in reading order, for caching at save time. */
-export function imageUrlsOf(record: Pick<StoredRecord, "reader">): string[] {
-  if (!record.reader) return [];
-  let root: unknown;
-  try { root = JSON.parse(record.reader.payload); } catch { return []; }
-  const urls: string[] = [];
-  const seen = new Set<string>();
-  const visit = (node: unknown) => {
-    if (urls.length >= MAX_PREFETCH_IMAGES || !node || typeof node !== "object") return;
-    if (Array.isArray(node)) { node.forEach(visit); return; }
-    const value = node as Record<string, unknown>;
-    if (value.type === "image" && typeof value.url === "string" && /^https?:/.test(value.url) && !seen.has(value.url)) { seen.add(value.url); urls.push(value.url); }
-    for (const key of ["children", "caption", "credit", "media", "bodies", "head", "foot"]) visit(value[key]);
-  };
-  visit(root);
-  return urls;
-}
-
-function looksLikePdf(bytes: Uint8Array): boolean {
-  return bytes.length > 4 && bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46; // %PDF
-}
-
-function titleFromHtml(bytes: Uint8Array): string | undefined {
-  const head = new TextDecoder("utf-8", { fatal: false }).decode(bytes.subarray(0, 64 * 1024));
-  const match = /<title[^>]*>([^<]{1,300})<\/title>/i.exec(head);
-  return match?.[1]?.replace(/\s+/g, " ").trim() || undefined;
-}
-
-function mediaTypeForName(name: string): string {
-  const ext = name.toLowerCase().split(".").pop() ?? "";
-  if (ext === "md" || ext === "markdown") return "text/markdown";
-  if (ext === "txt") return "text/plain";
-  if (ext === "html" || ext === "htm" || ext === "xhtml") return "text/html";
-  if (ext === "pdf") return "application/pdf";
-  return "application/octet-stream";
-}
-
-function degradedQuality(problems: NormalizationProblem[]) {
-  return { completeness: "none" as const, conformance: "recoverable" as const, identityConfidence: "derived" as const, safety: "degraded_plaintext" as const, warnings: problems };
 }

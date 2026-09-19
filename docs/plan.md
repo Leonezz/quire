@@ -68,6 +68,12 @@
 - Agent：会话落库（`agent_sessions` / `agent_turns`），面板重开恢复转录，History / New conversation，全局 Agent 视图（⌘⇧J）；对无法稳定解析的页面，"Rebuild with the agent"让 agent 通过 `material_source` 分页读取保留的原始页面（linkedom 转结构化文本），写出忠实的 Markdown artifact 并以 `rebuiltAs` 回链（已用阮一峰 411 期实测：标题 / 作者 / 日期 / 章节 / 图片完整）。
 - 未做（推后）：Info 面板显示"原始值"需要合同暴露抽取值；agent 向 Inbox 推荐条目（introducedBy）；多文档综合的验收样例；OPML。
 
+### 第 8 刀：Zotero 式元数据 — 已完成 2026-09-19
+- 模型（`contracts.ts`）：13 种条目类型（webpage / blogPost / newsletter / newsArticle / journalArticle / preprint / conferencePaper / book / bookSection / report / thesis / document / note），创建者带角色（author / editor / translator / contributor）与结构化姓名，摘要、出版物 / 卷 / 期 / 页 / 出版者 / 地点 / 版次 / 丛书、日期（允许 YYYY / YYYY-MM）、访问日期、语言、DOI / arXiv / ISBN / ISSN / URL、标签、备注、extra、关联材料；`MATERIAL_KIND_FIELDS` 决定每种类型显示哪些字段。三层：`extracted`（来源声明，不可编辑）→ `overrides`（用户）→ `meta`（生效），顶层 title / byline / publishedAt / kind / publication 由 meta 派生。
+- 引擎：`metadata-sources.ts` + `metadata.ts` 按 Highwire `citation_*` → Dublin Core → JSON-LD → Open Graph → `<meta author>` / `<html lang>` → arXiv id → 条目自带元数据（Atom 作者 / 摘要 / 分类）→ 抽取器回退的优先级合并；类型推断；schema v4（`material_meta.overrides` JSON、`items.meta`）；`refreshMetadata` 从保留的原始页面重抽；`shared/bibtex.ts` 纯函数导出 BibTeX（CJK 作者名回退到材料 id 作 key）；agent 工具结果带 kind / creators / publication / doi / arxivId。
+- UI：Info 面板重做（类型菜单、创建者编辑器可排序、按类型显示字段、标识符可打开、关联材料选择器、每字段"extracted: … · Reset"、Copy citation / Copy BibTeX / Refresh from source、About 折叠）；Library 行显示类型与出版物、Type 过滤、批量 Copy BibTeX；阅读头部显示创建者 · 出版物 · 日期；引用与批注导出用新模型。同时修了：Library 工具栏回到列表列（阅读器标题栏占顶行）、侧栏收起时的红绿灯槽、分栏缝隙、artifact 重复标题、专注模式下显式打开面板会退出专注。
+- 未做（推后）：Crossref / arXiv API 按 DOI / id 补全元数据；CSL 样式引用；OPML。
+
 ## 评测集导入 app
 - Developer 菜单 → Import Evaluation Corpus（⌘⇧I，仅开发检出可见）把 `eval/corpus` 全部快照按当前抽取器入库；2026-09-18 实测 64 篇导入、0 失败。浏览器预览也直接列出导出后的语料（`EXPORT=1`）。
 - 第二轮独立评审（`eval/quality-review-2.md`）：46 通过 / 4 轻微 / 14 严重（首轮 36 / 6 / 22）；随后又修了 Paul Graham 脚注、卡片链接的 Markdown、尾部 discuss / read-my-book 段。剩余主要是站点级残留（Quanta、Stratechery 的相关文章卡片），留给 L3 profile。

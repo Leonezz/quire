@@ -22,7 +22,7 @@ Blogs, newsletters, papers, PDFs — whatever you bring in, Quire turns it into 
 
 **An agent that reads with you.** Press `⌘J` to ask about the article, a selected passage, or the whole library: explain, verify, find related material, summarise, or write a synthesis. Answers cite only the materials the agent actually opened, a synthesis is kept as its own artifact with its sources attached, and conversations stay with the material they are about (`⌘⇧J` lists them all). When a page came through garbled, ask the agent to rebuild it from the saved original. Runs on the Codex CLI signed in on your Mac.
 
-**A library you can shape.** Edit a material's title, author, date and tags in the Info panel (`i`), filter the Library by kind or tag, search titles, delete in bulk. Every pane is resizable and remembers its size; `⌘,` opens Settings.
+**A library you can shape.** Every material carries Zotero-style metadata, read from the page (citation tags, JSON-LD, Open Graph, arXiv) and editable in the Info panel (`i`): type, creators, abstract, journal or site, identifiers, tags, related materials. Copy a citation or BibTeX, filter the Library by type or tag, search, delete in bulk. Every pane is resizable and remembers its size; `⌘,` opens Settings.
 
 ## Where it is going
 

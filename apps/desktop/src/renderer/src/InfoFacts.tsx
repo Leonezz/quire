@@ -1,4 +1,4 @@
-import { InspectorSection } from "@read/ui";
+import { ChevronRight } from "lucide-react";
 import type { MaterialRecord } from "../../shared/contracts";
 import { ArtifactLineage } from "./ArtifactLineage";
 import { RebuildAction, type RebuildProps } from "./RebuildBanner";
@@ -23,11 +23,12 @@ function Fact({ label, children }: { label: string; children: React.ReactNode })
   return <div className="grid grid-cols-[92px_minmax(0,1fr)] gap-x-2 text-[12.5px] leading-[17px]"><dt className="text-label-3">{label}</dt><dd className="m-0 min-w-0 break-words text-label">{children}</dd></div>;
 }
 
-/** What is known about the material and cannot be edited: where it came from, when, how well it extracted, what it became. */
+/** What is known about the material and cannot be edited: where it came from, when, how well it extracted, what it became. Collapsed by default. */
 export function InfoFacts({ material, onOpenLink, onOpenMaterial, onRebuild, rebuild = "idle" }: { material: MaterialRecord; onOpenLink: (url: string) => void; onOpenMaterial: (id: string) => void } & Partial<RebuildProps>) {
   const url = material.finalUrl || material.url;
   return (
-    <InspectorSection title="About">
+    <details className="group">
+      <summary className="mb-2 inline-flex cursor-default list-none items-center gap-1 rounded-pill py-0.5 pr-2 text-[11px] font-semibold uppercase tracking-[.07em] text-label-3 outline-none hover:text-label-2 focus-visible:ring-[3px] focus-visible:ring-accent-ring [&::-webkit-details-marker]:hidden"><ChevronRight className="size-3.5 transition-transform group-open:rotate-90" />About</summary>
       <dl className="m-0 grid gap-1.5">
         {material.origin === "agent" ? null : (
           <Fact label="Source"><a href={url} className="text-accent-text no-underline hover:underline" onClick={(event) => { event.preventDefault(); onOpenLink(url); }}>{material.origin === "file" ? decodeURIComponent(material.url.replace("file:///", "")) : url}</a></Fact>
@@ -49,6 +50,6 @@ export function InfoFacts({ material, onOpenLink, onOpenMaterial, onRebuild, reb
           <ArtifactLineage lineage={material.lineage} onOpenMaterial={onOpenMaterial} defaultOpen />
         </div>
       ) : null}
-    </InspectorSection>
+    </details>
   );
 }

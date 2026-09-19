@@ -19,7 +19,7 @@ function input(overrides: Partial<ItemInput> & { externalId: string }): ItemInpu
 
 describe("ItemStore", () => {
   it("opens the schema once and keeps its version", () => {
-    expect((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(3);
+    expect((db.prepare("PRAGMA user_version").get() as { user_version: number }).user_version).toBe(4);
     const again = openDatabase(join(root, "quire.sqlite"));
     expect(again.prepare("SELECT COUNT(*) AS n FROM items").get()).toEqual({ n: 0 });
     again.close();
@@ -90,6 +90,19 @@ describe("ItemStore", () => {
     expect(() => items.reorder([ids[0]!, ids[1]!])).toThrow("QUEUE_ORDER_MISMATCH");
     expect(() => items.reorder([ids[0]!, ids[1]!, ids[1]!])).toThrow("QUEUE_ORDER_MISMATCH");
     expect(() => items.reorder([...ids, "extra"])).toThrow("QUEUE_ORDER_MISMATCH");
+  });
+
+  it("stores what the source declared about an entry and refreshes it on re-sync", () => {
+    const items = new ItemStore(db);
+    const meta = { kind: "preprint" as const, arxivId: "2409.12345", creators: [{ role: "author" as const, name: "Mara Lindqvist" }], abstract: "Long-context models." };
+    items.upsert(source, [input({ externalId: "paper", meta }), input({ externalId: "plain" }), input({ externalId: "empty", meta: {} })]);
+    const byExternal = (externalId: string) => items.inbox().find((item) => item.link.endsWith(`/${externalId}`))!;
+    expect(items.meta(byExternal("paper").id)).toEqual(meta);
+    expect(items.meta(byExternal("plain").id)).toBeUndefined();
+    expect(items.meta(byExternal("empty").id)).toBeUndefined();
+    expect(items.meta("missing")).toBeUndefined();
+    items.upsert(source, [input({ externalId: "paper", meta: { ...meta, abstract: "Revised." } })]);
+    expect(items.meta(byExternal("paper").id)?.abstract).toBe("Revised.");
   });
 
   it("keeps the first openedAt and the latest material id", () => {

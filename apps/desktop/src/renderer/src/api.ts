@@ -5,6 +5,7 @@ import samplePlain from "./dev/sample-plaintext.json";
 import { createPreviewM1 } from "./previewM1";
 import { createPreviewM2, previewArtifacts } from "./previewM2";
 import { createPreviewM3 } from "./previewM3";
+import { kindOfRecord } from "./previewMeta";
 import { rebuiltArtifacts } from "./previewRebuild";
 
 // In Electron the preload bridge provides window.read. In a plain browser (Vite dev
@@ -16,8 +17,8 @@ const samplePdfMaterial = samplePdf as unknown as MaterialRecord;
 // A page the extractor could not read: plain text with a capture, so the rebuild flow has something to rebuild.
 const samplePlainMaterial = samplePlain as unknown as MaterialRecord;
 const samples = [sampleMaterial, samplePdfMaterial, samplePlainMaterial];
-function summaryOf({ id, url, title, byline, publishedAt, fetchedAt, readingMinutes, origin, mediaType, quality, lineage, tags, rebuiltAs }: MaterialRecord): MaterialSummary {
-  return { id, url, title, fetchedAt, readingMinutes, origin, mediaType, quality, tags: tags ?? [], ...(byline ? { byline } : {}), ...(publishedAt ? { publishedAt } : {}), ...(lineage ? { lineage } : {}), ...(rebuiltAs ? { rebuiltAs } : {}) };
+function summaryOf({ id, url, title, byline, publishedAt, fetchedAt, readingMinutes, origin, mediaType, quality, lineage, tags, kind, rebuiltAs }: MaterialRecord): MaterialSummary {
+  return { id, url, title, fetchedAt, readingMinutes, origin, mediaType, quality, tags: tags ?? [], kind: kind ?? kindOfRecord({ origin, mediaType, url }), ...(byline ? { byline } : {}), ...(publishedAt ? { publishedAt } : {}), ...(lineage ? { lineage } : {}), ...(rebuiltAs ? { rebuiltAs } : {}) };
 }
 const unavailable: OpenUrlResult = { ok: false, code: "PREVIEW_MODE", message: "The engine is not available in the browser preview. Run the desktop app to add material." };
 
@@ -28,8 +29,8 @@ async function corpusIndex(): Promise<MaterialSummary[]> {
   // The Vite dev server answers unknown paths with index.html (200), so the type is the real signal.
   if (response.status === 404 || !(response.headers.get("content-type") ?? "").includes("json")) return [];
   if (!response.ok) throw new Error(`Preview corpus index failed: HTTP ${response.status}`);
-  // The exported index predates tags; the M3 overlay (previewM3.ts) fills them in from the overrides.
-  return ((await response.json()) as Omit<MaterialSummary, "tags">[]).map((entry) => ({ ...entry, tags: [] }));
+  // The exported index predates tags and kinds; the M3 overlay (previewM3.ts) fills the tags in from the overrides.
+  return ((await response.json()) as Omit<MaterialSummary, "tags" | "kind">[]).map((entry) => ({ ...entry, tags: [], kind: kindOfRecord(entry) }));
 }
 
 async function corpusMaterial(id: string): Promise<MaterialRecord | undefined> {

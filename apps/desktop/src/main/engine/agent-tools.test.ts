@@ -51,10 +51,23 @@ describe("createToolHandler", () => {
     const search = await handle({ tool: "library_search", arguments: { query: "momentum" }, callId: "c1" });
     expect(search.success).toBe(true);
     expect(search.summary).toBe('library_search "momentum" → 2 hits');
-    expect(parse(search.text)).toMatchObject({ ok: true, hits: [{ kind: "material", id: material.id, title: "Momentum, revisited" }, { kind: "item", title: "Momentum in optimizers" }] });
+    expect(parse(search.text)).toMatchObject({ ok: true, hits: [{ kind: "material", materialKind: "webpage", id: material.id, title: "Momentum, revisited" }, { kind: "item", title: "Momentum in optimizers" }] });
+    expect((parse(search.text).hits as Record<string, unknown>[])[1]).not.toHaveProperty("materialKind");
     const recent = await handle({ tool: "library_recent", arguments: {}, callId: "c2" });
-    expect(parse(recent.text)).toMatchObject({ ok: true, materials: [{ id: material.id, title: "Momentum, revisited", origin: "file", readingMinutes: material.readingMinutes }] });
+    expect(parse(recent.text)).toMatchObject({ ok: true, materials: [{ id: material.id, title: "Momentum, revisited", origin: "file", kind: "webpage", readingMinutes: material.readingMinutes }] });
     expect(recent.summary).toBe("library_recent → 1 material");
+  });
+
+  it("shows the model the bibliographic fields of a material: kind, creators, publication, date and identifiers", async () => {
+    const { handle } = await setup();
+    const tagged =`<!doctype html><html><head><title>Paper</title><meta name="citation_title" content="Calibrated Abstention"><meta name="citation_author" content="Lindqvist, Mara"><meta name="citation_journal_title" content="Journal of Retrieval"><meta name="citation_publication_date" content="2026/05/12"><meta name="citation_doi" content="10.1234/jr.1"></head><body><article><h1>Paper</h1>${"<p>Enough text for the extractor to accept the article as a real body of prose.</p>".repeat(10)}</article></body></html>`;
+    const journal = new MaterialStore(root, async (url) => ({ bytes: new TextEncoder().encode(tagged), mediaType: "text/html", finalUrl: url.toString() }));
+    const opened = await journal.openUrl("https://journal.example.test/1");
+    if (!opened.ok) throw new Error(opened.message);
+    const bib = { kind: "journalArticle", creators: ["Mara Lindqvist"], publication: "Journal of Retrieval", date: "2026-05-12", doi: "10.1234/jr.1" };
+    expect(parse((await handle({ tool: "material_read", arguments: { id: opened.material.id }, callId: "c1" })).text)).toMatchObject({ ok: true, title: "Calibrated Abstention", byline: "Mara Lindqvist", ...bib });
+    expect(parse((await handle({ tool: "library_recent", arguments: {}, callId: "c2" })).text)).toMatchObject({ materials: [{ id: opened.material.id, ...bib }, { kind: "webpage" }] });
+    expect(parse((await handle({ tool: "library_search", arguments: { query: "lindqvist" }, callId: "c3" })).text)).toMatchObject({ hits: [{ kind: "material", id: opened.material.id, materialKind: "journalArticle", creators: ["Mara Lindqvist"], doi: "10.1234/jr.1" }] });
   });
 
   it("pages a material's markdown and refuses unknown ids and bad offsets", async () => {

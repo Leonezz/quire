@@ -14,9 +14,10 @@ let db: Database;
 beforeEach(async () => { root = await mkdtemp(join(tmpdir(), "read-agent-")); db = openDatabase(":memory:"); });
 afterEach(async () => { db.close(); await rm(root, { recursive: true, force: true }); });
 
+const meta = { kind: "webpage" as const, title: "Momentum, revisited", creators: [{ role: "author" as const, name: "A. Author" }], url: "https://example.test/momentum" };
 const material: MaterialRecord = {
   id: "abcdefabcdefabcd", url: "https://example.test/momentum", finalUrl: "https://example.test/momentum", title: "Momentum, revisited", byline: "A. Author",
-  fetchedAt: "2026-09-10T00:00:00.000Z", readingMinutes: 3, origin: "web", mediaType: "text/html", markdown: "x".repeat(30_000), tags: [],
+  fetchedAt: "2026-09-10T00:00:00.000Z", readingMinutes: 3, origin: "web", mediaType: "text/html", markdown: "x".repeat(30_000), tags: [], kind: "webpage", extracted: meta, meta,
   quality: { completeness: "declared_full", conformance: "conformant", identityConfidence: "strong", safety: "safe", warnings: [] }, problems: [],
 };
 const artifact: MaterialRecord = { ...material, id: "0123456789abcdef", url: "quire://artifact/0123456789abcdef", finalUrl: "quire://artifact/0123456789abcdef", title: "Momentum (rebuilt)", origin: "agent", mediaType: "text/markdown", lineage: [material.id], markdown: "# Momentum" };

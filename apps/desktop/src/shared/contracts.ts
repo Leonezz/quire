@@ -17,6 +17,8 @@ export interface MaterialSummary {
   /** User tags from the metadata overrides. */
   tags: string[];
   kind: MaterialKind;
+  /** Where it appeared (journal, blog, site), from the effective metadata, for list rows. */
+  publication?: string;
   /** Set when the agent rebuilt this material into a cleaner artifact (its id). */
   rebuiltAs?: string;
 }

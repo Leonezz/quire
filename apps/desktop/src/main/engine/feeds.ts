@@ -1,7 +1,7 @@
 import { readingMinutes, wordCount } from "./reading-time";
 import { createHash } from "node:crypto";
 import { normalizeFeedCapture, type NormalizedFeedEntry } from "@read/normalize";
-import type { ItemSignals } from "../../shared/contracts";
+import type { ItemSignals, MaterialMeta } from "../../shared/contracts";
 import type { ItemContent, ItemInput } from "./items";
 
 const BUDGET = { maxBytes: 8 * 1024 * 1024, maxDepth: 100, maxEntries: 200, maxEntryOutputBytes: 2 * 1024 * 1024, maxNodes: 200_000, maxTotalOutputBytes: 64 * 1024 * 1024 };
@@ -115,6 +115,13 @@ export function itemOf(entry: NormalizedFeedEntry, lang: string | undefined, now
   };
 }
 
+const NEWSLETTER_WORDS = /newsletter|weekly|周刊|digest/i;
+
+/** What the feed itself says about every entry: where it appeared and, from the feed's name, whether it is a newsletter or a blog. The normalizer exposes no per-entry author. */
+export function feedItemMeta(sourceTitle: string, publishedAt: string): MaterialMeta {
+  return { kind: NEWSLETTER_WORDS.test(sourceTitle) ? "newsletter" : "blogPost", publication: sourceTitle, date: publishedAt };
+}
+
 /** RSS 2.0 or Atom bytes to items. Throws with an actionable message when the bytes are not a feed. */
 export function parseFeed(bytes: Uint8Array, mediaType: string, url: string, now: () => Date = () => new Date()): ParsedFeed {
   if (mediaType === "text/html" || (mediaType === "application/octet-stream" && looksLikeHtml(bytes))) throw new Error(`Not a feed: ${url} answered with an HTML page. Paste the site's feed URL, or the page itself to discover one.`);
@@ -129,10 +136,11 @@ export function parseFeed(bytes: Uint8Array, mediaType: string, url: string, now
   }
   const lang = languageOf(bytes);
   const siteUrl = siteUrlOf(bytes);
+  const title = collapse(outcome.feed.title) || new URL(url).hostname;
   return {
-    title: collapse(outcome.feed.title) || new URL(url).hostname,
+    title,
     ...(siteUrl ? { siteUrl } : {}),
     ...(lang ? { lang } : {}),
-    items: outcome.feed.entries.map((entry) => itemOf(entry, lang, now)),
+    items: outcome.feed.entries.map((entry) => { const item = itemOf(entry, lang, now); return { ...item, meta: feedItemMeta(title, item.publishedAt) }; }),
   };
 }

@@ -6,6 +6,7 @@ import { ANNOTATION_COLORS, citationFor, useAnnotations } from "./annotations";
 import type { NoteDraft } from "./NotesPanel";
 import { ReaderInspector, type ReaderTab } from "./ReaderInspector";
 import { hostLabel } from "./ArtifactLineage";
+import { headerParts } from "./materialMeta";
 import type { ReaderProps } from "./ReaderView";
 import { SelectionToolbar, type SelectionCapture } from "./SelectionToolbar";
 import type { AgentContext, Annotation } from "../../shared/contracts";
@@ -99,7 +100,8 @@ export function PdfReaderView({ material, onBack, onOpenLink, onOpenMaterial, on
   };
   const inspectorOpen = inspectorTab !== null;
 
-  const subtitle = [material.origin === "agent" ? "Agent" : hostLabel(material), pdf ? `${pdf.pages} pages` : "", `${progress}%`].filter(Boolean).join(" · ");
+  // The PDF has no header of its own, so creators · publication · date ride in the title bar before the host.
+  const subtitle = [...headerParts(material.meta), material.origin === "agent" ? "Agent" : hostLabel(material), pdf ? `${pdf.pages} pages` : "", `${material.readingMinutes} min`, `${progress}%`].filter(Boolean).join(" · ");
 
   return (
     <div className={`grid h-full grid-cols-[minmax(0,1fr)] grid-rows-[56px_minmax(0,1fr)] gap-3 ${embedded ? "p-0" : "p-3"}`}>

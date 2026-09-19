@@ -56,6 +56,8 @@ const api: ReadApi = {
   // M3: metadata, library management, settings, agent sessions.
   queryLibrary: (filter) => ipcRenderer.invoke("library:query", filter),
   updateMaterialMeta: (id, patch) => ipcRenderer.invoke("material:updateMeta", id, patch),
+  refreshMetadata: (id) => ipcRenderer.invoke("material:refreshMeta", id),
+  exportBibtex: (ids) => ipcRenderer.invoke("material:bibtex", ids),
   listTags: () => ipcRenderer.invoke("material:tags"),
   deleteMaterials: (ids) => ipcRenderer.invoke("material:delete", ids),
   keepItem: (id) => ipcRenderer.invoke("item:keep", id),
