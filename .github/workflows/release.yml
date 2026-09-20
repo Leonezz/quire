@@ -3,9 +3,16 @@ name: Release
 # Cutting a release: bump apps/desktop/package.json `version`, commit, tag `v<version>` and push the
 # tag. electron-builder publishes the macOS artifacts (dmg + zip, arm64 and x64, plus latest-mac.yml
 # for electron-updater) to this repository's Releases page. See docs/release.md.
+# Manual only: alphas are built and published from the maintainer's Mac (signed with the local
+# identity, see docs/release.md). Running this on a tag would replace those signed assets with
+# unsigned ones, which is exactly what happened on the first alpha. Use it once Developer ID
+# signing secrets exist.
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to build and publish (for example v0.1.0-alpha.2)"
+        required: true
 
 permissions:
   contents: write
@@ -31,8 +38,8 @@ jobs:
         shell: bash
         run: |
           version="$(node -p "require('./apps/desktop/package.json').version")"
-          if [ "$GITHUB_REF_NAME" != "v$version" ]; then
-            echo "::error::Tag $GITHUB_REF_NAME does not match apps/desktop/package.json version $version"
+          if [ "${{ inputs.tag }}" != "v$version" ]; then
+            echo "::error::Tag ${{ inputs.tag }} does not match apps/desktop/package.json version $version"
             exit 1
           fi
 
@@ -100,7 +107,7 @@ jobs:
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: quire-${{ github.ref_name }}-mac
+          name: quire-${{ inputs.tag }}-mac
           if-no-files-found: error
           path: |
             apps/desktop/release/*.dmg
@@ -112,7 +119,7 @@ jobs:
       - name: Write release notes
         shell: bash
         run: |
-          tag="$GITHUB_REF_NAME"
+          tag="${{ inputs.tag }}"
           previous="$(git describe --tags --abbrev=0 "${tag}^" 2>/dev/null || true)"
           if [ -n "$previous" ]; then
             range="${previous}..${tag}"

@@ -24,8 +24,10 @@ trusted by Gatekeeper on other Macs — users follow the "First launch" steps in
 it is a valid code signature, so in-app updates install in place between builds signed with the
 same identity.
 
-**On GitHub Actions (unsigned, or Developer ID when the secrets exist).** Pushing a `v*` tag runs
-`release.yml`, which publishes with the job's own `GITHUB_TOKEN`. Without `CSC_LINK` /
+**On GitHub Actions (unsigned, or Developer ID when the secrets exist).** `release.yml` runs only
+by hand (Actions → Release → Run workflow, with an existing tag) and publishes with the job's own
+`GITHUB_TOKEN`. It is deliberately not tag-triggered: a local `release:local` publish creates the
+tag, and a tag-triggered run would then overwrite the signed assets with unsigned ones. Without `CSC_LINK` /
 `CSC_KEY_PASSWORD` / `APPLE_ID` / `APPLE_APP_SPECIFIC_PASSWORD` / `APPLE_TEAM_ID` the build is
 unsigned and the updater only offers the download; with a Developer ID certificate and those
 secrets the build is signed, notarized, and installs in place.
