@@ -1,8 +1,34 @@
 # Releasing Quire
 
-Quire ships as a macOS app built with electron-builder from `apps/desktop`. Artifacts go to the
-public [Leonezz/quire-releases](https://github.com/Leonezz/quire-releases) repository, which is also
-what the in-app updater polls; the source repository stays private.
+Quire ships as a macOS app built with electron-builder from `apps/desktop`. Releases live on this
+repository's Releases page, which is also what the in-app updater polls. The extraction eval's
+page snapshots (`eval/corpus/`) are third-party content and stay local (gitignored); everything
+else is public.
+
+## Two ways to publish
+
+**Locally, signed with the Apple Development identity (the alpha path).** GitHub's runners have no
+certificate, and electron-updater refuses to install unsigned macOS builds, so alphas are built on
+the maintainer's Mac:
+
+```sh
+pnpm build
+pnpm --filter @read/desktop release:local
+```
+
+`release:local` signs with `Apple Development: leonez12138@gmail.com (LGNAH9RZH4)` (override with
+`CSC_NAME`), publishes with `gh auth token` (override with `GH_TOKEN`), and creates the GitHub
+release as a draft named `v<version>`; publish it from the Releases page after checking the
+assets (`.dmg`, `.zip`, `latest-mac.yml` per architecture). A development certificate is not
+trusted by Gatekeeper on other Macs — users follow the "First launch" steps in the README — but
+it is a valid code signature, so in-app updates install in place between builds signed with the
+same identity.
+
+**On GitHub Actions (unsigned, or Developer ID when the secrets exist).** Pushing a `v*` tag runs
+`release.yml`, which publishes with the job's own `GITHUB_TOKEN`. Without `CSC_LINK` /
+`CSC_KEY_PASSWORD` / `APPLE_ID` / `APPLE_APP_SPECIFIC_PASSWORD` / `APPLE_TEAM_ID` the build is
+unsigned and the updater only offers the download; with a Developer ID certificate and those
+secrets the build is signed, notarized, and installs in place.
 
 ## Cutting an alpha
 
@@ -20,7 +46,7 @@ what the in-app updater polls; the source repository stays private.
    - installs the workspace with pnpm and runs `pnpm build` (electron-vite writes `apps/desktop/out`);
    - runs `electron-builder --mac --publish always`, which packages `Quire.app` for `arm64` and
      `x64`, produces a `.dmg` and a `.zip` per architecture plus `latest-mac.yml`, and creates a
-     release `v<version>` on `quire-releases` with those files;
+     release `v<version>` on this repository with those files;
    - uploads the same files as a workflow artifact (`quire-v<version>-mac`);
    - writes the release notes from the `feat:`/`fix:` commits since the previous tag and marks the
      release as a prerelease when the tag contains `alpha` or `beta` (otherwise it becomes the
@@ -35,7 +61,7 @@ Set these in the source repository (Settings → Secrets and variables → Actio
 
 | Secret | Required | Purpose |
 | --- | --- | --- |
-| `RELEASE_TOKEN` | yes | Fine-grained personal access token with **Contents: read and write** on `Leonezz/quire-releases`. electron-builder publishes with it and `gh release edit` writes the notes. The job's own `GITHUB_TOKEN` cannot write to another repository. |
+| `GITHUB_TOKEN` | automatic | The job's own token; releases are created on this repository. |
 | `CSC_LINK` | for signing | Base64 of the **Developer ID Application** certificate exported as `.p12` (`base64 -i cert.p12 | pbcopy`). |
 | `CSC_KEY_PASSWORD` | with `CSC_LINK` | Password of that `.p12`. |
 | `APPLE_ID` | for notarization | Apple ID of the developer account. |
@@ -69,7 +95,7 @@ requested without a certificate).
 - `extraMetadata.productName: Quire` makes the packaged app store its data under
   `~/Library/Application Support/Quire`, separate from the dev app (`@read/desktop`).
 - `npmRebuild: false`: there are no native modules to rebuild (`node:sqlite` ships with Electron).
-- `publish` targets `Leonezz/quire-releases` with `releaseType: prerelease`.
+- `publish` targets this repository (`Leonezz/quire`) with `releaseType: prerelease`.
 
 ## Local smoke test
 

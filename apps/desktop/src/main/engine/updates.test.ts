@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateState } from "../../shared/contracts";
 import { CHECK_INTERVAL_MS, FIRST_CHECK_DELAY_MS, UPDATE_INSTALL_UNAVAILABLE, UPDATE_NOT_AVAILABLE, UpdateService, pickLatestRelease, type GithubRelease, type InstallerEvents, type UpdateFetch, type UpdateInstaller, type UpdateServiceOptions } from "./updates";
 
-const RELEASES_URL = "https://github.com/Leonezz/quire-releases/releases";
-const API_URL = "https://api.github.com/repos/Leonezz/quire-releases/releases?per_page=10";
+const RELEASES_URL = "https://github.com/Leonezz/quire/releases";
+const API_URL = "https://api.github.com/repos/Leonezz/quire/releases?per_page=10";
 
 function release(tag: string, extra: Partial<GithubRelease> = {}): GithubRelease {
   return { tag_name: tag, html_url: `${RELEASES_URL}/tag/${tag}`, body: `Notes for ${tag}`, ...extra };
@@ -32,7 +32,7 @@ function fakeInstaller(overrides: Partial<UpdateInstaller> = {}) {
 function service(overrides: Partial<UpdateServiceOptions> = {}) {
   const states: UpdateState[] = [];
   const options: UpdateServiceOptions = {
-    currentVersion: "0.1.0-alpha.1", feed: { owner: "Leonezz", repo: "quire-releases" },
+    currentVersion: "0.1.0-alpha.1", feed: { owner: "Leonezz", repo: "quire" },
     fetch: jsonFetch(200, [release("v0.1.0-alpha.1")]), platform: "darwin", arch: "arm64",
     onState: (state) => { states.push(state); }, autoCheck: () => true, openExternal: vi.fn(async () => undefined),
     now: () => new Date("2026-09-20T10:00:00.000Z"),

@@ -31,7 +31,16 @@ Blogs, newsletters, papers, PDFs — whatever you bring in, Quire turns it into 
 
 ## Get it
 
-Alpha builds for macOS are published at [github.com/Leonezz/quire-releases/releases](https://github.com/Leonezz/quire-releases/releases). The alpha is not yet signed: right-click the app and choose Open the first time. Quire checks for new alphas and offers them in Settings › About.
+Alpha builds for macOS are published on the [Releases page](https://github.com/Leonezz/quire/releases): download the `.dmg` for your Mac (`arm64` for Apple silicon, `x64` for Intel) and drag Quire to Applications.
+
+**First launch.** The alpha is signed with a development certificate, not notarized by Apple, so macOS will refuse to open it the normal way. Once:
+
+1. Right-click (or Control-click) Quire in Applications and choose **Open**, then **Open** again in the dialog. If the dialog offers no Open button, go to **System Settings → Privacy & Security**, scroll to the message about Quire and click **Open Anyway**.
+2. Or, in Terminal: `xattr -d com.apple.quarantine /Applications/Quire.app`.
+
+After that it opens like any other app. Quire checks for newer alphas and offers them in **Settings › About**; installing in place works when the new build carries the same signature, otherwise it opens the download page.
+
+The agent needs the [Codex CLI](https://github.com/openai/codex) installed and signed in (`codex login`); everything else works without it.
 
 ## Run it from source
 

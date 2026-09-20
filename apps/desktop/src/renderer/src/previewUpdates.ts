@@ -7,7 +7,7 @@ import type { ReadApiUpdates, UpdateState } from "../../shared/contracts";
 export const PREVIEW_UPDATE_SWITCH = "read:preview-update";
 export const PREVIEW_VERSION = "preview";
 const PREVIEW_LATEST = "0.1.0-alpha.2";
-const PREVIEW_URL = "https://github.com/Leonezz/quire-releases/releases/tag/v0.1.0-alpha.2";
+const PREVIEW_URL = "https://github.com/Leonezz/quire/releases/tag/v0.1.0-alpha.2";
 const CHECK_DELAY_MS = 600;
 const PREVIEW_NOTES = [
   "## What's new", "",

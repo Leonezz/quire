@@ -2,19 +2,18 @@ name: Release
 
 # Cutting a release: bump apps/desktop/package.json `version`, commit, tag `v<version>` and push the
 # tag. electron-builder publishes the macOS artifacts (dmg + zip, arm64 and x64, plus latest-mac.yml
-# for electron-updater) to the public Leonezz/quire-releases repository. See docs/release.md.
+# for electron-updater) to this repository's Releases page. See docs/release.md.
 on:
   push:
     tags: ["v*"]
 
 permissions:
-  contents: read
+  contents: write
 
 env:
-  # Personal access token with `contents: write` on Leonezz/quire-releases. The job's own
-  # GITHUB_TOKEN cannot publish to another repository.
-  GH_TOKEN: ${{ secrets.RELEASE_TOKEN }}
-  RELEASE_REPO: Leonezz/quire-releases
+  # Releases live in this repository, so the job's own token publishes them.
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  RELEASE_REPO: ${{ github.repository }}
 
 jobs:
   mac:
@@ -34,10 +33,6 @@ jobs:
           version="$(node -p "require('./apps/desktop/package.json').version")"
           if [ "$GITHUB_REF_NAME" != "v$version" ]; then
             echo "::error::Tag $GITHUB_REF_NAME does not match apps/desktop/package.json version $version"
-            exit 1
-          fi
-          if [ -z "$GH_TOKEN" ]; then
-            echo "::error::The RELEASE_TOKEN secret is not set; electron-builder cannot publish to $RELEASE_REPO"
             exit 1
           fi
 

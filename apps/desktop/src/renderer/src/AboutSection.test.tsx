@@ -77,8 +77,8 @@ describe("AboutSection", () => {
   });
 
   it("shows an error in red with Retry, and a refused install under the state", async () => {
-    await mount({ phase: "error", current: CURRENT, message: "No releases yet at https://github.com/Leonezz/quire-releases/releases.", checkedAt: "2026-09-20T10:00:00.000Z" });
-    const line = screen.getByText("No releases yet at https://github.com/Leonezz/quire-releases/releases.");
+    await mount({ phase: "error", current: CURRENT, message: "No releases yet at https://github.com/Leonezz/quire/releases.", checkedAt: "2026-09-20T10:00:00.000Z" });
+    const line = screen.getByText("No releases yet at https://github.com/Leonezz/quire/releases.");
     expect(line.className).toContain("text-red-text");
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Retry" })); await flush(); });
     expect(api.read.checkForUpdates).toHaveBeenCalledTimes(1);

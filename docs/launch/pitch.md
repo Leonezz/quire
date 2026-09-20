@@ -24,7 +24,7 @@ Also: Zotero-style metadata (types, creators, identifiers, BibTeX), highlights a
 
 Stack: Electron, React Aria, a hand-built extraction pipeline evaluated against 65 real blog snapshots, SQLite via node:sqlite. Alpha: macOS only, unsigned build for now (right-click → Open), expect rough edges.
 
-Download: https://github.com/Leonezz/quire-releases/releases
+Download: https://github.com/Leonezz/quire/releases
 
 I'd love to hear which sites it extracts badly.
 
@@ -40,7 +40,7 @@ I'd love to hear which sites it extracts badly.
 
 5/ Garbled page? Ask the agent to rebuild the article from the saved original. Highlights and notes work on pages and PDFs. Zotero-style metadata and BibTeX built in.
 
-6/ macOS, unsigned alpha (right-click → Open). Runs on the Codex CLI for the agent part. Download + feedback: https://github.com/Leonezz/quire-releases/releases
+6/ macOS, unsigned alpha (right-click → Open). Runs on the Codex CLI for the agent part. Download + feedback: https://github.com/Leonezz/quire/releases
 
 ## 中文（V2EX / 即刻 / 微博）
 
@@ -58,7 +58,7 @@ Quire 做三件事：
 
 技术：Electron + React Aria，自研抽取管线，用 65 篇真实博客快照做了评测集。目前 macOS，未签名 alpha（右键打开），会有毛边。
 
-下载：https://github.com/Leonezz/quire-releases/releases
+下载：https://github.com/Leonezz/quire/releases
 想听你们哪些站点抽取得不好。
 
 ## 截图清单（发布前补）

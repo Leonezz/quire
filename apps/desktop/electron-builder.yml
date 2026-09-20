@@ -93,5 +93,5 @@ dmg:
 publish:
   - provider: github
     owner: Leonezz
-    repo: quire-releases
+    repo: quire
     releaseType: prerelease

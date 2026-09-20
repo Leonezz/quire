@@ -93,10 +93,10 @@
 
 ### 第 12 刀：发布准备 — 已完成 2026-09-20
 - 打包：electron-builder 26（`apps/desktop/electron-builder.yml`），pnpm 外部依赖按 allow-list 打进 asar（62 MB），`extraMetadata.productName` 让打包版用独立的数据目录；图标 `build/icon.svg` → icns；本地 `package:dir` 与 dmg 均通过，未签名版可启动。
-- CI：`.github/workflows/ci.yml`（typecheck + 全部测试，含 Storybook 浏览器测试）；发布：`release.yml`（tag `v*` → macos-14 构建 → 发布到 `Leonezz/quire-releases` 的 prerelease，附 feat/fix 变更列表；有签名与公证密钥时自动签名公证）。流程见 `docs/release.md`。
+- CI：`.github/workflows/ci.yml`（typecheck + 全部测试，含 Storybook 浏览器测试）；发布：`release.yml`（tag `v*` → macos-14 构建 → 发布到本仓库 Releases 的 prerelease，附 feat/fix 变更列表；有签名与公证密钥时自动签名公证）。流程见 `docs/release.md`。
 - 更新：主进程 `UpdateService`（GitHub Releases API 手动检查，含 alpha 通道的 semver 比较）+ electron-updater 安装路径（仅签名构建可原地安装；未签名 macOS 构建只提供下载）；Settings › About 与侧栏横幅；`checkUpdatesAutomatically` 设置。
 - 宣传文案：`docs/launch/pitch.md`（Show HN、X 线程、中文版、截图清单、节奏）。
-- 待用户：创建公开仓库 `quire-releases`、在源仓库加 `RELEASE_TOKEN`、（可选）Developer ID 签名与公证密钥。
+- 2026-09-20 调整：`eval/corpus` 快照移出 git（本地保留，gitignore），仓库转公开，Releases 放本仓库，workflow 用自带 `GITHUB_TOKEN`；alpha 在本机用 Apple Development 身份签名后 `release:local` 发布（README 写明首次打开的信任步骤）。
 
 ## 评测集导入 app
 - Developer 菜单 → Import Evaluation Corpus（⌘⇧I，仅开发检出可见）把 `eval/corpus` 全部快照按当前抽取器入库；2026-09-18 实测 64 篇导入、0 失败。浏览器预览也直接列出导出后的语料（`EXPORT=1`）。

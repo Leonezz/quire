@@ -291,7 +291,7 @@ registerM3Handlers({
 });
 
 // --- Updates: GitHub Releases, alpha channel. The manual path always works; a signed build installs in place. ---
-const UPDATE_FEED = { owner: "Leonezz", repo: "quire-releases" };
+const UPDATE_FEED = { owner: "Leonezz", repo: "quire" };
 const updates = new UpdateService({
   currentVersion: app.getVersion(), feed: UPDATE_FEED, platform: process.platform, arch: process.arch,
   fetch: (url, init) => fetch(url, init),

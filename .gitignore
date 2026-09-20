@@ -9,3 +9,5 @@ apps/desktop/release/
 apps/desktop/src/renderer/public/dev/*.pdf
 eval/out/
 apps/desktop/src/renderer/public/dev/corpus/
+# Third-party page snapshots for the extraction eval: local only, never published.
+eval/corpus/
