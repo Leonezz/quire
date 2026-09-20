@@ -6,6 +6,8 @@ Blogs, newsletters, papers, PDFs — whatever you bring in, Quire turns it into 
 
 *A quire is a gathering of folded sheets, the unit a book is bound from.*
 
+![Quire reading a blog post, with the library on the left and the contents rail beside the text](docs/launch/screenshots/2-reader.png)
+
 ## What it does
 
 **One reading surface for every source.** Paste a link or drop a file. Web articles are extracted and re-typeset: title, author, date, body, code, math, tables, figures, footnotes. PDFs open in a proper viewer with page thumbnails, search, and pinch zoom. Everything is stored locally, pictures included, so it reads the same offline.

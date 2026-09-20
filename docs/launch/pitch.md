@@ -61,7 +61,7 @@ Quire 做三件事：
 下载：https://github.com/Leonezz/quire/releases
 想听你们哪些站点抽取得不好。
 
-## 截图清单（发布前补）
+## 截图（`docs/launch/screenshots/`，已随 v0.1.0-alpha.1 附上）
 
 1. Inbox：左侧来源列表、按天分组的条目、右侧预览与三个按钮。
 2. 阅读器：一篇带代码块和图的博客，目录刻度轨可见。
