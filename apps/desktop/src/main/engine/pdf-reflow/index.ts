@@ -10,6 +10,7 @@ import { assembleDocument, type DocumentBlock } from "./document";
 import { extractPages } from "./extract";
 import { figureRegionsOf } from "./figures";
 import { removeFurniture, withoutMarkers } from "./furniture";
+import { RulesJudge, refineBlocks, type BlockJudge } from "./judge";
 import { sequencesOf } from "./sequences";
 import type { PageSize } from "./types";
 
@@ -22,7 +23,13 @@ export interface FigureSink {
   write: (materialId: string, index: number, png: Uint8Array) => Promise<string>;
 }
 
-export interface BuildTextViewDeps { figures: FigureSink; /** The material title; a leading heading repeating it is not emitted twice. */ title?: string }
+export interface BuildTextViewDeps {
+  figures: FigureSink;
+  /** The material title; a leading heading repeating it is not emitted twice. */
+  title?: string;
+  /** Who refines the rules' block kinds; the rules themselves when absent (judge/). */
+  judge?: BlockJudge;
+}
 
 const problem = (code: string): NormalizationProblem => ({ code, recoverBy: "none", scope: "representation", severity: "warning" });
 
@@ -52,20 +59,25 @@ export function buildTextView(bytes: Uint8Array, materialId: string, deps: Build
     const layouts = pages.map(layoutPage);
     const sequences = pages.flatMap((page, index) => sequencesOf(layouts[index]!, figureRegionsOf(page, layouts[index]!, bodySize)));
     const largestOnPage = new Map(pages.map((page) => [page.page, Math.max(0, ...page.lines.map((line) => line.fontSize))]));
-    const blocks = classifyHeadings(mergeAcross(sequences.flatMap((sequence) => blocksOfSequence(sequence, bodySize))), largestOnPage, bodySize);
+    const classified = classifyHeadings(mergeAcross(sequences.flatMap((sequence) => blocksOfSequence(sequence, bodySize))), largestOnPage, bodySize);
+    const sizes = new Map<number, PageSize>(pages.map((page) => [page.page, { width: page.width, height: page.height }]));
+    const judge = deps.judge ?? new RulesJudge();
+    const refined = await refineBlocks(classified, judge, { bodySize, sizes, layouts: new Map(layouts.map((layout) => [layout.page, layout])) });
+    if (refined.error !== undefined) console.warn(`[reflow] ${refined.error}`);
+    const blocks = refined.blocks;
     const renderer = figureRendererOf(doc);
     const cropped = await withCrops(blocks, materialId, renderer, deps.figures);
-    const sizes = new Map<number, PageSize>(pages.map((page) => [page.page, { width: page.width, height: page.height }]));
     const assembled = assembleDocument(cropped.blocks, sizes, deps.title);
     const problems = [
       ...(degradedPages.length > 0 ? [problem("TEXT_VIEW_PAGE_DEGRADED")] : []),
       ...("error" in renderer && cropped.figures > 0 ? [problem("TEXT_VIEW_NO_FIGURES")] : []),
     ];
     const report: TextViewReport = {
-      pages: extracted.length, columns: dominantColumns(layouts), furnitureLines: furniture.removed,
+      pages: extracted.length, columns: dominantColumns(layouts), furnitureLines: furniture.removed + refined.furnitureLines,
       headings: blocks.filter((block) => block.kind === "heading").length,
       paragraphs: blocks.filter((block) => block.kind === "paragraph" || block.kind === "listItem").length,
       figures: cropped.figures, degradedPages,
+      ...(judge.provider === "jev" ? { judged: { provider: "jev", asked: refined.asked, changed: refined.changed, ...(refined.error !== undefined ? { error: refined.error } : {}) } } : {}),
     };
     return {
       view: "text", mediaType: TEXT_VIEW_MEDIA_TYPE,

@@ -56,9 +56,11 @@ function imageOf(block: DocumentBlock): ReaderV2Image {
   return { type: "image", url, alt: block.text || figureLabel(block), title: null, width, height };
 }
 
+/** A caption the judge found without a figure to join reads as an emphasised paragraph. */
 function flowOf(block: DocumentBlock, line: string): ReaderV2FlowNode {
   if (block.kind === "heading") return { type: "heading", depth: block.depth ?? 2, children: [text(block.text)] };
   if (block.kind === "figure" && block.asset) return { type: "figure", media: [imageOf(block)], caption: block.text ? [text(block.text)] : [], credit: [] };
+  if (block.role === "caption") return { type: "paragraph", children: [{ type: "emphasis", children: [text(line)] }] };
   return { type: "paragraph", children: [text(line)] };
 }
 
@@ -66,6 +68,7 @@ function markdownOf(block: DocumentBlock, line: string): string {
   if (block.kind === "heading") return `${"#".repeat(block.depth ?? 2)} ${block.text}`;
   if (block.kind === "listItem") return `${block.ordered ? "1." : "-"} ${block.text}`;
   if (block.kind === "figure" && block.asset) return `![${(block.text || figureLabel(block)).replace(/[[\]]/g, "")}](${block.asset.url})${block.text ? `\n\n${block.text}` : ""}`;
+  if (block.role === "caption") return `*${line}*`;
   return line;
 }
 

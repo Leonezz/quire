@@ -1,11 +1,12 @@
 import { Button } from "@read/ui";
 import type { TextViewReport } from "../../shared/contracts";
 
-/** "2 pages · 1 column · 4 furniture lines dropped · …": the reflow's report in one line, for Info › Views. */
+/** "2 pages · 1 column · 4 furniture lines dropped · … · refined by Jev · 12 asked · 3 changed": the reflow's report in one line, for Info › Views. */
 export function textViewReportText(report: TextViewReport): string {
   const plural = (count: number, noun: string) => `${count} ${noun}${count === 1 ? "" : "s"}`;
   const degraded = report.degradedPages.length ? `degraded: p. ${report.degradedPages.join(", ")}` : "no degraded pages";
-  return [plural(report.pages, "page"), plural(report.columns, "column"), `${plural(report.furnitureLines, "furniture line")} dropped`, plural(report.headings, "heading"), plural(report.paragraphs, "paragraph"), plural(report.figures, "figure"), degraded].join(" · ");
+  const judged = report.judged ? [`refined by ${report.judged.provider === "jev" ? "Jev" : report.judged.provider}`, `${report.judged.asked} asked`, `${report.judged.changed} changed`, ...(report.judged.error ? [report.judged.error] : [])] : [];
+  return [plural(report.pages, "page"), plural(report.columns, "column"), `${plural(report.furnitureLines, "furniture line")} dropped`, plural(report.headings, "heading"), plural(report.paragraphs, "paragraph"), plural(report.figures, "figure"), degraded, ...judged].join(" · ");
 }
 
 /**

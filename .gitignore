@@ -11,3 +11,7 @@ eval/out/
 apps/desktop/src/renderer/public/dev/corpus/
 # Third-party page snapshots for the extraction eval: local only, never published.
 eval/corpus/
+
+# PDF eval corpus and per-run outputs: local only.
+eval/pdf/corpus/
+eval/pdf/out/

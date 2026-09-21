@@ -1,6 +1,6 @@
 import { numberedDepth } from "./blocks";
 import { placementOf, type PageLayout } from "./columns";
-import { endsSentence, isProse, rectBottom, rectRight, unionRect, type FigureRegion, type Line, type PageLines, type Rect } from "./types";
+import { endsSentence, isProse, rectBottom, rectRight, unionRect, type FigureRegion, type Line, type PageLines, type PageSize, type Rect } from "./types";
 
 // Figures and tables are what the text layer cannot carry: a caption names a region above
 // (figures) or below (tables) it that holds no body text; a grid of short lines on shared
@@ -183,7 +183,8 @@ export function figureRegionsOf(page: PageLines, layout: PageLayout, bodySize: n
   return [...captioned, ...grids].map((region) => ({ ...region, rect: padded(region.rect, page) }));
 }
 
-function padded(rect: Rect, page: PageLines): Rect {
+/** The rect grown by a little on every side, kept inside the page: what a crop of a region takes. */
+export function padded(rect: Rect, page: PageSize): Rect {
   const dx = PADDING_SHARE * page.width; const dy = PADDING_SHARE * page.height;
   const x = Math.max(0, rect.x - dx); const y = Math.max(0, rect.y - dy);
   return { x, y, w: Math.min(page.width, rectRight(rect) + dx) - x, h: Math.min(page.height, rectBottom(rect) + dy) - y };

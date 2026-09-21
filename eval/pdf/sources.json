@@ -1,0 +1,122 @@
+[
+  {
+    "slug": "arxiv-bert-acl-2col",
+    "url": "https://arxiv.org/pdf/1810.04805",
+    "kind": "arxiv",
+    "layout": "two-column ACL/NAACL"
+  },
+  {
+    "slug": "arxiv-roberta-tables",
+    "url": "https://arxiv.org/pdf/1907.11692",
+    "kind": "arxiv",
+    "layout": "two-column ACL, many tables"
+  },
+  {
+    "slug": "arxiv-resnet-cvpr-2col",
+    "url": "https://arxiv.org/pdf/1512.03385",
+    "kind": "arxiv",
+    "layout": "two-column IEEE/CVPR"
+  },
+  {
+    "slug": "arxiv-vit-iclr-1col",
+    "url": "https://arxiv.org/pdf/2010.11929",
+    "kind": "arxiv",
+    "layout": "single-column ICLR"
+  },
+  {
+    "slug": "arxiv-sklearn-jmlr",
+    "url": "https://arxiv.org/pdf/1201.0490",
+    "kind": "arxiv",
+    "layout": "JMLR-style single column"
+  },
+  {
+    "slug": "arxiv-ddpm-math",
+    "url": "https://arxiv.org/pdf/2006.11239",
+    "kind": "arxiv",
+    "layout": "NeurIPS single column, heavy math"
+  },
+  {
+    "slug": "arxiv-attention-neurips",
+    "url": "https://arxiv.org/pdf/1706.03762",
+    "kind": "arxiv",
+    "layout": "NeurIPS single column"
+  },
+  {
+    "slug": "arxiv-lora-iclr-tables",
+    "url": "https://arxiv.org/pdf/2106.09685",
+    "kind": "arxiv",
+    "layout": "ICLR single column, many tables"
+  },
+  {
+    "slug": "rfc8949-cbor",
+    "url": "https://www.rfc-editor.org/rfc/rfc8949.pdf",
+    "kind": "rfc",
+    "layout": "IETF RFC (v3 PDF)"
+  },
+  {
+    "slug": "rfc9111-caching",
+    "url": "https://www.rfc-editor.org/rfc/rfc9111.pdf",
+    "kind": "rfc",
+    "layout": "IETF RFC (v3 PDF)"
+  },
+  {
+    "slug": "rfc9112-http11",
+    "url": "https://www.rfc-editor.org/rfc/rfc9112.pdf",
+    "kind": "rfc",
+    "layout": "IETF RFC (v3 PDF), long"
+  },
+  {
+    "slug": "ecma-404-json",
+    "url": "https://ecma-international.org/wp-content/uploads/ECMA-404_2nd_edition_december_2017.pdf",
+    "kind": "spec",
+    "layout": "ECMA/ISO-style standard"
+  },
+  {
+    "slug": "unicode-ch02",
+    "url": "https://www.unicode.org/versions/Unicode15.1.0/ch02.pdf",
+    "kind": "spec",
+    "layout": "Unicode Standard chapter"
+  },
+  {
+    "slug": "slides-cs231n-l1",
+    "url": "http://cs231n.stanford.edu/slides/2017/cs231n_2017_lecture1.pdf",
+    "kind": "slides",
+    "layout": "lecture slides"
+  },
+  {
+    "slug": "slides-cs224n-l1",
+    "url": "https://web.stanford.edu/class/cs224n/slides/cs224n-spr2024-lecture01-wordvecs1.pdf",
+    "kind": "slides",
+    "layout": "lecture slides"
+  },
+  {
+    "slug": "book-think-python",
+    "url": "https://greenteapress.com/thinkpython2/thinkpython2.pdf",
+    "kind": "book",
+    "layout": "book, LaTeX"
+  },
+  {
+    "slug": "thesis-berkeley-eecs",
+    "url": "https://www2.eecs.berkeley.edu/Pubs/TechRpts/2019/EECS-2019-72.pdf",
+    "kind": "thesis",
+    "layout": "PhD thesis / tech report"
+  },
+  {
+    "slug": "scanned-naca-report",
+    "url": "https://ntrs.nasa.gov/api/citations/19930091966/downloads/19930091966.pdf",
+    "kind": "scanned",
+    "layout": "scanned report with OCR text layer"
+  },
+  {
+    "slug": "letter-berkshire-2023",
+    "url": "https://www.berkshirehathaway.com/letters/2023ltr.pdf",
+    "kind": "magazine",
+    "layout": "shareholder letter, magazine prose"
+  },
+  {
+    "slug": "whitepaper-bitcoin",
+    "url": "https://bitcoin.org/bitcoin.pdf",
+    "kind": "magazine",
+    "layout": "company whitepaper"
+  }
+]

@@ -61,4 +61,12 @@ describe("isDegradedText", () => {
     expect(isDegradedText("Safety evaluations for large language models rely on surface-form classifiers. ".repeat(4))).toBe(false);
     expect(isDegradedText("short")).toBe(false);
   });
+
+  it("marks a line whose bold lead ends in a period or colon and continues in regular text as a run-in, not bold", () => {
+    const lines = linesOfRuns(1, [run("Identity vs. Projection Shortcuts.", 72, 100, 150, 10, { bold: true }), run(" We have shown that", 222, 100, 90, 10)]);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ bold: false, boldLead: true, text: "Identity vs. Projection Shortcuts. We have shown that" });
+    expect(linesOfRuns(1, [run("Bold start", 72, 100, 50, 10, { bold: true }), run(" then regular", 122, 100, 60, 10)])[0]?.boldLead).toBeUndefined();
+    expect(linesOfRuns(1, [run("All bold.", 72, 100, 50, 10, { bold: true })])[0]).toMatchObject({ bold: true });
+  });
 });

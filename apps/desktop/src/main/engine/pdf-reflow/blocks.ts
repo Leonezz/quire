@@ -22,8 +22,8 @@ const BODY_SIZE_TOLERANCE = 0.12;
 const MATH_SHARE = 0.3;
 const MATH_MAX_CHARS = 60;
 
-const LIST_MARKER = /^(?:[•●○◦▪■–—\-*·]|\(?(?:\d{1,2}|[a-z]|[ivx]{1,4})[.)])\s+/;
-const ORDERED_MARKER = /^\(?(?:\d{1,2}|[a-z]|[ivx]{1,4})[.)]\s+/;
+export const LIST_MARKER = /^(?:[•●○◦▪■–—\-*·]|\(?(?:\d{1,2}|[a-z]|[ivx]{1,4})[.)])\s+/;
+export const ORDERED_MARKER = /^\(?(?:\d{1,2}|[a-z]|[ivx]{1,4})[.)]\s+/;
 const NUMBERED_HEADING = /^(?:(\d+(?:\.\d+)*)\.?|([IVXLC]+)\.?|([A-Z])(?:\.\d+)*\.?)\s+[A-Z\d“"(]/;
 const MATH_GLYPHS = /[=+\-×÷·∑∏∫√∞≤≥≠≈∂∇∈∀∃αβγδεζηθικλμνξπρστυφχψωΓΔΘΛΞΠΣΦΨΩ^_{}|]/g;
 
@@ -47,6 +47,15 @@ export interface Block {
   depth?: 1 | 2 | 3;
   ordered?: boolean;
   region?: FigureRegion;
+  /** Set by a judge's verdict: what a paragraph is besides body text (judge/apply.ts). */
+  role?: BlockRole;
+}
+
+/** Footnotes and references are auxiliary flow: kept as paragraphs, placed at the end of their page / in their own section. */
+export type BlockRole = "caption" | "footnote" | "reference";
+
+export function isAuxiliary(block: Pick<Block, "role">): boolean {
+  return block.role === "footnote" || block.role === "reference";
 }
 
 /** The body size: the most common line size, weighted by how much text is set in it. */

@@ -151,6 +151,14 @@ describe("MaterialStore.fetchView text", () => {
     expect(await store.fetchView(id, "text")).toMatchObject({ ok: false, code: "VIEW_ALREADY_STORED" });
   });
 
+  it("asks the store's judge at build time and refuses the build with the judge's reason", async () => {
+    const withJudge = new MaterialStore(root, fetcherOf(await pdfFixture()), { judge: () => { throw new Error("No typesafeApiKey is stored. Enter the TypeSafe API key in Settings › Agent."); } });
+    const { id } = await openWithPdfView(withJudge);
+    expect((await withJudge.fetchView(id, "pdf")).ok).toBe(true);
+    expect(await withJudge.fetchView(id, "text")).toMatchObject({ ok: false, code: "NORMALIZE_FAILED", message: expect.stringContaining("No typesafeApiKey is stored") });
+    expect((await withJudge.get(id))?.views.find((entry) => entry.id === "text")).toMatchObject({ status: "failed" });
+  });
+
   it("can make the text view primary and back without losing its anchors", async () => {
     const store = new MaterialStore(root, fetcherOf(await pdfFixture()));
     const { id } = await openWithPdfView(store);

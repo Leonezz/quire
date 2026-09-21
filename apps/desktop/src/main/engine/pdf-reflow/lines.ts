@@ -45,6 +45,13 @@ function joinRuns(runs: readonly Run[]): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
+/** "Identity vs. Projection Shortcuts. We have shown…": a leading bold span closed by a period or colon, then regular text. */
+function hasBoldLead(inked: readonly Run[]): boolean {
+  const lead = inked.findIndex((run) => !run.bold);
+  if (lead <= 0 || lead >= inked.length) return false;
+  return /[.:]$/.test(inked.slice(0, lead).map((run) => run.text).join("").trim());
+}
+
 function lineOf(page: number, runs: readonly Run[]): Line | undefined {
   const text = joinRuns(runs);
   if (text.length === 0) return undefined;
@@ -52,7 +59,8 @@ function lineOf(page: number, runs: readonly Run[]): Line | undefined {
   const chars = inked.reduce((sum, run) => sum + run.text.trim().length, 0);
   const boldChars = inked.filter((run) => run.bold).reduce((sum, run) => sum + run.text.trim().length, 0);
   const rect = unionRect(inked.map((run) => run.rect));
-  return { page, text, rect, baseline: inked[0]?.baseline ?? rect.y + rect.h, fontSize: lineFontSize(inked), bold: chars > 0 && boldChars / chars >= BOLD_SHARE, rotated: inked.every((run) => run.rotated) };
+  const bold = chars > 0 && boldChars / chars >= BOLD_SHARE;
+  return { page, text, rect, baseline: inked[0]?.baseline ?? rect.y + rect.h, fontSize: lineFontSize(inked), bold, rotated: inked.every((run) => run.rotated), ...(!bold && hasBoldLead(inked) ? { boldLead: true } : {}) };
 }
 
 /** Runs on one baseline, in x order, split into lines wherever the gap exceeds a cell's padding. */

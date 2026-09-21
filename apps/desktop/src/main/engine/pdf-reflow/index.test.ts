@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { MaterialViewContent } from "../../../shared/contracts";
 import { buildTextView, type FigureSink } from "./index";
+import type { BlockJudge } from "./judge";
 
 const fixture = (name: string) => readFile(join(__dirname, "..", "__fixtures__", name)).then((buffer) => new Uint8Array(buffer));
 
@@ -69,6 +70,20 @@ describe("buildTextView", () => {
     expect(Array.from(png.subarray(0, 4))).toEqual([0x89, 0x50, 0x4e, 0x47]);
     expect(markdown).toContain("![Table 1: Constructs used in this paper, with corpus examples.](quire-figure://8667175ac66aac06/");
   }, 60_000);
+
+  it("applies a judge's confident verdicts, reports them, and keeps the rules' result when the judge fails", async () => {
+    const drop: BlockJudge = { provider: "jev", judge: async (pages) => ({ verdicts: pages.flatMap((page) => page.blocks.filter((block) => !block.certain && block.page === 2).map((block) => ({ id: block.id, kind: "furniture" as const, confidence: 0.9 }))), usage: { requests: 2, inputTokens: 300, outputTokens: 4, latencyMs: 10 } }) };
+    const judged = await buildTextView(await fixture("two-pages.pdf"), "0123456789abcdef", { figures: sinkOf(), judge: drop });
+    expect(judged.plain).toBe("Attention is not all you need");
+    expect(judged.report).toMatchObject({ furnitureLines: 1, paragraphs: 1, judged: { provider: "jev", asked: 2, changed: 1 } });
+    expect(judged.report?.judged?.error).toBeUndefined();
+    const failing: BlockJudge = { provider: "jev", judge: async () => { throw new Error("Jev answered HTTP 503"); } };
+    const fallen = await buildTextView(await fixture("two-pages.pdf"), "0123456789abcdef", { figures: sinkOf(), judge: failing });
+    expect(fallen.plain).toBe("Attention is not all you need\n\nSecond page: results and discussion");
+    expect(fallen.report?.judged).toEqual({ provider: "jev", asked: 2, changed: 0, error: "Jev answered HTTP 503" });
+    const partial: BlockJudge = { provider: "jev", judge: async () => ({ verdicts: [], error: "Jev failed on 1 of 2 requests (page 2); those pages keep the rules' result. Jev answered HTTP 429" }) };
+    expect((await buildTextView(await fixture("two-pages.pdf"), "0123456789abcdef", { figures: sinkOf(), judge: partial })).report?.judged).toMatchObject({ changed: 0, error: expect.stringContaining("page 2") });
+  });
 
   it("refuses a PDF without any usable text", async () => {
     const source = new TextDecoder("latin1").decode(await fixture("two-pages.pdf"));

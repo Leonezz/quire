@@ -1,4 +1,4 @@
-import type { LibraryFilter, MaterialMeta, MaterialRecord, MaterialSummary, ReadApiM3, Settings, TagCount } from "../../shared/contracts";
+import type { LibraryFilter, MaterialMeta, MaterialRecord, MaterialSummary, ReadApiM3, Settings, SettingsPatch, TagCount } from "../../shared/contracts";
 import { publicationOf } from "./materialMeta";
 import { bibtexOf } from "../../shared/bibtex";
 import { keepPreviewItem } from "./previewM1";
@@ -20,7 +20,10 @@ const MIN_SYNC_MINUTES = 5;
 const MAX_SYNC_MINUTES = 1440;
 const MAX_MODEL_LENGTH = 64;
 const EFFORTS: readonly Settings["agentReasoningEffort"][] = ["", "low", "medium", "high"];
-const SETTINGS_DEFAULTS: Omit<Settings, "dataDirectory"> = { syncIntervalMinutes: 30, keepCapture: true, codexPath: "", agentModel: "", agentReasoningEffort: "", checkUpdatesAutomatically: true };
+const JUDGES: readonly Settings["reflowJudge"][] = ["rules", "jev"];
+/** What the preview keeps: the editable settings plus whether a key was entered (never the key itself). */
+type PreviewStored = Omit<Settings, "dataDirectory">;
+const SETTINGS_DEFAULTS: PreviewStored = { syncIntervalMinutes: 30, keepCapture: true, codexPath: "", agentModel: "", agentReasoningEffort: "", checkUpdatesAutomatically: true, reflowJudge: "rules", typesafeApiKeySet: false };
 
 function readJson<T>(key: string, fallback: T): T {
   const raw = localStorage.getItem(key);
@@ -65,15 +68,19 @@ export function queryLibrary(summaries: readonly MaterialSummary[], filter: Libr
     .sort(compare);
 }
 
-function validateSettings(patch: Partial<Omit<Settings, "dataDirectory">>): Partial<Omit<Settings, "dataDirectory">> {
-  const { syncIntervalMinutes, keepCapture, codexPath, agentModel, agentReasoningEffort, checkUpdatesAutomatically } = patch;
-  const unknown = Object.keys(patch).filter((key) => !(key in SETTINGS_DEFAULTS));
+/** The engine's validation, mirrored; the key is stored as a boolean only (the preview has no keychain). */
+function validateSettings(patch: SettingsPatch, current: PreviewStored): Partial<PreviewStored> {
+  const { syncIntervalMinutes, keepCapture, codexPath, agentModel, agentReasoningEffort, checkUpdatesAutomatically, reflowJudge, typesafeApiKey } = patch;
+  const unknown = Object.keys(patch).filter((key) => !(key in SETTINGS_DEFAULTS && key !== "typesafeApiKeySet") && key !== "typesafeApiKey");
   if (unknown.length) throw new Error(`Unknown or read-only setting(s): ${unknown.join(", ")}.`);
   if (syncIntervalMinutes !== undefined && (!Number.isInteger(syncIntervalMinutes) || syncIntervalMinutes < MIN_SYNC_MINUTES || syncIntervalMinutes > MAX_SYNC_MINUTES)) throw new Error(`syncIntervalMinutes must be a whole number of minutes between ${MIN_SYNC_MINUTES} and ${MAX_SYNC_MINUTES}.`);
   if (keepCapture !== undefined && typeof keepCapture !== "boolean") throw new Error("keepCapture must be true or false.");
   if (checkUpdatesAutomatically !== undefined && typeof checkUpdatesAutomatically !== "boolean") throw new Error("checkUpdatesAutomatically must be true or false.");
   if (agentModel !== undefined && agentModel.trim().length > MAX_MODEL_LENGTH) throw new Error(`agentModel must be at most ${MAX_MODEL_LENGTH} characters, or empty for Codex's default.`);
   if (agentReasoningEffort !== undefined && !EFFORTS.includes(agentReasoningEffort)) throw new Error('agentReasoningEffort must be "", "low", "medium" or "high".');
+  if (reflowJudge !== undefined && !JUDGES.includes(reflowJudge)) throw new Error('reflowJudge must be "rules" or "jev".');
+  const keySet = typesafeApiKey !== undefined ? typesafeApiKey.trim().length > 0 : current.typesafeApiKeySet;
+  if (reflowJudge === "jev" && !keySet) throw new Error('reflowJudge "jev" needs a TypeSafe API key: store the key first (Settings › Agent), then choose Jev.');
   return {
     ...(syncIntervalMinutes !== undefined ? { syncIntervalMinutes } : {}),
     ...(keepCapture !== undefined ? { keepCapture } : {}),
@@ -81,6 +88,8 @@ function validateSettings(patch: Partial<Omit<Settings, "dataDirectory">>): Part
     ...(agentModel !== undefined ? { agentModel: agentModel.trim() } : {}),
     ...(agentReasoningEffort !== undefined ? { agentReasoningEffort } : {}),
     ...(checkUpdatesAutomatically !== undefined ? { checkUpdatesAutomatically } : {}),
+    ...(reflowJudge !== undefined ? { reflowJudge } : {}),
+    ...(typesafeApiKey !== undefined ? { typesafeApiKeySet: keySet, ...(!keySet && current.reflowJudge === "jev" ? { reflowJudge: "rules" as const } : {}) } : {}),
   };
 }
 
@@ -165,8 +174,8 @@ export function createPreviewM3(deps: { getMaterial: (id: string) => Promise<Mat
 
     getSettings: async () => settings(),
     updateSettings: async (patch) => {
-      const current = readJson<Partial<Settings>>(SETTINGS_KEY, {});
-      writeJson(SETTINGS_KEY, { ...current, ...validateSettings(patch) });
+      const current = readJson<Partial<PreviewStored>>(SETTINGS_KEY, {});
+      writeJson(SETTINGS_KEY, { ...current, ...validateSettings(patch, { ...SETTINGS_DEFAULTS, ...current }) });
       return settings();
     },
 

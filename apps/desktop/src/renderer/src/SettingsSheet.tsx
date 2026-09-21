@@ -1,14 +1,16 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button, Kbd, NumberField, Segment, Segmented, Sheet, SheetDialog, Switch, TextField } from "@read/ui";
-import type { AgentStatus, Settings } from "../../shared/contracts";
+import type { AgentStatus, Settings, SettingsPatch } from "../../shared/contracts";
 import { AboutSection } from "./AboutSection";
 import { read } from "./api";
 import { KEYBOARD_MAP } from "./keyboardMap";
 import { ReadingControls } from "./ReadingSettings";
 import { useReadingPrefs } from "./readingPrefs";
 
-type Patch = Partial<Omit<Settings, "dataDirectory">>;
+type Patch = SettingsPatch;
 type Field = keyof Patch;
+/** The one-line privacy note of the Jev judge, from the Settings contract. */
+export const JEV_PRIVACY_NOTE = "Jev refines the blocks the rules are unsure about over the network; the page text of those blocks leaves the machine.";
 type FieldErrors = Partial<Record<Field, string>>;
 export type SettingsSection = "reading" | "sources" | "agent" | "storage" | "keyboard" | "about";
 
@@ -56,7 +58,7 @@ export function SettingsSheet({ open, onClose, section, onOpenLink }: { open: bo
   const [agentError, setAgentError] = useState<string | undefined>(undefined);
   const [copied, setCopied] = useState(false);
   // Text fields are edited locally and saved on blur / Enter, so a half-typed path is not rejected mid-way.
-  const [drafts, setDrafts] = useState<{ codexPath: string; agentModel: string; syncIntervalMinutes: number }>({ codexPath: "", agentModel: "", syncIntervalMinutes: 30 });
+  const [drafts, setDrafts] = useState<{ codexPath: string; agentModel: string; syncIntervalMinutes: number; typesafeApiKey: string }>({ codexPath: "", agentModel: "", syncIntervalMinutes: 30, typesafeApiKey: "" });
 
   const refreshAgent = useCallback(async () => {
     try { setAgent(await read.agentStatus()); setAgentError(undefined); }
@@ -68,7 +70,7 @@ export function SettingsSheet({ open, onClose, section, onOpenLink }: { open: bo
     let cancelled = false;
     setLoadError(undefined); setErrors({}); setSaved(undefined); setCopied(false);
     read.getSettings()
-      .then((loaded) => { if (cancelled) return; setSettings(loaded); setDrafts({ codexPath: loaded.codexPath, agentModel: loaded.agentModel, syncIntervalMinutes: loaded.syncIntervalMinutes }); })
+      .then((loaded) => { if (cancelled) return; setSettings(loaded); setDrafts({ codexPath: loaded.codexPath, agentModel: loaded.agentModel, syncIntervalMinutes: loaded.syncIntervalMinutes, typesafeApiKey: "" }); })
       .catch((cause: unknown) => { if (!cancelled) setLoadError(cause instanceof Error ? cause.message : "Could not load the settings."); });
     void refreshAgent();
     return () => { cancelled = true; };
@@ -81,12 +83,13 @@ export function SettingsSheet({ open, onClose, section, onOpenLink }: { open: bo
   }, [open, section, settings]);
 
   const save = async (field: Field, value: Patch[Field]) => {
-    if (settings && settings[field] === value) return;
+    if (field !== "typesafeApiKey" && settings && settings[field] === value) return;
     setErrors((current) => ({ ...current, [field]: undefined }));
     try {
       const next = await read.updateSettings({ [field]: value } as Patch);
       setSettings(next);
-      setDrafts({ codexPath: next.codexPath, agentModel: next.agentModel, syncIntervalMinutes: next.syncIntervalMinutes });
+      // The key is write-only: once stored (or removed) the draft is cleared, never echoed back.
+      setDrafts({ codexPath: next.codexPath, agentModel: next.agentModel, syncIntervalMinutes: next.syncIntervalMinutes, typesafeApiKey: "" });
       setSaved(field);
       if (field === "codexPath" || field === "agentModel" || field === "agentReasoningEffort") void refreshAgent();
     } catch (cause: unknown) {
@@ -105,6 +108,7 @@ export function SettingsSheet({ open, onClose, section, onOpenLink }: { open: bo
   const savedNote = (field: Field) => (saved === field && !errors[field] ? "Saved." : undefined);
   const needsSignIn = agent !== undefined && !agent.available && /sign in|log in|login/i.test(agent.reason ?? "");
   const enterSaves = (field: "codexPath" | "agentModel") => (event: React.KeyboardEvent) => { if (event.key === "Enter") { event.preventDefault(); void save(field, drafts[field]); } };
+  const storeKey = () => { if (drafts.typesafeApiKey.trim()) void save("typesafeApiKey", drafts.typesafeApiKey); };
 
   return (
     <Sheet isOpen={open} onOpenChange={(next) => { if (!next) onClose(); }} size="lg">
@@ -149,6 +153,26 @@ export function SettingsSheet({ open, onClose, section, onOpenLink }: { open: bo
                 <Segment id="none">None</Segment><Segment id="low">Low</Segment><Segment id="medium">Medium</Segment><Segment id="high">High</Segment>
               </Segmented>
               {errors.agentReasoningEffort ? <p role="alert" className="m-0 text-[12px] text-red-text">{errors.agentReasoningEffort}</p> : null}
+            </Row>
+            <Row label="TypeSafe API key" hint="Kept encrypted on this machine; used only by the PDF reflow judge.">
+              {settings?.typesafeApiKeySet ? (
+                <div className="flex flex-wrap items-center gap-2 pt-2 text-[13px] text-label">
+                  <span>Key stored</span>
+                  <Button size="sm" variant="quiet" onPress={() => void save("typesafeApiKey", "")}>Remove</Button>
+                </div>
+              ) : (
+                <TextField aria-label="TypeSafe API key" type="password" placeholder="Paste the key and press Enter" value={drafts.typesafeApiKey} onChange={(value) => setDrafts((current) => ({ ...current, typesafeApiKey: value }))}
+                  onBlur={storeKey} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); storeKey(); } }} isDisabled={!settings} />
+              )}
+              {errors.typesafeApiKey ? <p role="alert" className="m-0 text-[12px] text-red-text">{errors.typesafeApiKey}</p> : savedNote("typesafeApiKey") ? <p className="m-0 text-[11.5px] text-label-3">{savedNote("typesafeApiKey")}</p> : null}
+            </Row>
+            <Row label="PDF reflow judge" hint={JEV_PRIVACY_NOTE}>
+              <Segmented aria-label="PDF reflow judge" selectedKeys={[settings?.reflowJudge ?? "rules"]} isDisabled={!settings}
+                onSelectionChange={(keys) => { const key = [...keys][0]; if (key === "rules" || key === "jev") void save("reflowJudge", key); }}>
+                <Segment id="rules">Rules</Segment><Segment id="jev" isDisabled={!settings?.typesafeApiKeySet}>Jev</Segment>
+              </Segmented>
+              {!settings?.typesafeApiKeySet ? <span className="text-[11.5px] text-label-3">Jev needs a stored TypeSafe API key.</span> : null}
+              {errors.reflowJudge ? <p role="alert" className="m-0 text-[12px] text-red-text">{errors.reflowJudge}</p> : null}
             </Row>
           </Section>
 

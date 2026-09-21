@@ -38,7 +38,7 @@ const META_LONG_TEXT = ["abstract", "note", "extra"];
 const META_KEYS = ["kind", "title", "shortTitle", "creators", "abstract", "publication", "volume", "issue", "pages", "publisher", "place", "edition", "series", "date", "accessed", "language", "doi", "arxivId", "isbn", "issn", "url", "tags", "note", "extra", "related"];
 const KINDS: readonly NonNullable<LibraryFilter["kind"]>[] = ["all", "articles", "pdf", "artifact", "feed"];
 const SORTS: readonly NonNullable<LibraryFilter["sort"]>[] = ["fetched", "published", "title"];
-const SETTING_KEYS = ["syncIntervalMinutes", "keepCapture", "codexPath", "agentModel", "agentReasoningEffort", "checkUpdatesAutomatically"] as const;
+const SETTING_KEYS = ["syncIntervalMinutes", "keepCapture", "codexPath", "agentModel", "agentReasoningEffort", "checkUpdatesAutomatically", "reflowJudge", "typesafeApiKey"] as const;
 
 function materialId(value: unknown): string {
   if (typeof value !== "string" || !/^[a-f0-9]{16}$/.test(value)) throw new Error("IPC_INVALID_ID");
@@ -109,7 +109,8 @@ function settingsPatch(value: unknown): SettingsPatch {
   if (typeof value !== "object" || value === null || Array.isArray(value)) throw new Error("IPC_INVALID_SETTINGS");
   const patch = value as Record<string, unknown>;
   if (Object.keys(patch).some((key) => !(SETTING_KEYS as readonly string[]).includes(key))) throw new Error("IPC_INVALID_SETTINGS");
-  for (const key of ["codexPath", "agentModel", "agentReasoningEffort"] as const) if (patch[key] !== undefined && (typeof patch[key] !== "string" || (patch[key] as string).length > 1024)) throw new Error("IPC_INVALID_SETTINGS");
+  // The key crosses the bridge only inward, as a bounded string; SettingsStore validates the values themselves.
+  for (const key of ["codexPath", "agentModel", "agentReasoningEffort", "reflowJudge", "typesafeApiKey"] as const) if (patch[key] !== undefined && (typeof patch[key] !== "string" || (patch[key] as string).length > 1024)) throw new Error("IPC_INVALID_SETTINGS");
   return patch as SettingsPatch;
 }
 

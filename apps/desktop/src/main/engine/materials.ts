@@ -12,6 +12,7 @@ import { effectiveOf, searchFieldsOf, summaryOf, withExtracted, type StoredRecor
 import { failedView, mediaTypeFitsView, primaryContentOf, primaryPdfPath, primaryViewOf, readViewContent, readyView, swapPrimaryFiles, upsertView, viewFilePaths, viewPdfPath, viewsOf, withContent, withPrimaryView, writeViewContent } from "./material-views";
 import { PdfError, inspectPdf } from "./pdf";
 import { buildTextView } from "./pdf-reflow";
+import type { BlockJudge } from "./pdf-reflow/judge";
 import { FigureStore } from "./figures";
 import type { MetaStore } from "./meta";
 import { readingMinutes } from "./reading-time";
@@ -32,6 +33,8 @@ export interface MaterialStoreOptions {
   meta?: Pick<MetaStore, "get" | "all" | "remove">;
   /** Read at every fetch: keep the raw page next to the record so the agent can rebuild it. */
   keepCapture?: () => boolean;
+  /** Read at every text-view build: who refines the reflow's block kinds (the rules when absent). May throw to refuse the build with a reason. */
+  judge?: () => BlockJudge;
 }
 
 export interface FeedMaterialInput {
@@ -58,11 +61,13 @@ function failureOf(error: unknown, fallback: string): { ok: false; code: string;
 export class MaterialStore {
   private readonly meta: MaterialStoreOptions["meta"];
   private readonly keepCapture: () => boolean;
+  private readonly judge: (() => BlockJudge) | undefined;
   private readonly figures: FigureStore;
 
   constructor(private readonly root: string, private readonly fetch: Fetcher = fetchPage, options: MaterialStoreOptions = {}) {
     this.meta = options.meta;
     this.keepCapture = options.keepCapture ?? (() => true);
+    this.judge = options.judge;
     this.figures = new FigureStore(root);
   }
 
@@ -237,8 +242,9 @@ export class MaterialStore {
     if (!pdf || pdf.status !== "ready") throw new PdfError("PDF_NOT_STORED", "The PDF is not stored yet; fetch the PDF view before building the text view.");
     const bytes = await this.bytes(record.id, "pdf");
     if (!bytes) throw new PdfError("PDF_NOT_STORED", "The PDF view is listed as stored but its file is missing.");
+    const judge = this.judge?.();
     await this.figures.remove(record.id);
-    const content = await buildTextView(bytes, record.id, { figures: this.figures, title: record.title });
+    const content = await buildTextView(bytes, record.id, { figures: this.figures, title: record.title, ...(judge ? { judge } : {}) });
     await mkdir(this.dir, { recursive: true });
     await writeViewContent(this.dir, record.id, content);
     return { content, byteLength: Buffer.byteLength(JSON.stringify(content)) };

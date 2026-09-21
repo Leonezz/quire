@@ -105,6 +105,11 @@
 - 实测三篇：arXiv 双栏（2 栏、37 标题、20 图表、无降级页）、ICLR 单栏、Attention Is All You Need（编号大纲到三级、图表齐全）。
 - 已知残留：附录密集网格的无 caption 表误判、NeurIPS 首页作者网格按行读、首页脚注成段、行首 "(1)" 当列表；下一步按 20 篇不同排版 PDF 做评测集，再决定是否上小块分类模型。
 
+### 第 14 刀：Jev 块判定（可选） — 已完成 2026-09-22
+- `engine/pdf-reflow/judge/`：规则先给每个块定性并标记 `certain`（多行正文、编号标题、带 caption 的图表、参考文献段确定；短行 / 粗体短块 / 首页前文 / 页边 12% / 图表邻块 / "(1)" 开头 / 无 caption 网格不确定）。不确定块（fixture 24.5%，双栏论文 25–35%，RFC / 幻灯片 / 书 60–100%）按页打包问 TypeSafe Jev（`choice` 九类 + `noul` 续接），置信 ≥ 0.75 且与规则不同才采纳、续接 ≥ 0.8 合并；家具丢弃、表格裁图、caption 附到最近无 caption 的图、脚注移到页末、参考文献自成一节。20 s 超时、3 页并发、5xx/429 重试一次；失败不破坏构建，`report.judged.error` 说明原因。
+- 设置：`reflowJudge` rules|jev，TypeSafe key 用 `safeStorage` 加密存 `settings.json`（`engine/secrets.ts`，无法加密即拒绝），只回报 `typesafeApiKeySet`，无 key 拒绝选 Jev，删 key 自动回到 rules；Settings › Agent 有密码框与分段控件，Info › Views 显示 "refined by Jev · n asked · m changed"。
+- 评测 `eval/pdf/`（`node run.mjs`，语料本地不入库）：20 篇 PDF 规则 vs Jev 并排，报告 `eval/pdf/report.md`（含手写 verdicts.md）。整轮约 1.3 M input tokens（≈ $0.05）。Jev 明显帮到的：RFC 页脚 / 版权、幻灯片图片授权行、遗漏的无编号标题与小写编号小节、表格行成文的裁图、OCR 全大写标题；曾伤到、已加护栏的：粗体行内小标题被升为标题（run-in 提示 + ≥ 25 词多行正文拒绝 heading）、逐行裁表（同页同栏、行距 ≤ 1.5 行高的 table 判定合并成一张图并挂最近的 "Table N" caption）、长段落被当家具（> 12 词且不在页边 12% 内保留）；仍会伤到的：句号结尾的标题被当 run-in、OCR 乱码行升标题、RFC 目录短行被当家具。
+
 ## 评测集导入 app
 - Developer 菜单 → Import Evaluation Corpus（⌘⇧I，仅开发检出可见）把 `eval/corpus` 全部快照按当前抽取器入库；2026-09-18 实测 64 篇导入、0 失败。浏览器预览也直接列出导出后的语料（`EXPORT=1`）。
 - 第二轮独立评审（`eval/quality-review-2.md`）：46 通过 / 4 轻微 / 14 严重（首轮 36 / 6 / 22）；随后又修了 Paul Graham 脚注、卡片链接的 Markdown、尾部 discuss / read-my-book 段。剩余主要是站点级残留（Quanta、Stratechery 的相关文章卡片），留给 L3 profile。

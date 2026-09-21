@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, Notification, ipcMain, nativeTheme, shell } from "electron";
+import { app, BrowserWindow, Menu, Notification, ipcMain, nativeTheme, safeStorage, shell } from "electron";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { MaterialStore } from "./engine/materials";
@@ -20,6 +20,8 @@ import { agentTools, createToolHandler } from "./engine/agent-tools";
 import { CodexClient } from "./engine/codex-client";
 import { MetaStore } from "./engine/meta";
 import { SettingsStore } from "./engine/settings";
+import { electronEncryptor } from "./engine/secrets";
+import { JevJudge, RulesJudge, type BlockJudge } from "./engine/pdf-reflow/judge";
 import { SessionStore } from "./engine/agent-sessions";
 import { registerM3Handlers } from "./ipc-m3";
 import { isMaterialViewId } from "./engine/material-views";
@@ -27,11 +29,16 @@ import { UpdateService } from "./engine/updates";
 import { createElectronInstaller } from "./update-installer";
 
 const userData = app.getPath("userData");
-const settings = new SettingsStore(join(userData, "settings.json"), userData, { warn: (message) => console.warn(`[settings] ${message}`) });
+const settings = new SettingsStore(join(userData, "settings.json"), userData, { warn: (message) => console.warn(`[settings] ${message}`), encryptor: electronEncryptor(safeStorage) });
 const db = openDatabase(join(userData, "quire.sqlite"));
 // The two stores reference each other: overrides ride on records, and related ids must name records. The checker runs only inside update(), after both exist.
 const meta: MetaStore = new MetaStore(db, { materialExists: (id): Promise<boolean> => store.has(id) });
-const store: MaterialStore = new MaterialStore(userData, fetchPage, { meta, keepCapture: () => settings.get().keepCapture });
+// The reflow judge is chosen at every build: Jev only when the setting says so, with the key opened just then (never held).
+function reflowJudge(): BlockJudge {
+  if (settings.get().reflowJudge !== "jev") return new RulesJudge();
+  return new JevJudge((url, init) => fetch(url, init), settings.secret("typesafeApiKey"));
+}
+const store: MaterialStore = new MaterialStore(userData, fetchPage, { meta, keepCapture: () => settings.get().keepCapture, judge: reflowJudge });
 const images = new ImageCache(userData);
 const annotations = new AnnotationStore(userData);
 const items = new ItemStore(db);

@@ -24,6 +24,8 @@ export interface Line {
   fontSize: number;
   bold: boolean;
   rotated: boolean;
+  /** The line opens with a bold span that ends in a period or colon and regular text follows: a run-in heading, not a heading line. */
+  boldLead?: boolean;
 }
 
 export interface PageSize { width: number; height: number }
