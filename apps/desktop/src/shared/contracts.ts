@@ -105,7 +105,10 @@ export interface ReadApi extends ReadApiM1, ReadApiM2, ReadApiM3, ReadApiViews, 
   openUrl: (url: string) => Promise<OpenUrlResult>;
   openFile: (input: OpenFileInput) => Promise<OpenUrlResult>;
   getMaterial: (id: string) => Promise<MaterialRecord | undefined>;
-  /** A remote image as a data: URL from the local cache (fetched once); undefined when it cannot be cached. */
+  /**
+   * A remote image as a data: URL from the local cache (fetched once); undefined when it cannot be cached.
+   * Also serves figure crops of the text view: `quire-figure://<materialId>/<n>.png`.
+   */
   resolveImage: (url: string) => Promise<string | undefined>;
   listAnnotations: (materialId: string) => Promise<Annotation[]>;
   saveAnnotation: (annotation: Annotation) => Promise<Annotation>;
@@ -508,7 +511,11 @@ export interface ReadApiM3 {
 // Views: one material, several ways to read it (the arXiv HTML rendering and the PDF; a page and a file).
 // ---------------------------------------------------------------------------
 
-export type MaterialViewId = "web" | "pdf" | "markdown";
+/**
+ * "text" is the reflowed reading view of a PDF (SDT-lite): built locally from the PDF's own text,
+ * never fetched. It exists only for materials that have a pdf view.
+ */
+export type MaterialViewId = "web" | "pdf" | "markdown" | "text";
 
 /** A way to read the material. Only `ready` views have content stored; `available` ones are fetched on demand. */
 export interface MaterialView {
@@ -524,6 +531,33 @@ export interface MaterialView {
   error?: string;
 }
 
+/**
+ * One line of the reflowed text view mapped back to the PDF page it came from. `start`/`end`
+ * are character offsets into the view's `plain` text; `rect` is in the same canonical page
+ * space (0..1 of page width/height, top-left origin) that `pdf-regions:v1` locators use.
+ */
+export interface TextViewAnchor {
+  page: number;
+  rect: [x: number, y: number, w: number, h: number];
+  start: number;
+  end: number;
+}
+
+/** What the reflow decided about a PDF, for the Info panel and for the eval. */
+export interface TextViewReport {
+  pages: number;
+  /** 1 for single-column pages; the most common column count otherwise. */
+  columns: number;
+  /** Lines dropped as repeated page furniture (running heads, footers, page numbers). */
+  furnitureLines: number;
+  headings: number;
+  paragraphs: number;
+  /** Regions rendered as images because they were not text (figures, tables, equations). */
+  figures: number;
+  /** Pages whose text layer was empty or unusable; their content is missing from the view. */
+  degradedPages: number[];
+}
+
 /** The content of one view, in the same shape the readers already take. */
 export interface MaterialViewContent {
   view: MaterialViewId;
@@ -535,10 +569,13 @@ export interface MaterialViewContent {
   readingMinutes: number;
   quality: ContentNormalizationQuality;
   problems: NormalizationProblem[];
+  /** text view only: line anchors back into the PDF, in `plain` order. */
+  anchors?: TextViewAnchor[];
+  report?: TextViewReport;
 }
 
 export interface ReadApiViews {
-  /** Fetches an `available` view (e.g. the arXiv PDF) and stores it; the record's `views` then lists it as ready. */
+  /** Fetches an `available` view (e.g. the arXiv PDF) and stores it; for "text" it builds the reflow from the stored PDF instead. */
   fetchMaterialView: (id: string, view: MaterialViewId) => Promise<OpenUrlResult>;
   /** Content of a ready view; undefined when the view is not stored. The primary view's content is also on the record itself. */
   getMaterialView: (id: string, view: MaterialViewId) => Promise<MaterialViewContent | undefined>;
