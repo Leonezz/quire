@@ -454,7 +454,18 @@ export interface Settings {
   dataDirectory: string;
   /** Check GitHub Releases for a newer alpha on launch and daily (default true). */
   checkUpdatesAutomatically: boolean;
+  /**
+   * Who classifies the blocks of a PDF reflow: the built-in rules, or the rules refined by TypeSafe's
+   * Jev model over the network for blocks the rules are unsure about (needs the API key; the page
+   * text of those blocks leaves the machine). Default "rules".
+   */
+  reflowJudge: "rules" | "jev";
+  /** Whether a TypeSafe API key is stored (the key itself is never returned; it is kept encrypted). */
+  typesafeApiKeySet: boolean;
 }
+
+/** What updateSettings accepts: every editable field, plus the write-only key ("" removes it). */
+export type SettingsPatch = Partial<Omit<Settings, "dataDirectory" | "typesafeApiKeySet">> & { typesafeApiKey?: string };
 
 export interface AgentTurnRecord {
   id: string;
@@ -498,7 +509,7 @@ export interface ReadApiM3 {
   keepItem: (id: string) => Promise<OpenUrlResult>;
 
   getSettings: () => Promise<Settings>;
-  updateSettings: (patch: Partial<Omit<Settings, "dataDirectory">>) => Promise<Settings>;
+  updateSettings: (patch: SettingsPatch) => Promise<Settings>;
 
   listAgentSessions: () => Promise<AgentSessionSummary[]>;
   getAgentSession: (id: string) => Promise<AgentSession | undefined>;
@@ -556,6 +567,8 @@ export interface TextViewReport {
   figures: number;
   /** Pages whose text layer was empty or unusable; their content is missing from the view. */
   degradedPages: number[];
+  /** Present when a judge refined the rules: how many blocks it was asked about and how many it changed. */
+  judged?: { provider: "jev"; asked: number; changed: number; error?: string };
 }
 
 /** The content of one view, in the same shape the readers already take. */
