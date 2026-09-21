@@ -178,10 +178,14 @@ export type ReaderDocumentV2 = {
   type: "root";
 };
 
+/** Figure crops of a PDF's text view, served by the app itself (`quire-figure://<materialId>/<n>.png`). */
+const FIGURE_PROTOCOL = "quire-figure:";
+
 function isAllowedUrl(value: string, purpose: "image" | "link") {
   try {
     const parsed = new URL(value);
     if (purpose === "link" && parsed.protocol === "mailto:") return true;
+    if (purpose === "image" && parsed.protocol === FIGURE_PROTOCOL) return parsed.username === "" && parsed.password === "";
     return ["http:", "https:"].includes(parsed.protocol) && parsed.username === "" && parsed.password === "";
   } catch {
     return false;

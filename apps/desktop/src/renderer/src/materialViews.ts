@@ -3,8 +3,8 @@ import type { Annotation, MaterialRecord, MaterialView, MaterialViewContent, Mat
 // One material, several ways to read it: the pure helpers the reader, the Notes panel, the Info
 // panel and the Library rows share. The hook that chooses and loads a view is useMaterialView.ts.
 
-export const VIEW_LABELS: Record<MaterialViewId, string> = { web: "Web", pdf: "PDF", markdown: "Markdown" };
-const VIEW_IDS: readonly MaterialViewId[] = ["web", "pdf", "markdown"];
+export const VIEW_LABELS: Record<MaterialViewId, string> = { web: "Web", pdf: "PDF", markdown: "Markdown", text: "Text" };
+const VIEW_IDS: readonly MaterialViewId[] = ["web", "pdf", "markdown", "text"];
 
 export function isMaterialViewId(value: unknown): value is MaterialViewId {
   return typeof value === "string" && (VIEW_IDS as readonly string[]).includes(value);
@@ -39,6 +39,16 @@ export function isPdfContent(content: Pick<MaterialViewContent, "mediaType" | "p
 
 export function viewOf(views: readonly MaterialView[], id: MaterialViewId): MaterialView | undefined {
   return views.find((view) => view.id === id);
+}
+
+/** Whether the material stores that view (its content can be read or mirrored). */
+export function hasReadyView(views: readonly MaterialView[], id: MaterialViewId): boolean {
+  return viewOf(views, id)?.status === "ready";
+}
+
+/** The text view is built from the PDF, not fetched: its status line and segment say so. */
+export function fetchVerb(id: MaterialViewId): "build" | "fetch" {
+  return id === "text" ? "build" : "fetch";
 }
 
 /** The view after `current` in the material's order, wrapping around; `current` itself when there is only one. */

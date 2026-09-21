@@ -20,6 +20,15 @@ describe("ImageCache", () => {
     expect(await cache.resolve(url)).toBe("data:image/png;base64,iVBORw==");
   });
 
+  it("serves a text view's figure crop from userData/figures and nothing for a crop that is not there", async () => {
+    await mkdir(join(root, "figures", "8667175ac66aac06"), { recursive: true });
+    await writeFile(join(root, "figures", "8667175ac66aac06", "2.png"), Buffer.from([137, 80, 78, 71]));
+    const cache = new ImageCache(root);
+    expect(await cache.resolve("quire-figure://8667175ac66aac06/2.png")).toBe("data:image/png;base64,iVBORw==");
+    expect(await cache.resolve("quire-figure://8667175ac66aac06/3.png")).toBeUndefined();
+    expect(await cache.explain("quire-figure://8667175ac66aac06/3.png")).toBe("figure crop is missing on disk");
+  });
+
   it("refuses private hosts and non-http sources instead of fetching them", async () => {
     const cache = new ImageCache(root);
     expect(await cache.resolve("http://10.0.0.5/x.png")).toBeUndefined();

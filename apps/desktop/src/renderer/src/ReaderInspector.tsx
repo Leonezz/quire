@@ -1,5 +1,5 @@
 import { Panel } from "@read/ui";
-import type { AgentContext, Annotation, MaterialRecord } from "../../shared/contracts";
+import type { AgentContext, Annotation, MaterialRecord, MaterialViewId } from "../../shared/contracts";
 import { AgentPanel } from "./AgentPanel";
 import { InfoPanel } from "./InfoPanel";
 import { NotesPanel, type NoteDraft } from "./NotesPanel";
@@ -21,6 +21,8 @@ export interface ReaderInspectorProps {
   onClearSelection: () => void;
   annotations: readonly Annotation[];
   annotationsError: string | undefined;
+  /** Views whose notes this reader shows in place through the text view's anchors (see mirroredAnnotations.ts). */
+  mirroredViews?: readonly MaterialViewId[] | undefined;
   activeAnnotation: string | undefined;
   noteDraft: NoteDraft | null;
   onNoteDraftChange: (draft: NoteDraft | null) => void;
@@ -43,12 +45,12 @@ export interface ReaderInspectorProps {
 
 /** The reader's side panel, shared by the article and PDF readers: one of Info (i), Notes (n), Agent (⌘J), with its name and × on top. */
 export function ReaderInspector(props: ReaderInspectorProps) {
-  const { material, views, panel, onClose, subject, agentContext, onClearSelection, annotations, annotationsError, activeAnnotation, noteDraft, onNoteDraftChange, onJump, onUpdateNote, onDeleteAnnotation, sectionFor, onMaterialSaved, onOpenLink, onOpenMaterial, onOpenSettings, agentSessionId, onAgentSessionChange, onRebuild, rebuild = "idle", rebuildError } = props;
+  const { material, views, panel, onClose, subject, agentContext, onClearSelection, annotations, annotationsError, mirroredViews, activeAnnotation, noteDraft, onNoteDraftChange, onJump, onUpdateNote, onDeleteAnnotation, sectionFor, onMaterialSaved, onOpenLink, onOpenMaterial, onOpenSettings, agentSessionId, onAgentSessionChange, onRebuild, rebuild = "idle", rebuildError } = props;
   return (
     <Panel title={PANEL_TITLES[panel]} onClose={onClose} className="h-full">
       {panel === "info" ? <InfoPanel material={material} views={views} onSaved={onMaterialSaved} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError} /> : null}
       {panel === "notes" ? (
-        <NotesPanel material={material} view={views.view} annotations={annotations} error={annotationsError} activeId={activeAnnotation} draft={noteDraft} onDraftChange={onNoteDraftChange}
+        <NotesPanel material={material} view={views.view} mirroredViews={mirroredViews} annotations={annotations} error={annotationsError} activeId={activeAnnotation} draft={noteDraft} onDraftChange={onNoteDraftChange}
           onJump={onJump} onUpdateNote={onUpdateNote} onDelete={onDeleteAnnotation} sectionFor={sectionFor} />
       ) : null}
       {panel === "agent" ? (

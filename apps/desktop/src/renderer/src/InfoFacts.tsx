@@ -44,7 +44,7 @@ export function InfoFacts({ material, views, onOpenLink, onOpenMaterial, onRebui
         {material.pdf ? <Fact label="Size">{bytesLabel(material.pdf.byteLength)}</Fact> : null}
         {material.capture ? <Fact label="Capture">{bytesLabel(material.capture.byteLength)} · {material.capture.mediaType}</Fact> : null}
         {material.lang ? <Fact label="Language">{material.lang}{material.dir === "rtl" ? " · right to left" : ""}</Fact> : null}
-        {views ? <Fact label="Views"><InfoViews views={views} onOpenLink={onOpenLink} /></Fact> : null}
+        {views ? <Fact label="Views"><InfoViews material={material} views={views} onOpenLink={onOpenLink} /></Fact> : null}
         {material.rebuiltAs || onRebuild ? (
           <Fact label="Rebuilt"><RebuildAction material={material} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError} onOpenMaterial={onOpenMaterial} /></Fact>
         ) : null}

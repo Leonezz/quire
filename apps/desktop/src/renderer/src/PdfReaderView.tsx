@@ -12,8 +12,9 @@ import type { ReaderProps } from "./ReaderView";
 import { SelectionToolbar, type SelectionCapture } from "./SelectionToolbar";
 import type { AgentContext, Annotation } from "../../shared/contracts";
 import { read } from "./api";
-import { annotationView } from "./materialViews";
+import { mirroredViews, resolveViewAnnotations } from "./mirroredAnnotations";
 import { useReadingPrefs } from "./readingPrefs";
+import { useTextViewContent } from "./useTextViewContent";
 
 type Loaded = { status: "loading" } | { status: "ready"; url: string } | { status: "error"; message: string };
 
@@ -28,10 +29,12 @@ export function PdfReaderView({ material, content, views, pendingJump, onJumpDon
   useEffect(() => { onPanelChange?.(panel); }, [onPanelChange, panel]);
   const sizes = useSplitSizes("reader");
   const { annotations, error: annotationsError, add, update, remove } = useAnnotations(material.id);
-  // Only this view's notes are regions on these pages; the Notes panel still lists every view's.
+  // This view's notes are regions on these pages, and so are the text view's once its anchors are loaded; the Notes panel still lists every view's.
   const primaryView = material.primaryView;
-  const ownAnnotation = useCallback((annotation: Annotation) => annotationView(annotation, primaryView) === view, [primaryView, view]);
-  const viewAnnotations = useMemo(() => annotations.filter(ownAnnotation), [annotations, ownAnnotation]);
+  const textView = useTextViewContent(material);
+  const textContent = textView.status === "ready" ? textView.content : undefined;
+  const viewAnnotations = useMemo(() => resolveViewAnnotations(annotations, view, primaryView, textContent), [annotations, view, primaryView, textContent]);
+  const shownAnnotation = useCallback((annotation: Annotation) => viewAnnotations.find((entry) => entry.id === annotation.id), [viewAnnotations]);
   const [noteDraft, setNoteDraft] = useState<NoteDraft | null>(null);
   const [activeAnnotation, setActiveAnnotation] = useState<string | undefined>(undefined);
   const [asked, setAsked] = useState<SelectionCapture | null>(null);
@@ -67,11 +70,11 @@ export function PdfReaderView({ material, content, views, pendingJump, onJumpDon
   // The jump handed over from another view: the viewer keeps the navigation pending until the page is laid out.
   useEffect(() => {
     if (!pendingJump || loaded.status !== "ready") return;
-    viewerRef.current?.goToLocator(pendingJump.locator);
+    viewerRef.current?.goToLocator((shownAnnotation(pendingJump) ?? pendingJump).locator);
     setActiveAnnotation(pendingJump.id);
     setPanel("notes");
     onJumpDone();
-  }, [pendingJump, loaded.status, onJumpDone]);
+  }, [pendingJump, loaded.status, onJumpDone, shownAnnotation]);
 
   // On `document`, not `window`: the shell's own ⌘J listens on the window and yields when a reader already handled it.
   useEffect(() => {
@@ -109,7 +112,7 @@ export function PdfReaderView({ material, content, views, pendingJump, onJumpDon
     return locator && quote ? { locator, quote } : undefined;
   }, []);
   const jumpTo = (annotation: Annotation) => { viewerRef.current?.goToLocator(annotation.locator); setActiveAnnotation(annotation.id); };
-  const sectionFor = (annotation: Annotation) => { if (!ownAnnotation(annotation)) return undefined; const page = parsePdfRegionsLocator(annotation.locator)?.[0]?.page; return page ? `p. ${page}` : undefined; };
+  const sectionFor = (annotation: Annotation) => { const shown = shownAnnotation(annotation); const page = shown ? parsePdfRegionsLocator(shown.locator)[0]?.page : undefined; return page ? `p. ${page}` : undefined; };
   const onNote = async (capture: SelectionCapture) => {
     const saved = await add({ ...capture, kind: "comment", color: ANNOTATION_COLORS[0]!.color, view });
     setPanel("notes"); setActiveAnnotation(saved.id); setNoteDraft({ id: saved.id, value: "" });
@@ -154,6 +157,9 @@ export function PdfReaderView({ material, content, views, pendingJump, onJumpDon
         ) : (
           <div className="grid place-items-center text-[13px] text-label-3">Opening…</div>
         )}
+        {textView.status === "error" ? (
+          <div role="alert" className="absolute bottom-3 left-1/2 max-w-[min(640px,90%)] -translate-x-1/2 truncate rounded-pill bg-red-soft px-3.5 py-1.5 text-[12.5px] text-red-text shadow-float">Notes from the Text view cannot be shown — {textView.message}</div>
+        ) : null}
       </main>
       </SplitPanel>
       {panelOpen ? (
@@ -161,8 +167,8 @@ export function PdfReaderView({ material, content, views, pendingJump, onJumpDon
           <ColumnSeparator label="Resize panel" />
           <SplitPanel id="inspector" defaultSize={sizes.sizeOf("inspector", PANEL_DEFAULT)} minSize={PANEL_MIN} maxSize={PANEL_MAX} onResize={sizes.onResize("inspector")}>
             <ReaderInspector material={material} views={views} panel={panel} onClose={() => setPanel(null)} subject={material.title} agentContext={agentContext} onClearSelection={() => setAsked(null)}
-              annotations={annotations} annotationsError={annotationsError} activeAnnotation={activeAnnotation} noteDraft={noteDraft} onNoteDraftChange={setNoteDraft}
-              onJump={(annotation) => (ownAnnotation(annotation) ? jumpTo(annotation) : onJumpAcross(annotation))} onUpdateNote={(id, note) => void update(id, { note })} onDeleteAnnotation={(id) => void remove(id)} sectionFor={sectionFor}
+              annotations={annotations} annotationsError={annotationsError} mirroredViews={mirroredViews(view, textContent)} activeAnnotation={activeAnnotation} noteDraft={noteDraft} onNoteDraftChange={setNoteDraft}
+              onJump={(annotation) => { const shown = shownAnnotation(annotation); if (shown) jumpTo(shown); else onJumpAcross(annotation); }} onUpdateNote={(id, note) => void update(id, { note })} onDeleteAnnotation={(id) => void remove(id)} sectionFor={sectionFor}
               onMaterialSaved={onMaterialSaved} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onOpenSettings={onOpenSettings} />
           </SplitPanel>
         </>

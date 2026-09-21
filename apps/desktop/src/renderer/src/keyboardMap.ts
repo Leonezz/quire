@@ -35,7 +35,7 @@ export const KEYBOARD_MAP: ShortcutGroup[] = [
     { keys: "↵", action: "Send · Shift+Enter for a new line" },
   ] },
   { title: "Reader", shortcuts: [
-    { keys: "v", action: "Switch view (Web · PDF · Markdown) when the material has more than one; a view not stored yet is fetched first" },
+    { keys: "v", action: "Switch view (Web · PDF · Markdown · Text) when the material has more than one; a view not stored yet is fetched (the Text view built) first" },
     { keys: "t", action: "Pin the contents rail" },
     { keys: "i", action: "Info panel (title, author, tags, note); i again closes it" },
     { keys: "n", action: "Notes panel; n again closes it" },

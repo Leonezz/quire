@@ -7,6 +7,7 @@ import { createPreviewM2, previewArtifacts } from "./previewM2";
 import { createPreviewM3 } from "./previewM3";
 import { kindOfRecord } from "./previewMeta";
 import { rebuiltArtifacts } from "./previewRebuild";
+import { previewFigurePng, previewTextViewContent } from "./previewTextView";
 import { createPreviewUpdates } from "./previewUpdates";
 import { createPreviewViews } from "./previewViews";
 
@@ -56,9 +57,11 @@ const baseGetMaterial = async (id: string) => [...samples, ...previewArtifacts()
 const baseListMaterials = async () => [...samples.map(summaryOf), ...previewArtifacts().map(summaryOf), ...rebuiltArtifacts().map(summaryOf), ...(await corpusIndex())];
 // Views: the sample article's PDF view is fetched from public/dev/sample.pdf (the same file the PDF sample reads);
 // nothing else can be fetched in a browser, and such a fetch is recorded as failed (see previewViews.ts).
+// The PDF sample's Text view "builds" into the hand-written reflow of previewTextView.ts.
 const previewViews = createPreviewViews({
   getMaterial: baseGetMaterial, listMaterials: baseListMaterials,
   pdfUrlOf: (id, view) => (view.url.startsWith("/") ? view.url : id === samplePdfMaterial.id ? "/dev/sample.pdf" : undefined),
+  textViewOf: (base) => (base.id === samplePdfMaterial.id ? previewTextViewContent(base.id, base.quality) : undefined),
 });
 // Metadata overrides, tags, deletion, keep and settings: localStorage (see previewM3.ts). Its list and record
 // carry the overrides (over the view statuses) and hide what was deleted, so everything else reads through it.
@@ -98,8 +101,9 @@ const browserPreview: ReadApi = {
     return saved;
   },
   deleteAnnotation: async (materialId, id) => { writePreviewAnnotations(materialId, previewAnnotations(materialId).filter((item) => item.id !== id)); },
-  // No engine in the preview: images stay placeholders (the page CSP blocks remote hosts anyway).
-  resolveImage: async () => undefined,
+  // No engine in the preview: images stay placeholders (the page CSP blocks remote hosts anyway), except the
+  // sample text view's figure crops, drawn on a canvas.
+  resolveImage: async (url) => previewFigurePng(url, samplePdfMaterial.id),
   getMaterialBytes: previewViews.getMaterialBytes,
   listMaterials: previewListMaterials,
   // Views (previewViews.ts): a fetch (stored, or recorded as failed) or a new primary changes the record, so the list and open readers reload.

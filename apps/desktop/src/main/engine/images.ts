@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { FetchError, assertPublicHttpUrl } from "./fetch";
+import { FigureStore, parseFigureUrl } from "./figures";
 
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const TIMEOUT_MS = 15_000;
@@ -11,16 +12,20 @@ const IMAGE_TYPES = /^image\/(avif|gif|jpeg|png|webp|svg\+xml)$/;
  * Images are fetched once, kept on disk under userData/images, and handed to the
  * renderer as data: URLs so the page's CSP never needs a remote host. A source
  * that cannot be cached (non-public host, not an image, too large) resolves to
- * undefined: the reader then shows its placeholder instead of a broken picture.
+ * undefined: the reader then shows its placeholder instead of a broken picture. Figure crops
+ * of the text view (quire-figure://<materialId>/<n>.png) are served from userData/figures.
  */
 export class ImageCache {
-  constructor(private readonly root: string) {}
+  private readonly figures: FigureStore;
+
+  constructor(private readonly root: string) { this.figures = new FigureStore(root); }
 
   private get dir() { return join(this.root, "images"); }
 
   private key(url: string) { return createHash("sha256").update(url).digest("hex"); }
 
   async resolve(rawUrl: string): Promise<string | undefined> {
+    if (parseFigureUrl(rawUrl)) return this.figures.read(rawUrl);
     const cached = await this.read(rawUrl);
     if (cached) return cached;
     let url: URL;
@@ -64,6 +69,7 @@ export class ImageCache {
 
   /** Why a source could not be cached; for diagnostics and the placeholder's tooltip. */
   async explain(rawUrl: string): Promise<string | undefined> {
+    if (parseFigureUrl(rawUrl)) return (await this.figures.read(rawUrl)) ? undefined : "figure crop is missing on disk";
     if (await this.read(rawUrl)) return undefined;
     let url: URL;
     try { url = assertPublicHttpUrl(rawUrl); } catch (error) { return error instanceof FetchError ? error.message : String(error); }

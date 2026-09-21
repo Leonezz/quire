@@ -5,15 +5,17 @@ import type { StoredRecord } from "./material-record";
 
 // One material, several renderings. The primary view's content is the record itself; every
 // other stored view lives beside it as <id>.<view>.json (a MaterialViewContent) and, for PDFs,
-// <id>.<view>.pdf. The primary PDF keeps <id>.pdf, as before views existed.
+// <id>.<view>.pdf. The primary PDF keeps <id>.pdf, as before views existed. The text view (the
+// PDF reflowed, pdf-reflow/) is derived: every record with a pdf view lists it as available.
 
-export const MATERIAL_VIEW_IDS: readonly MaterialViewId[] = ["web", "pdf", "markdown"];
+export const MATERIAL_VIEW_IDS: readonly MaterialViewId[] = ["web", "pdf", "markdown", "text"];
+export const TEXT_VIEW_MEDIA_TYPE = "text/x-quire-reflow";
 
 export function isMaterialViewId(value: unknown): value is MaterialViewId {
   return typeof value === "string" && (MATERIAL_VIEW_IDS as readonly string[]).includes(value);
 }
 
-const LABELS: Record<MaterialViewId, string> = { web: "Web page", pdf: "PDF", markdown: "Markdown" };
+const LABELS: Record<MaterialViewId, string> = { web: "Web page", pdf: "PDF", markdown: "Markdown", text: "Text" };
 
 export function viewLabel(id: MaterialViewId): string {
   return LABELS[id];
@@ -22,6 +24,7 @@ export function viewLabel(id: MaterialViewId): string {
 /** Which view a media type renders as: PDFs, Markdown (and plain text, which the Markdown pipeline renders), pages. */
 export function viewIdForMediaType(mediaType: string): MaterialViewId {
   if (mediaType === "application/pdf") return "pdf";
+  if (mediaType === TEXT_VIEW_MEDIA_TYPE) return "text";
   if (mediaType === "text/markdown" || mediaType === "text/x-markdown" || mediaType === "text/plain") return "markdown";
   return "web";
 }
@@ -43,10 +46,24 @@ function primaryViewEntry(record: Pick<StoredRecord, "finalUrl" | "fetchedAt" | 
   };
 }
 
-/** The record's views; a record written before views existed derives one ready view from its media type. */
+/** The text view a pdf view implies: built locally from the stored PDF, so it is available as soon as the PDF is. */
+export function textViewFor(pdf: MaterialView): MaterialView {
+  return { id: "text", label: viewLabel("text"), url: pdf.url, mediaType: TEXT_VIEW_MEDIA_TYPE, status: "available" };
+}
+
+/** The views with the text view added when a pdf view exists and no text view is listed yet. */
+function withTextView(views: readonly MaterialView[]): MaterialView[] {
+  const pdf = views.find((view) => view.id === "pdf");
+  return pdf && !views.some((view) => view.id === "text") ? [...views, textViewFor(pdf)] : [...views];
+}
+
+/**
+ * The record's views; a record written before views existed derives one ready view from its
+ * media type, and any record with a pdf view lists the text view that can be built from it.
+ */
 export function viewsOf(record: StoredRecord): MaterialView[] {
-  if (record.views && record.views.length > 0) return record.views;
-  return [primaryViewEntry(record, viewIdForMediaType(record.mediaType))];
+  if (record.views && record.views.length > 0) return withTextView(record.views);
+  return withTextView([primaryViewEntry(record, viewIdForMediaType(record.mediaType))]);
 }
 
 export function primaryViewOf(record: StoredRecord): MaterialViewId {
@@ -56,8 +73,7 @@ export function primaryViewOf(record: StoredRecord): MaterialViewId {
 /** A record with its single primary view written explicitly; records that already carry views are returned as they are. */
 export function withPrimaryView(record: StoredRecord): StoredRecord {
   if (record.views && record.views.length > 0 && record.primaryView) return record;
-  const id = viewIdForMediaType(record.mediaType);
-  return { ...record, views: [primaryViewEntry(record, id)], primaryView: id };
+  return { ...record, views: viewsOf(record), primaryView: primaryViewOf(record) };
 }
 
 /** The primary view's content, assembled from the record's own fields. */
@@ -85,9 +101,11 @@ export function withContent(record: StoredRecord, content: MaterialViewContent):
   };
 }
 
-/** The view list with one entry replaced (or appended when the id is new). */
+/** The view list with one entry replaced, or a new one appended; the derived text view stays last. */
 export function upsertView(views: readonly MaterialView[], view: MaterialView): MaterialView[] {
-  return views.some((entry) => entry.id === view.id) ? views.map((entry) => (entry.id === view.id ? view : entry)) : [...views, view];
+  if (views.some((entry) => entry.id === view.id)) return views.map((entry) => (entry.id === view.id ? view : entry));
+  const text = views.filter((entry) => entry.id === "text");
+  return view.id === "text" ? [...views, view] : [...views.filter((entry) => entry.id !== "text"), view, ...text];
 }
 
 /** The entry after a successful fetch: ready, with what was stored. */
@@ -126,11 +144,12 @@ export function viewFilePaths(dir: string, id: string): string[] {
 /**
  * Makes a stored view the primary one on disk: the old primary's content becomes a view file
  * (its PDF bytes move to <id>.<view>.pdf), the new primary's files are consumed (its PDF bytes
- * move to <id>.pdf). Writes happen before removals so a crash leaves both readable.
+ * move to <id>.pdf). Writes happen before removals so a crash leaves both readable. The text
+ * view's file stays either way: the record cannot hold its anchors and report.
  */
 export async function swapPrimaryFiles(dir: string, id: string, outgoing: MaterialViewContent, incoming: MaterialViewContent): Promise<void> {
   await writeViewContent(dir, id, outgoing);
   if (outgoing.pdf) await rename(primaryPdfPath(dir, id), viewPdfPath(dir, id, outgoing.view));
   if (incoming.pdf) await rename(viewPdfPath(dir, id, incoming.view), primaryPdfPath(dir, id));
-  await rm(viewContentPath(dir, id, incoming.view), { force: true });
+  if (incoming.view !== "text") await rm(viewContentPath(dir, id, incoming.view), { force: true });
 }

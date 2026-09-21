@@ -40,6 +40,15 @@ describe("ReaderToolbar view switch", () => {
     expect(screen.getByRole("status").textContent).toBe("Fetching PDF…");
   });
 
+  it("offers the Text view as built on demand and says when it is building", () => {
+    const text: MaterialView = { id: "text", label: "Text", url: "https://example.org/a.pdf", mediaType: "text/plain", status: "available" };
+    renderToolbar({ view: "pdf", views: [{ ...pdf, status: "ready" }, text], fetching: undefined, onSelect: () => undefined });
+    expect(screen.getByRole("radio", { name: "Text (build on demand)" })).toBeTruthy();
+    cleanup();
+    renderToolbar({ view: "pdf", views: [{ ...pdf, status: "ready" }, text], fetching: "text", onSelect: () => undefined });
+    expect(screen.getByRole("status").textContent).toBe("Building text view…");
+  });
+
   it("selects a segment on click and cycles with v, but not while typing", () => {
     const onSelect = vi.fn();
     renderToolbar({ view: "web", views: [web, pdf], fetching: undefined, onSelect });

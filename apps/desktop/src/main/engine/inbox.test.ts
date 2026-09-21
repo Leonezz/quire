@@ -45,7 +45,7 @@ describe("readItem", () => {
     // The PDF's Info title wins; the Atom entry supplies the authors, abstract and category the PDF cannot.
     expect(result.material).toMatchObject({ kind: "preprint", title: "Attention is not all you need", byline: "Mara Lindqvist, Tomasz Nowak", publishedAt: "2026-09-17T17:59:12.000Z", meta: { arxivId: "2409.12345", publication: "arXiv", abstract: "From the Atom feed.", extra: "arXiv: 2409.12345 [cs.CL]" } });
     // The PDF is the primary view; the HTML rendering arXiv has not produced yet stays listed for a later fetch.
-    expect(result.material).toMatchObject({ primaryView: "pdf", readyViews: ["pdf"], views: [{ id: "pdf", status: "ready", pdf: { pages: 2 } }, { id: "web", label: "Web page", url: "https://arxiv.org/html/2409.12345", mediaType: "text/html", status: "available" }] });
+    expect(result.material).toMatchObject({ primaryView: "pdf", readyViews: ["pdf"], views: [{ id: "pdf", status: "ready", pdf: { pages: 2 } }, { id: "web", label: "Web page", url: "https://arxiv.org/html/2409.12345", mediaType: "text/html", status: "available" }, { id: "text", status: "available", url: "https://arxiv.org/pdf/2409.12345" }] });
     expect(items.get(item.id)).toMatchObject({ materialId: result.material.id });
     expect(items.get(item.id)?.openedAt).toBeDefined();
     expect(events.list("opened").map((e) => e.ref)).toEqual([item.id]);
@@ -71,8 +71,8 @@ describe("readItem", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(fetch.calls).toEqual(["https://arxiv.org/html/2409.12345"]);
-    expect(result.material).toMatchObject({ mediaType: "text/html", primaryView: "web", readyViews: ["web"], views: [{ id: "web", status: "ready" }, { id: "pdf", label: "PDF", url: "https://arxiv.org/pdf/2409.12345", mediaType: "application/pdf", status: "available" }] });
-    expect(await store.get(result.material.id)).toMatchObject({ views: [{ id: "web" }, { id: "pdf", status: "available" }] });
+    expect(result.material).toMatchObject({ mediaType: "text/html", primaryView: "web", readyViews: ["web"], views: [{ id: "web", status: "ready" }, { id: "pdf", label: "PDF", url: "https://arxiv.org/pdf/2409.12345", mediaType: "application/pdf", status: "available" }, { id: "text", status: "available" }] });
+    expect(await store.get(result.material.id)).toMatchObject({ views: [{ id: "web" }, { id: "pdf", status: "available" }, { id: "text", status: "available" }] });
   });
 
   it("keeps the HTML failure on the web view when arXiv broke for a reason other than a missing rendering", async () => {
@@ -87,7 +87,7 @@ describe("readItem", () => {
     const result = await keepItem(items.inbox()[0]!.id, { items, events: new EventStore(db), store, warn: () => {} });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.material).toMatchObject({ primaryView: "pdf", readyViews: ["pdf"], views: [{ id: "pdf", status: "ready" }, { id: "web", status: "failed", error: "The page answered 503." }] });
+    expect(result.material).toMatchObject({ primaryView: "pdf", readyViews: ["pdf"], views: [{ id: "pdf", status: "ready" }, { id: "web", status: "failed", error: "The page answered 503." }, { id: "text", status: "available" }] });
   });
 
   it("reports both failures when neither arXiv rendering can be read", async () => {

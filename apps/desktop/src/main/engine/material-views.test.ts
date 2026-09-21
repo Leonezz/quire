@@ -44,7 +44,7 @@ describe("legacy records", () => {
     const web = await store.get("aaaaaaaaaaaaaaaa");
     expect(web).toMatchObject({ primaryView: "web", readyViews: ["web"], views: [{ id: "web", label: "Web page", url: "https://example.test/post", mediaType: "text/html", status: "ready", fetchedAt: "2026-09-01T00:00:00.000Z", byteLength: 120 }] });
     const pdf = await store.get("bbbbbbbbbbbbbbbb");
-    expect(pdf).toMatchObject({ primaryView: "pdf", readyViews: ["pdf"], views: [{ id: "pdf", label: "PDF", status: "ready", byteLength: 900, pdf: { pages: 4, byteLength: 900, textLayer: "available" } }] });
+    expect(pdf).toMatchObject({ primaryView: "pdf", readyViews: ["pdf"], views: [{ id: "pdf", label: "PDF", status: "ready", byteLength: 900, pdf: { pages: 4, byteLength: 900, textLayer: "available" } }, { id: "text", label: "Text", url: "https://example.test/post", mediaType: "text/x-quire-reflow", status: "available" }] });
     expect(await store.get("cccccccccccccccc")).toMatchObject({ primaryView: "markdown", views: [{ id: "markdown", label: "Markdown", status: "ready" }] });
     expect((await store.list()).map((summary) => summary.readyViews)).toEqual([["web"], ["pdf"], ["markdown"]]);
     expect(await store.getView("aaaaaaaaaaaaaaaa", "web")).toEqual({ view: "web", mediaType: "text/html", markdown: "Body", readingMinutes: 3, quality: base.quality, problems: [] });
@@ -57,7 +57,8 @@ describe("legacy records", () => {
     const stored = JSON.parse(await readFile(join(materialsDir(), `${record.id}.json`), "utf8")) as { views: unknown[]; primaryView: string };
     expect(stored.primaryView).toBe("web");
     expect(stored.views).toHaveLength(2);
-    expect(record).toMatchObject({ readyViews: ["web"], views: [{ id: "web", status: "ready" }, { id: "pdf", status: "available", url: "https://arxiv.org/pdf/2409.12345" }] });
+    // The text view is derived from the pdf view on every read: a record never has to be rewritten to get it.
+    expect(record).toMatchObject({ readyViews: ["web"], views: [{ id: "web", status: "ready" }, { id: "pdf", status: "available", url: "https://arxiv.org/pdf/2409.12345" }, { id: "text", status: "available", url: "https://arxiv.org/pdf/2409.12345", mediaType: "text/x-quire-reflow" }] });
     await expect(store.registerView(record.id, { id: "web", label: "Web page", url: "x", mediaType: "text/html", status: "available" })).rejects.toThrow(/primary view/);
     await expect(store.registerView(record.id, { id: "pdf", label: "PDF", url: "x", mediaType: "application/pdf", status: "ready" })).rejects.toThrow(/claims to be stored/);
     await expect(store.registerView("0000000000000000", { id: "pdf", label: "PDF", url: "x", mediaType: "application/pdf", status: "available" })).rejects.toThrow(/not in the library/);
@@ -79,6 +80,7 @@ describe("MaterialStore.fetchView", () => {
     expect(view?.fetchedAt).toBeDefined();
     expect(view?.error).toBeUndefined();
     expect(result.material).toMatchObject({ primaryView: "web", readyViews: ["web", "pdf"], mediaType: "text/html", title: "Retrieval Without Regret" });
+    expect(result.material.views.map((entry) => [entry.id, entry.status])).toEqual([["web", "ready"], ["pdf", "ready"], ["text", "available"]]);
     expect(await exists(join(materialsDir(), `${id}.pdf.json`))).toBe(true);
     expect(await exists(join(materialsDir(), `${id}.pdf.pdf`))).toBe(true);
     expect(await exists(join(materialsDir(), `${id}.pdf`))).toBe(false);
@@ -119,6 +121,51 @@ describe("MaterialStore.fetchView", () => {
     expect((await store.get(id))?.views.find((entry) => entry.id === "pdf")).toMatchObject({ status: "failed", error: "The pdf view answered text/html." });
     expect(await store.fetchView(id, "markdown")).toMatchObject({ ok: false, code: "VIEW_UNKNOWN" });
     expect(await store.fetchView("0000000000000000", "pdf")).toMatchObject({ ok: false, code: "MATERIAL_NOT_FOUND" });
+  });
+});
+
+describe("MaterialStore.fetchView text", () => {
+  it("builds the reflow from the stored PDF instead of fetching, stores it beside the record and keeps its anchors", async () => {
+    const fetch = fetcherOf(await pdfFixture());
+    const store = new MaterialStore(root, fetch);
+    const { id } = await openWithPdfView(store);
+    expect(await store.fetchView(id, "text")).toMatchObject({ ok: false, code: "PDF_NOT_STORED" });
+    expect((await store.get(id))?.views.find((entry) => entry.id === "text")).toMatchObject({ status: "failed", error: expect.stringContaining("fetch the PDF view") });
+    expect((await store.fetchView(id, "pdf")).ok).toBe(true);
+    const calls = fetch.calls.length;
+    const result = await store.fetchView(id, "text");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(fetch.calls).toHaveLength(calls);
+    expect(result.material.readyViews).toEqual(["web", "pdf", "text"]);
+    const view = result.material.views.find((entry) => entry.id === "text");
+    expect(view).toMatchObject({ status: "ready", mediaType: "text/x-quire-reflow" });
+    expect(view?.byteLength).toBeGreaterThan(100);
+    expect(view?.error).toBeUndefined();
+    expect(await exists(join(materialsDir(), `${id}.text.json`))).toBe(true);
+    const content = await store.getView(id, "text");
+    expect(content).toMatchObject({ view: "text", mediaType: "text/x-quire-reflow", plain: "Attention is not all you need\n\nSecond page: results and discussion", report: { pages: 2, columns: 1 } });
+    expect(content?.anchors).toHaveLength(2);
+    expect(content?.reader?.schema).toBe("reader.document.v2");
+    expect(await store.bytes(id, "text")).toBeUndefined();
+    expect(await store.fetchView(id, "text")).toMatchObject({ ok: false, code: "VIEW_ALREADY_STORED" });
+  });
+
+  it("can make the text view primary and back without losing its anchors", async () => {
+    const store = new MaterialStore(root, fetcherOf(await pdfFixture()));
+    const { id } = await openWithPdfView(store);
+    expect((await store.fetchView(id, "pdf")).ok).toBe(true);
+    expect((await store.fetchView(id, "text")).ok).toBe(true);
+    const asText = await store.setPrimaryView(id, "text");
+    expect(asText).toMatchObject({ primaryView: "text", mediaType: "text/x-quire-reflow", readyViews: ["web", "pdf", "text"], plain: "Attention is not all you need\n\nSecond page: results and discussion" });
+    expect(asText.reader?.schema).toBe("reader.document.v2");
+    expect((await store.getView(id, "text"))?.anchors).toHaveLength(2);
+    expect(await exists(join(materialsDir(), `${id}.web.json`))).toBe(true);
+    expect((await store.bytes(id, "pdf"))?.byteLength).toBeGreaterThan(0);
+    const asWeb = await store.setPrimaryView(id, "web");
+    expect(asWeb).toMatchObject({ primaryView: "web", mediaType: "text/html", readyViews: ["web", "pdf", "text"] });
+    expect((await store.getView(id, "text"))?.anchors).toHaveLength(2);
+    expect((await store.getView(id, "text"))?.report?.pages).toBe(2);
   });
 });
 
@@ -168,8 +215,12 @@ describe("MaterialStore.delete with views", () => {
     const store = new MaterialStore(root, fetcherOf(await pdfFixture()));
     const { id } = await openWithPdfView(store);
     expect((await store.fetchView(id, "pdf")).ok).toBe(true);
+    expect((await store.fetchView(id, "text")).ok).toBe(true);
+    await mkdir(join(root, "figures", id), { recursive: true });
+    await writeFile(join(root, "figures", id, "1.png"), Buffer.from([137, 80, 78, 71]));
     expect(await store.delete([id])).toBe(1);
-    for (const name of [`${id}.json`, `${id}.html`, `${id}.pdf.json`, `${id}.pdf.pdf`]) expect(await exists(join(materialsDir(), name))).toBe(false);
+    for (const name of [`${id}.json`, `${id}.html`, `${id}.pdf.json`, `${id}.pdf.pdf`, `${id}.text.json`]) expect(await exists(join(materialsDir(), name))).toBe(false);
+    expect(await exists(join(root, "figures", id))).toBe(false);
     expect(await store.list()).toEqual([]);
   });
 });

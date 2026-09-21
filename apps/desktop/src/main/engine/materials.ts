@@ -11,6 +11,8 @@ import { NORMALIZE_BUDGET, degradedQuality, isHtml, isPdf, markdownParts, mediaT
 import { effectiveOf, searchFieldsOf, summaryOf, withExtracted, type StoredRecord } from "./material-record";
 import { failedView, mediaTypeFitsView, primaryContentOf, primaryPdfPath, primaryViewOf, readViewContent, readyView, swapPrimaryFiles, upsertView, viewFilePaths, viewPdfPath, viewsOf, withContent, withPrimaryView, writeViewContent } from "./material-views";
 import { PdfError, inspectPdf } from "./pdf";
+import { buildTextView } from "./pdf-reflow";
+import { FigureStore } from "./figures";
 import type { MetaStore } from "./meta";
 import { readingMinutes } from "./reading-time";
 
@@ -56,10 +58,12 @@ function failureOf(error: unknown, fallback: string): { ok: false; code: string;
 export class MaterialStore {
   private readonly meta: MaterialStoreOptions["meta"];
   private readonly keepCapture: () => boolean;
+  private readonly figures: FigureStore;
 
   constructor(private readonly root: string, private readonly fetch: Fetcher = fetchPage, options: MaterialStoreOptions = {}) {
     this.meta = options.meta;
     this.keepCapture = options.keepCapture ?? (() => true);
+    this.figures = new FigureStore(root);
   }
 
   private get dir() { return join(this.root, "materials"); }
@@ -211,15 +215,33 @@ export class MaterialStore {
     if (!view) return { ok: false, code: "VIEW_UNKNOWN", message: `This material has no ${viewId} view.` };
     if (view.status === "ready") return { ok: false, code: "VIEW_ALREADY_STORED", message: `The ${view.label} view is stored already.` };
     try {
-      const page = await this.fetch(assertPublicHttpUrl(view.url));
-      const content = await this.materializeView(page.bytes, page.mediaType, page.finalUrl, id, viewId, record.origin);
-      const next = { ...record, views: upsertView(viewsOf(record), readyView(view, content, page.bytes.byteLength)) };
+      const { content, byteLength } = viewId === "text" ? await this.buildText(record) : await this.fetchRemoteView(record, view);
+      const next = { ...record, views: upsertView(viewsOf(record), readyView(view, content, byteLength)) };
       return { ok: true, material: this.decorate(await this.save(next)) };
     } catch (error) {
       const failure = failureOf(error, `Could not read the ${view.label} view.`);
       await this.save({ ...record, views: upsertView(viewsOf(record), failedView(view, failure.message)) });
       return failure;
     }
+  }
+
+  private async fetchRemoteView(record: StoredRecord, view: MaterialView): Promise<{ content: MaterialViewContent; byteLength: number }> {
+    const page = await this.fetch(assertPublicHttpUrl(view.url));
+    const content = await this.materializeView(page.bytes, page.mediaType, page.finalUrl, record.id, view.id, record.origin);
+    return { content, byteLength: page.bytes.byteLength };
+  }
+
+  /** The text view is never fetched: it is reflowed from the stored PDF (the primary one or the pdf view's) and stored beside the record. */
+  private async buildText(record: StoredRecord): Promise<{ content: MaterialViewContent; byteLength: number }> {
+    const pdf = viewsOf(record).find((entry) => entry.id === "pdf");
+    if (!pdf || pdf.status !== "ready") throw new PdfError("PDF_NOT_STORED", "The PDF is not stored yet; fetch the PDF view before building the text view.");
+    const bytes = await this.bytes(record.id, "pdf");
+    if (!bytes) throw new PdfError("PDF_NOT_STORED", "The PDF view is listed as stored but its file is missing.");
+    await this.figures.remove(record.id);
+    const content = await buildTextView(bytes, record.id, { figures: this.figures, title: record.title });
+    await mkdir(this.dir, { recursive: true });
+    await writeViewContent(this.dir, record.id, content);
+    return { content, byteLength: Buffer.byteLength(JSON.stringify(content)) };
   }
 
   /** A view's content in the shape the readers take: a PDF's inspection with its bytes stored, or a page through the article pipeline. */
@@ -241,8 +263,9 @@ export class MaterialStore {
   async getView(id: string, view: MaterialViewId): Promise<MaterialViewContent | undefined> {
     const record = await this.read(id);
     if (!record) return undefined;
-    if (view === primaryViewOf(record)) return primaryContentOf(record);
-    return readViewContent(this.dir, id, view);
+    if (view !== primaryViewOf(record)) return readViewContent(this.dir, id, view);
+    // The text view keeps its file even as primary: its anchors and report have no place on the record.
+    return (view === "text" ? await readViewContent(this.dir, id, view) : undefined) ?? primaryContentOf(record);
   }
 
   /** Makes a stored view the one the reader opens first: the record takes its content, the old primary becomes a stored view. */
@@ -253,7 +276,8 @@ export class MaterialStore {
     if (!entry || entry.status !== "ready") throw new Error(`The ${view} view of ${id} is not stored; fetch it first.`);
     const incoming = await readViewContent(this.dir, id, view);
     if (!incoming) throw new Error(`The ${view} view of ${id} is listed as stored but its file is missing.`);
-    await swapPrimaryFiles(this.dir, id, primaryContentOf(record), incoming);
+    const outgoing = (primaryViewOf(record) === "text" ? await readViewContent(this.dir, id, "text") : undefined) ?? primaryContentOf(record);
+    await swapPrimaryFiles(this.dir, id, outgoing, incoming);
     return this.decorate(await this.save(withContent(record, incoming)));
   }
 
@@ -336,7 +360,7 @@ export class MaterialStore {
     return bytes ? captureTextOf(new TextDecoder("utf-8", { fatal: false }).decode(bytes)) : undefined;
   }
 
-  /** Removes the records, the bytes and view files next to them, and the overrides; returns how many records existed. */
+  /** Removes the records, the bytes, view files and figure crops next to them, and the overrides; returns how many records existed. */
   async delete(ids: readonly string[]): Promise<number> {
     const invalid = ids.find((id) => !ID.test(id));
     if (invalid !== undefined) throw new Error(`Not a material id: ${invalid}`);
@@ -344,7 +368,7 @@ export class MaterialStore {
     for (const id of ids) {
       if (await this.read(id)) deleted += 1;
       const paths = [this.pdfPath(id), this.htmlPath(id), join(this.dir, `${id}.json`), ...viewFilePaths(this.dir, id)];
-      await Promise.all(paths.map((path) => rm(path, { force: true })));
+      await Promise.all([...paths.map((path) => rm(path, { force: true })), this.figures.remove(id)]);
       this.meta?.remove(id);
     }
     return deleted;

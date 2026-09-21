@@ -98,6 +98,13 @@
 - 宣传文案：`docs/launch/pitch.md`（Show HN、X 线程、中文版、截图清单、节奏）。
 - 2026-09-20 调整：`eval/corpus` 快照移出 git（本地保留，gitignore），仓库转公开，Releases 放本仓库，workflow 用自带 `GITHUB_TOKEN`；alpha 在本机用 Apple Development 身份签名后 `release:local` 发布（README 写明首次打开的信任步骤）。
 
+### 第 13 刀：SDT-lite — PDF 的 Text 视图 — 已完成 2026-09-22（设计见 `docs/design/reading-mode.md`）
+- 引擎 `engine/pdf-reflow/`（无模型，纯规则）：pdf.js 文本项 → 字形块（含旋转、粗斜体）→ 基线组行 → 页眉页脚 / 页码 / arXiv 水印去除 → 横向投影找栏沟分栏（≤ 3 栏，通栏带独立）→ 阅读顺序 → 段落（行距、缩进、字号变化、列表标记）与连字符回接、跨栏跨页续接 → 标题分类与层级（编号 / 字号 / 粗体）→ 图表区域（caption + 空白 / 无 caption 网格）用 pdf.js 在 Node 里 2× 裁剪成 PNG，经 `quire-figure://` 交给阅读器 → 装配 reader.document.v2 + Markdown + `plain` + 逐行锚点（page + 归一化 rect + plain 偏移）+ 报告。与材料标题重复的首标题不再重复渲染。
+- 视图：任何有 pdf 视图的材料自动带一个 `available` 的 text 视图，按需本地构建（25 页双栏 arXiv 论文 1.2 秒）；可设为主视图。
+- 渲染：Text 分段、"reflowed from PDF" 标签、降级页横幅、Info 里的报告；批注在 Text ↔ PDF 之间按锚点双向映射（text-quote ↔ pdf-regions），Notes 标注视图、跳转不切视图。
+- 实测三篇：arXiv 双栏（2 栏、37 标题、20 图表、无降级页）、ICLR 单栏、Attention Is All You Need（编号大纲到三级、图表齐全）。
+- 已知残留：附录密集网格的无 caption 表误判、NeurIPS 首页作者网格按行读、首页脚注成段、行首 "(1)" 当列表；下一步按 20 篇不同排版 PDF 做评测集，再决定是否上小块分类模型。
+
 ## 评测集导入 app
 - Developer 菜单 → Import Evaluation Corpus（⌘⇧I，仅开发检出可见）把 `eval/corpus` 全部快照按当前抽取器入库；2026-09-18 实测 64 篇导入、0 失败。浏览器预览也直接列出导出后的语料（`EXPORT=1`）。
 - 第二轮独立评审（`eval/quality-review-2.md`）：46 通过 / 4 轻微 / 14 严重（首轮 36 / 6 / 22）；随后又修了 Paul Graham 脚注、卡片链接的 Markdown、尾部 discuss / read-my-book 段。剩余主要是站点级残留（Quanta、Stratechery 的相关文章卡片），留给 L3 profile。

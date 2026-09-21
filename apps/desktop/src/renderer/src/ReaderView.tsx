@@ -17,13 +17,15 @@ import { prefsStyle, useReadingPrefs } from "./readingPrefs";
 import { read } from "./api";
 import { headerParts } from "./materialMeta";
 import type { MaterialRecord, MaterialViewContent } from "../../shared/contracts";
-import { annotationView } from "./materialViews";
+import { mirroredViews, resolveViewAnnotations } from "./mirroredAnnotations";
+import { TextViewBanner } from "./TextViewBanner";
 import type { MaterialViewController } from "./useMaterialView";
 
 type OutlineEntry = { id: string; label: string; level: number };
 
-function qualityLabel(material: Pick<MaterialRecord, "origin">, content: Pick<MaterialViewContent, "quality">): { text: string; low: boolean } {
+function qualityLabel(material: Pick<MaterialRecord, "origin">, content: Pick<MaterialViewContent, "quality" | "view" | "report">): { text: string; low: boolean } {
   const q = content.quality;
+  if (content.view === "text") return { text: "reflowed from PDF", low: (content.report?.degradedPages.length ?? 0) > 0 };
   if (material.origin === "agent") return { text: "written by the agent", low: false };
   if (q.safety === "degraded_plaintext") return { text: "plain text only", low: true };
   if (q.completeness === "summary") return { text: "summary only", low: true };
@@ -102,10 +104,12 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
   const [findOpen, setFindOpen] = useState(false);
   const [bodyGeneration, setBodyGeneration] = useState(0);
   const { annotations, error: annotationsError, add, update, remove } = useAnnotations(material.id);
-  // Only this view's notes are anchored in this body; the Notes panel still lists every view's.
+  // This view's notes are anchored in this body, and — when this is the text view — the PDF's notes carried over
+  // through the anchors; the Notes panel still lists every view's.
   const primaryView = material.primaryView;
-  const ownAnnotation = useCallback((annotation: Annotation) => annotationView(annotation, primaryView) === view, [primaryView, view]);
-  const viewAnnotations = useMemo(() => annotations.filter(ownAnnotation), [annotations, ownAnnotation]);
+  const textContent = content.view === "text" ? content : undefined;
+  const viewAnnotations = useMemo(() => resolveViewAnnotations(annotations, view, primaryView, textContent), [annotations, view, primaryView, textContent]);
+  const shownAnnotation = useCallback((annotation: Annotation) => viewAnnotations.find((entry) => entry.id === annotation.id), [viewAnnotations]);
   const [noteDraft, setNoteDraft] = useState<NoteDraft | null>(null);
   const [activeAnnotation, setActiveAnnotation] = useState<string | undefined>(undefined);
   // "Ask about this" narrows the agent's context to the selected passage until it is dropped.
@@ -210,11 +214,11 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
   // The jump handed over from another view runs once the body has rendered (bodyGeneration moves past 0).
   useEffect(() => {
     if (!pendingJump || bodyGeneration === 0) return;
-    jumpTo(pendingJump);
+    jumpTo(shownAnnotation(pendingJump) ?? pendingJump);
     setPanel("notes");
     onJumpDone();
     // jumpTo reads the current body through refs; the jump is keyed by the request and the body generation.
-  }, [pendingJump, bodyGeneration, onJumpDone]);
+  }, [pendingJump, bodyGeneration, onJumpDone, shownAnnotation]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -282,7 +286,9 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
               <span>{content.readingMinutes} min</span>
               {material.origin === "agent" ? null : <a href={material.finalUrl} onClick={(event) => { event.preventDefault(); onOpenLink(material.finalUrl); }}>Open original ↗</a>}
             </div>
-            <QualityBanner material={material} low={quality.low} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError} />
+            {content.view === "text" && content.report
+              ? <TextViewBanner report={content.report} onOpenPdf={() => views.select("pdf")} />
+              : <QualityBanner material={material} low={quality.low} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError} />}
             <ReaderDocumentSurface
               schema={content.reader?.schema ?? "none"}
               payload={content.reader?.payload ?? ""}
@@ -302,9 +308,9 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
           <SplitPanel id="inspector" defaultSize={sizes.sizeOf("inspector", PANEL_DEFAULT)} minSize={PANEL_MIN} maxSize={PANEL_MAX} onResize={sizes.onResize("inspector")}>
             <ReaderInspector material={material} views={views} panel={panel} onClose={() => setPanel(null)} subject={material.title} agentContext={agentContext} onClearSelection={() => setAsked(null)}
               agentSessionId={rebuildSession} onAgentSessionChange={setPanelSession} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError}
-              annotations={annotations} annotationsError={annotationsError} activeAnnotation={activeAnnotation} noteDraft={noteDraft} onNoteDraftChange={setNoteDraft}
-              onJump={(annotation) => (ownAnnotation(annotation) ? jumpTo(annotation) : onJumpAcross(annotation))} onUpdateNote={(id, note) => void update(id, { note })} onDeleteAnnotation={(id) => void remove(id)}
-              sectionFor={(annotation) => (ownAnnotation(annotation) && bodyRef.current ? sectionOf(resolveTextQuoteRange(bodyRef.current, annotation.locator, annotation.quote)) : undefined)}
+              annotations={annotations} annotationsError={annotationsError} mirroredViews={mirroredViews(view, textContent)} activeAnnotation={activeAnnotation} noteDraft={noteDraft} onNoteDraftChange={setNoteDraft}
+              onJump={(annotation) => { const shown = shownAnnotation(annotation); if (shown) jumpTo(shown); else onJumpAcross(annotation); }} onUpdateNote={(id, note) => void update(id, { note })} onDeleteAnnotation={(id) => void remove(id)}
+              sectionFor={(annotation) => { const shown = shownAnnotation(annotation); return shown && bodyRef.current ? sectionOf(resolveTextQuoteRange(bodyRef.current, shown.locator, shown.quote)) : undefined; }}
               onMaterialSaved={onMaterialSaved} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onOpenSettings={onOpenSettings} />
           </SplitPanel>
         </>

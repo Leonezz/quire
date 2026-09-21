@@ -64,8 +64,19 @@ export function largestTextRun(items: readonly TitleCandidate[]): string | undef
   return text.length >= 4 && text.length <= 300 ? text : undefined;
 }
 
-/** Opens the document in Node (fake worker), reads page count, Info dict and a text sample. */
-export async function inspectPdf(bytes: Uint8Array): Promise<PdfInspection> {
+export type PdfDocument = import("pdfjs-dist/types/src/display/api").PDFDocumentProxy;
+
+/** pdf.js failures as PdfError codes the store and the renderer already know. */
+function toPdfError(error: unknown): PdfError {
+  if (error instanceof PdfError) return error;
+  const name = (error as { name?: string }).name;
+  if (name === "PasswordException") return new PdfError("PDF_ENCRYPTED", "This PDF is password protected.");
+  if (name === "InvalidPDFException") return new PdfError("PDF_INVALID", "This file is not a readable PDF.");
+  return new PdfError("PDF_UNREADABLE", error instanceof Error ? error.message : "Could not open this PDF.");
+}
+
+/** Opens the document in Node (fake worker, standard fonts from disk), runs `use`, and always destroys the loading task. */
+export async function withPdfDocument<T>(bytes: Uint8Array, use: (doc: PdfDocument) => Promise<T>): Promise<T> {
   const pdfjs = await loadPdfjs();
   const task = pdfjs.getDocument({
     data: bytes.slice(),
@@ -75,8 +86,19 @@ export async function inspectPdf(bytes: Uint8Array): Promise<PdfInspection> {
   });
   try {
     const doc = await task.promise;
+    if (doc.numPages < 1) throw new PdfError("PDF_EMPTY", "This PDF has no pages.");
+    return await use(doc);
+  } catch (error) {
+    throw toPdfError(error);
+  } finally {
+    await task.destroy();
+  }
+}
+
+/** Reads page count, Info dict and a text sample. */
+export function inspectPdf(bytes: Uint8Array): Promise<PdfInspection> {
+  return withPdfDocument(bytes, async (doc) => {
     const pages = doc.numPages;
-    if (pages < 1) throw new PdfError("PDF_EMPTY", "This PDF has no pages.");
     const info = (await doc.getMetadata()).info as Record<string, unknown>;
     const parts: string[] = [];
     let headline: string | undefined;
@@ -96,13 +118,5 @@ export async function inspectPdf(bytes: Uint8Array): Promise<PdfInspection> {
       textLayer: sampleText.length > 0 ? "available" : "absent",
       sampleText,
     };
-  } catch (error) {
-    if (error instanceof PdfError) throw error;
-    const name = (error as { name?: string }).name;
-    if (name === "PasswordException") throw new PdfError("PDF_ENCRYPTED", "This PDF is password protected.");
-    if (name === "InvalidPDFException") throw new PdfError("PDF_INVALID", "This file is not a readable PDF.");
-    throw new PdfError("PDF_UNREADABLE", error instanceof Error ? error.message : "Could not open this PDF.");
-  } finally {
-    await task.destroy();
-  }
+  });
 }

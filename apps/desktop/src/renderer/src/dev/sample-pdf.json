@@ -11,7 +11,7 @@
   "pdf": { "pages": 15, "byteLength": 2215244, "textLayer": "available" },
   "quality": { "completeness": "declared_full", "conformance": "conformant", "identityConfidence": "strong", "safety": "safe", "warnings": [] },
   "problems": [],
-  "views": [{"id": "pdf", "label": "PDF", "url": "https://arxiv.org/pdf/1706.03762", "mediaType": "application/pdf", "status": "ready", "fetchedAt": "2026-09-17T09:00:00.000Z", "byteLength": 2215244, "pdf": {"pages": 15, "byteLength": 2215244, "textLayer": "available"}}, {"id": "web", "label": "Web", "url": "https://arxiv.org/abs/1706.03762", "mediaType": "text/html", "status": "available"}],
+  "views": [{"id": "pdf", "label": "PDF", "url": "https://arxiv.org/pdf/1706.03762", "mediaType": "application/pdf", "status": "ready", "fetchedAt": "2026-09-17T09:00:00.000Z", "byteLength": 2215244, "pdf": {"pages": 15, "byteLength": 2215244, "textLayer": "available"}}, {"id": "text", "label": "Text", "url": "https://arxiv.org/pdf/1706.03762", "mediaType": "text/plain", "status": "available"}, {"id": "web", "label": "Web", "url": "https://arxiv.org/abs/1706.03762", "mediaType": "text/html", "status": "available"}],
   "primaryView": "pdf",
   "readyViews": ["pdf"]
 }
