@@ -14,7 +14,7 @@
     "test": "vitest run",
     "package": "electron-vite build && electron-builder --mac",
     "package:dir": "electron-vite build && electron-builder --mac --dir",
-    "release:local": "electron-vite build && CSC_NAME=\"${CSC_NAME:-Apple Development: leonez12138@gmail.com (LGNAH9RZH4)}\" GH_TOKEN=\"${GH_TOKEN:-$(gh auth token)}\" electron-builder --mac --publish always"
+    "release:local": "electron-vite build && CSC_NAME=\"${CSC_NAME:-Apple Development: leonez12138@gmail.com (LGNAH9RZH4)}\" electron-builder --mac --publish never && node scripts/publish-release.mjs \"${NOTES:-release-notes.md}\""
   },
   "dependencies": {
     "@mixmark-io/domino": "2.2.0",

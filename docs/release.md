@@ -17,9 +17,13 @@ pnpm --filter @read/desktop release:local
 ```
 
 `release:local` signs with `Apple Development: leonez12138@gmail.com (LGNAH9RZH4)` (override with
-`CSC_NAME`), publishes with `gh auth token` (override with `GH_TOKEN`), and creates the GitHub
-release as a draft named `v<version>`; publish it from the Releases page after checking the
-assets (`.dmg`, `.zip`, `latest-mac.yml` per architecture). A development certificate is not
+`CSC_NAME`), builds with `--publish never`, then runs `scripts/publish-release.mjs <notes.md>`
+(`NOTES=` overrides the default `release-notes.md`), which writes `latest-mac.yml` from the
+artifacts' sha512, pushes the tag `v<version>`, and creates the prerelease with `gh` from every
+`.dmg` / `.zip` / `.blockmap` plus the manifest. electron-builder's own GitHub publisher is not
+used: it posts the release before the tag exists and GitHub answers 422 ("Published releases
+must have a valid tag"), leaving a half-uploaded release — that is what happened on the first two
+alphas. A development certificate is not
 trusted by Gatekeeper on other Macs — users follow the "First launch" steps in the README — but
 it is a valid code signature, so in-app updates install in place between builds signed with the
 same identity.
