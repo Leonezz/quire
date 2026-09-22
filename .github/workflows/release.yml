@@ -101,6 +101,19 @@ jobs:
             echo "No APPLE_ID secret: skipping notarization."
           fi
 
+      # electron-builder publishes each architecture separately and, when no release exists yet for the
+      # tag, creates one per architecture (two releases with the same tag, and `gh release edit` then
+      # fails with "tag_name already exists"). Creating the release first makes both uploads land in it.
+      - name: Create the release for the tag
+        shell: bash
+        run: |
+          tag="${{ inputs.tag }}"
+          if gh release view "$tag" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
+            echo "Release $tag exists; assets will be added to it."
+          else
+            gh release create "$tag" --repo "$RELEASE_REPO" --title "Quire $tag" --notes "Building…" --prerelease
+          fi
+
       - name: Package and publish
         run: pnpm --filter @read/desktop exec electron-builder --mac --publish always
 

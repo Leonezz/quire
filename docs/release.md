@@ -7,9 +7,25 @@ else is public.
 
 ## Two ways to publish
 
-**Locally, signed with the Apple Development identity (the alpha path).** GitHub's runners have no
-certificate, and electron-updater refuses to install unsigned macOS builds, so alphas are built on
-the maintainer's Mac:
+**On GitHub Actions (the default since alpha.3).** `release.yml` runs by hand (Actions → Release →
+Run workflow with an existing tag, or `gh workflow run release.yml -f tag=v<version>`) on a
+`macos-14` runner and publishes with the job's own `GITHUB_TOKEN`. It signs with the certificate
+in `CSC_LINK` / `CSC_KEY_PASSWORD`; today that is the maintainer's **Apple Development**
+identity (`leonez12138@gmail.com (LGNAH9RZH4)`), exported from Keychain Access as a `.p12`. A
+development certificate is not trusted by Gatekeeper on other Macs — users follow the "First
+launch" steps in the README — but it is a valid code signature, so in-app updates install in place
+between builds signed with the same identity. Keep signing every alpha with that one identity:
+electron-updater refuses an update whose signature does not match the running app. With a
+Developer ID certificate and the `APPLE_ID` secrets the same workflow notarizes as well.
+
+The workflow is deliberately not tag-triggered: without the secrets it would publish an unsigned
+build, and on the first alpha a tag-triggered run replaced locally signed assets with unsigned ones.
+It also rewrites the release notes from the `feat:`/`fix:` commits since the previous tag; for a
+hand-written changelog run `gh release edit v<version> --notes-file apps/desktop/release-notes.md`
+after it finishes.
+
+**Locally, as a fallback.** When the runner is unavailable, the same build can be made on the
+maintainer's Mac:
 
 ```sh
 pnpm build
@@ -21,20 +37,10 @@ pnpm --filter @read/desktop release:local
 (`NOTES=` overrides the default `release-notes.md`), which writes `latest-mac.yml` from the
 artifacts' sha512, pushes the tag `v<version>`, and creates the prerelease with `gh` from every
 `.dmg` / `.zip` / `.blockmap` plus the manifest. electron-builder's own GitHub publisher is not
-used: it posts the release before the tag exists and GitHub answers 422 ("Published releases
-must have a valid tag"), leaving a half-uploaded release — that is what happened on the first two
-alphas. A development certificate is not
-trusted by Gatekeeper on other Macs — users follow the "First launch" steps in the README — but
-it is a valid code signature, so in-app updates install in place between builds signed with the
-same identity.
-
-**On GitHub Actions (unsigned, or Developer ID when the secrets exist).** `release.yml` runs only
-by hand (Actions → Release → Run workflow, with an existing tag) and publishes with the job's own
-`GITHUB_TOKEN`. It is deliberately not tag-triggered: a local `release:local` publish creates the
-tag, and a tag-triggered run would then overwrite the signed assets with unsigned ones. Without `CSC_LINK` /
-`CSC_KEY_PASSWORD` / `APPLE_ID` / `APPLE_APP_SPECIFIC_PASSWORD` / `APPLE_TEAM_ID` the build is
-unsigned and the updater only offers the download; with a Developer ID certificate and those
-secrets the build is signed, notarized, and installs in place.
+used here: it posts the release before the tag exists and GitHub answers 422. Expect it to be slow:
+`codesign --timestamp` takes about ten minutes per architecture and the four 160 MB assets upload
+at whatever the local uplink allows (alpha.3 was abandoned after two hours at 90 KB/s and cut
+from CI instead).
 
 ## Cutting an alpha
 
@@ -48,7 +54,8 @@ secrets the build is signed, notarized, and installs in place.
    git push origin main v0.1.0-alpha.2
    ```
 
-3. `.github/workflows/release.yml` runs on a `macos-14` runner:
+3. Start the workflow for that tag: `gh workflow run release.yml -f tag=v0.1.0-alpha.2`. It runs on
+   a `macos-14` runner and:
    - installs the workspace with pnpm and runs `pnpm build` (electron-vite writes `apps/desktop/out`);
    - runs `electron-builder --mac --publish always`, which packages `Quire.app` for `arm64` and
      `x64`, produces a `.dmg` and a `.zip` per architecture plus `latest-mac.yml`, and creates a
@@ -68,7 +75,7 @@ Set these in the source repository (Settings → Secrets and variables → Actio
 | Secret | Required | Purpose |
 | --- | --- | --- |
 | `GITHUB_TOKEN` | automatic | The job's own token; releases are created on this repository. |
-| `CSC_LINK` | for signing | Base64 of the **Developer ID Application** certificate exported as `.p12` (`base64 -i cert.p12 | pbcopy`). |
+| `CSC_LINK` | for signing | Base64 of the signing certificate exported as `.p12` with its private key (`gh secret set CSC_LINK < <(base64 -i cert.p12)`). Currently the Apple Development identity; a **Developer ID Application** certificate once one exists. |
 | `CSC_KEY_PASSWORD` | with `CSC_LINK` | Password of that `.p12`. |
 | `APPLE_ID` | for notarization | Apple ID of the developer account. |
 | `APPLE_APP_SPECIFIC_PASSWORD` | with `APPLE_ID` | An app-specific password for that Apple ID (appleid.apple.com). |
