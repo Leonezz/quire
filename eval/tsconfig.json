@@ -1,8 +1,8 @@
 {
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
-    "noEmit": true, "noUncheckedIndexedAccess": false, "exactOptionalPropertyTypes": false, "lib": ["ES2023", "DOM", "DOM.Iterable"], "types": ["node"],
+    "noEmit": true, "noUncheckedIndexedAccess": false, "exactOptionalPropertyTypes": false, "allowJs": true, "lib": ["ES2023", "DOM", "DOM.Iterable"], "types": ["node"],
     "paths": { "@read/normalize": ["../packages/normalize/src/index.ts"], "@read/normalize/contract": ["../packages/normalize/src/contract.ts"] }
   },
-  "include": ["src", "pdf/*.ts", "vitest.config.ts", "../packages/normalize/src/env.d.ts"]
+  "include": ["src", "pdf/*.ts", "judge/*.ts", "scripts/*.ts", "scripts/import-feedback.mjs", "vitest.config.ts", "../packages/normalize/src/env.d.ts"]
 }

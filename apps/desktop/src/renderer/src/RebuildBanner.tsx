@@ -1,4 +1,4 @@
-import { ArrowRight, Sparkles } from "lucide-react";
+import { ArrowRight, Flag, Sparkles } from "lucide-react";
 import { Button, Icon } from "@read/ui";
 import type { MaterialRecord } from "../../shared/contracts";
 
@@ -37,17 +37,23 @@ export function RebuildAction({ material, onRebuild, rebuild, rebuildError, onOp
  * The reader's quality banner: why the page reads badly, the way to the original, and — when
  * there is a capture — the agent's rebuild (or the rebuilt version once it exists).
  */
-export function QualityBanner({ material, low, onOpenLink, onOpenMaterial, onRebuild, rebuild, rebuildError }: RebuildProps & { material: MaterialRecord; low: boolean; onOpenLink: (url: string) => void; onOpenMaterial: (id: string) => void }) {
+export function QualityBanner({ material, low, onOpenLink, onOpenMaterial, onReport, onRebuild, rebuild, rebuildError }: RebuildProps & { material: MaterialRecord; low: boolean; onOpenLink: (url: string) => void; onOpenMaterial: (id: string) => void; onReport: () => void }) {
   const plain = material.quality.safety === "degraded_plaintext";
   if (!plain && !low) return null;
   const original = <a href={material.finalUrl} onClick={(event) => { event.preventDefault(); onOpenLink(material.finalUrl); }}>Open the original ↗</a>;
-  const action = <RebuildAction material={material} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError} onOpenMaterial={onOpenMaterial} />;
+  // The rebuild (or the rebuilt version) and the report, on one line: the report is always there, since a bad rendering is what the banner is about.
+  const actions = (
+    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1.5">
+      <RebuildAction material={material} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError} onOpenMaterial={onOpenMaterial} />
+      <Button size="sm" variant="quiet" className="gap-1" onPress={onReport}><Flag />Report…</Button>
+    </div>
+  );
   if (plain) {
     return (
       <div className="mb-6 grid gap-2 rounded-card bg-content-2 p-4 text-[13px] text-label-2">
         <strong className="text-[16px] text-label">Could not extract an article from this page.</strong>
         <span>What the page returned is shown below as plain text. {original} for the full page.</span>
-        {action ? <div className="mt-1">{action}</div> : null}
+        {actions}
       </div>
     );
   }
@@ -56,7 +62,7 @@ export function QualityBanner({ material, low, onOpenLink, onOpenMaterial, onReb
     <div className="mb-6 grid gap-1.5 rounded-card bg-orange-soft p-4 text-[13px] text-label-2">
       <strong className="text-[14px] text-label">{summary ? "Only a summary was available." : "The extraction may be incomplete."}</strong>
       <span>{summary ? "The full text is fetched when the source allows it. " : `The extractors disagreed about this page (${material.problems.length} notes). `}{original}</span>
-      {action ? <div className="mt-1">{action}</div> : null}
+      {actions}
     </div>
   );
 }

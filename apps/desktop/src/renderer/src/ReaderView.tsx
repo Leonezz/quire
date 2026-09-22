@@ -21,18 +21,9 @@ import { mirroredViews, resolveViewAnnotations } from "./mirroredAnnotations";
 import { TextViewBanner } from "./TextViewBanner";
 import type { MaterialViewController } from "./useMaterialView";
 import { flashQuoteRange, reportQuoteJump, resolveQuoteRange, scrollQuoteIntoView, type MaterialQuoteJump } from "./quoteJump";
+import { qualityLabel } from "./qualityLabel";
 
 type OutlineEntry = { id: string; label: string; level: number };
-
-function qualityLabel(material: Pick<MaterialRecord, "origin">, content: Pick<MaterialViewContent, "quality" | "view" | "report">): { text: string; low: boolean } {
-  const q = content.quality;
-  if (content.view === "text") return { text: "reflowed from PDF", low: (content.report?.degradedPages.length ?? 0) > 0 };
-  if (material.origin === "agent") return { text: "written by the agent", low: false };
-  if (q.safety === "degraded_plaintext") return { text: "plain text only", low: true };
-  if (q.completeness === "summary") return { text: "summary only", low: true };
-  if (q.conformance === "recoverable") return { text: "web extract · partial", low: true };
-  return { text: material.origin === "feed" ? "feed full text" : "web extract", low: false };
-}
 
 /** The heading whose top has passed the reading line (a little below the viewport top). */
 function currentHeading(viewport: HTMLElement, root: HTMLElement | null): string | undefined {
@@ -86,11 +77,13 @@ export interface ReaderProps {
   /** The Info panel saved metadata: the owner replaces its record so the header and body follow. */
   onMaterialSaved: (record: MaterialRecord) => void;
   onOpenSettings?: (() => void) | undefined;
+  /** "Report rendering problem…" (the quality pill, the Info panel, the quality banner): the owner opens the feedback sheet for the current view. */
+  onReport: () => void;
   /** The shell's Add · Search icons, at the far right of the toolbar segment. Escape closes the panel, then calls `onBack`. */
   trailing?: ReactNode;
 }
 
-export function ReaderView({ material, content, views, pendingJump, onJumpDone, onJumpAcross, jumpToQuote, initialPanel, onPanelChange, onBack, onOpenLink, onOpenMaterial, onProgress, onMaterialSaved, onOpenSettings, trailing }: ReaderProps) {
+export function ReaderView({ material, content, views, pendingJump, onJumpDone, onJumpAcross, jumpToQuote, initialPanel, onPanelChange, onBack, onOpenLink, onOpenMaterial, onProgress, onMaterialSaved, onOpenSettings, onReport, trailing }: ReaderProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const onProgressRef = useRef(onProgress);
   onProgressRef.current = onProgress;
@@ -255,6 +248,8 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
+      // A sheet (Settings, the feedback report) has its own keys; the reader's single letters stay out of it.
+      if (event.target instanceof Element && event.target.closest("[role=dialog]")) return;
       if (event.key === "Escape") { event.preventDefault(); if (panel) setPanel(null); else onBack?.(); }
       if (event.key === "t") { event.preventDefault(); setTocPinned((pinned) => !pinned); }
       if (event.key === "n" && !event.metaKey && !event.ctrlKey) { event.preventDefault(); setPanel((open) => (open === "notes" ? null : "notes")); }
@@ -278,7 +273,7 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
 
   return (
     <div className="grid h-full grid-cols-[minmax(0,1fr)] grid-rows-[52px_minmax(0,1fr)]">
-      <ReaderToolbar title={material.title} subtitle={subtitle} badge={quality} tocPinned={tocPinned} onTocChange={setTocPinned} panel={panel} onPanelChange={setPanel} prefs={prefs} onPrefsChange={setPrefs} trailing={trailing} views={viewSwitch} />
+      <ReaderToolbar title={material.title} subtitle={subtitle} badge={quality} onReport={onReport} onRebuild={onRebuild} tocPinned={tocPinned} onTocChange={setTocPinned} panel={panel} onPanelChange={setPanel} prefs={prefs} onPrefsChange={setPrefs} trailing={trailing} views={viewSwitch} />
 
       <SplitGroup id="reader" aria-label="Reader and panel" className="h-full">
       <SplitPanel id="page" minSize={PAGE_MIN}>
@@ -302,7 +297,7 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
             </div>
             {content.view === "text" && content.report
               ? <TextViewBanner report={content.report} onOpenPdf={() => views.select("pdf")} />
-              : <QualityBanner material={material} low={quality.low} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError} />}
+              : <QualityBanner material={material} low={quality.low} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onReport={onReport} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError} />}
             <ReaderDocumentSurface
               schema={content.reader?.schema ?? "none"}
               payload={content.reader?.payload ?? ""}
@@ -321,7 +316,7 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
           <ColumnSeparator label="Resize panel" />
           <SplitPanel id="inspector" defaultSize={sizes.sizeOf("inspector", PANEL_DEFAULT)} minSize={PANEL_MIN} maxSize={PANEL_MAX} onResize={sizes.onResize("inspector")}>
             <ReaderInspector material={material} views={views} panel={panel} onClose={() => setPanel(null)} subject={material.title} agentContext={agentContext} onClearSelection={() => setAsked(null)}
-              agentSessionId={rebuildSession} onAgentSessionChange={setPanelSession} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError}
+              agentSessionId={rebuildSession} onAgentSessionChange={setPanelSession} onReport={onReport} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError}
               annotations={annotations} annotationsError={annotationsError} mirroredViews={mirroredViews(view, textContent)} activeAnnotation={activeAnnotation} noteDraft={noteDraft} onNoteDraftChange={setNoteDraft}
               onJump={(annotation) => { const shown = shownAnnotation(annotation); if (shown) jumpTo(shown); else onJumpAcross(annotation); }} onUpdateNote={(id, note) => void update(id, { note })} onDeleteAnnotation={(id) => void remove(id)}
               sectionFor={(annotation) => { const shown = shownAnnotation(annotation); return shown && bodyRef.current ? sectionOf(resolveTextQuoteRange(bodyRef.current, shown.locator, shown.quote)) : undefined; }}

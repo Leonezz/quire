@@ -1,5 +1,5 @@
 import { ChevronRight } from "lucide-react";
-import { Icon } from "@read/ui";
+import { Button, Icon } from "@read/ui";
 import type { MaterialRecord } from "../../shared/contracts";
 import { ArtifactLineage } from "./ArtifactLineage";
 import { InfoViews } from "./InfoViews";
@@ -27,7 +27,7 @@ function Fact({ label, children }: { label: string; children: React.ReactNode })
 }
 
 /** What is known about the material and cannot be edited: where it came from, when, how well it extracted, what it became. Collapsed by default. */
-export function InfoFacts({ material, views, onOpenLink, onOpenMaterial, onRebuild, rebuild = "idle", rebuildError }: { material: MaterialRecord; views?: MaterialViewController | undefined; onOpenLink: (url: string) => void; onOpenMaterial: (id: string) => void } & Partial<RebuildProps>) {
+export function InfoFacts({ material, views, onOpenLink, onOpenMaterial, onReport, onRebuild, rebuild = "idle", rebuildError }: { material: MaterialRecord; views?: MaterialViewController | undefined; onOpenLink: (url: string) => void; onOpenMaterial: (id: string) => void; onReport?: (() => void) | undefined } & Partial<RebuildProps>) {
   const url = material.finalUrl || material.url;
   return (
     <details className="group">
@@ -39,7 +39,7 @@ export function InfoFacts({ material, views, onOpenLink, onOpenMaterial, onRebui
         <Fact label="Origin">{originLabel[material.origin]}</Fact>
         <Fact label="Fetched">{new Date(material.fetchedAt).toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" })}</Fact>
         <Fact label="Reading">{material.readingMinutes} min</Fact>
-        <Fact label="Quality">{qualityText(material)}</Fact>
+        <Fact label="Quality"><span className="inline-flex flex-wrap items-center gap-x-1.5">{qualityText(material)}{onReport ? <> · <Button variant="plain" size="sm" className="h-5 px-1 text-[12.5px]" onPress={onReport}>Report…</Button></> : null}</span></Fact>
         {material.pdf ? <Fact label="Pages">{material.pdf.pages}{material.pdf.textLayer === "absent" ? " · no text layer" : ""}</Fact> : null}
         {material.pdf ? <Fact label="Size">{bytesLabel(material.pdf.byteLength)}</Fact> : null}
         {material.capture ? <Fact label="Capture">{bytesLabel(material.capture.byteLength)} · {material.capture.mediaType}</Fact> : null}

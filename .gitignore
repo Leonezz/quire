@@ -15,3 +15,6 @@ eval/corpus/
 # PDF eval corpus and per-run outputs: local only.
 eval/pdf/corpus/
 eval/pdf/out/
+
+# Judge results carry evidence quotes from third-party pages: local only.
+eval/judge/out/

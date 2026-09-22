@@ -99,7 +99,7 @@ describe("ReaderView with a quote to jump to", () => {
     vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => { callback(0); return 1; });
     const scrolled = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => undefined);
     const { result } = renderHook(() => useQuoteJumpReport());
-    const props = { material, content, views, onJumpDone: () => undefined, onJumpAcross: () => undefined, onOpenLink: () => undefined, onOpenMaterial: () => undefined, onMaterialSaved: () => undefined };
+    const props = { material, content, views, onJumpDone: () => undefined, onJumpAcross: () => undefined, onOpenLink: () => undefined, onOpenMaterial: () => undefined, onMaterialSaved: () => undefined, onReport: () => undefined };
     const view = render(<ReaderView {...props} jumpToQuote={{ materialId: ID, quote: "styling arbitrary text ranges on a document", nonce: 1 }} />);
     await act(async () => { await new Promise((resolve) => { setTimeout(resolve, 0); }); });
     expect(view.container.textContent).toContain("styling arbitrary text ranges");

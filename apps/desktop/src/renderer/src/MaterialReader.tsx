@@ -3,6 +3,7 @@ import { X } from "lucide-react";
 import { Button } from "@read/ui";
 import type { Annotation, MaterialRecord } from "../../shared/contracts";
 import { read } from "./api";
+import { FeedbackSheet } from "./FeedbackSheet";
 import { annotationView, isPdfContent, viewOf } from "./materialViews";
 import { PdfReaderView } from "./PdfReaderView";
 import type { ReaderPanel } from "./ReaderInspector";
@@ -86,6 +87,9 @@ function LoadedMaterialReader({ material, onMaterialChanged, onBack, onOpenLink,
   // The open panel survives a view switch (the readers own their panel state, so it is carried across the remount).
   const panelRef = useRef<ReaderPanel | null>(null);
   const onPanelChange = useCallback((panel: ReaderPanel | null) => { panelRef.current = panel; }, []);
+  // "Report rendering problem…": one sheet for both readers, about the view being read; it outlives a view switch's remount.
+  const [reporting, setReporting] = useState(false);
+  const onReport = useCallback(() => setReporting(true), []);
 
   const { content } = views;
   if (content.status === "error") {
@@ -103,7 +107,8 @@ function LoadedMaterialReader({ material, onMaterialChanged, onBack, onOpenLink,
   return (
     <>
       <Reader key={`${material.id}:${views.view}`} material={material} content={content.content} views={views} onBack={onBack} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onProgress={onProgress}
-        onMaterialSaved={onMaterialChanged} onOpenSettings={onOpenSettings} trailing={trailing} pendingJump={pendingJump} onJumpDone={onJumpDone} onJumpAcross={jumpAcross} jumpToQuote={jumpToQuote} initialPanel={panelRef.current} onPanelChange={onPanelChange} />
+        onMaterialSaved={onMaterialChanged} onOpenSettings={onOpenSettings} onReport={onReport} trailing={trailing} pendingJump={pendingJump} onJumpDone={onJumpDone} onJumpAcross={jumpAcross} jumpToQuote={jumpToQuote} initialPanel={panelRef.current} onPanelChange={onPanelChange} />
+      <FeedbackSheet isOpen={reporting} material={material} view={views.view} onClose={() => setReporting(false)} />
       {fetchError ? (
         <div role="alert" className="absolute bottom-3 left-1/2 flex max-w-[min(640px,90%)] -translate-x-1/2 items-center gap-2 rounded-pill bg-red-soft py-1 pl-3.5 pr-1 text-[12.5px] text-red-text shadow-float">
           <span className="min-w-0 truncate">Could not fetch the {failedView?.label ?? fetchError.view} view — {fetchError.message}</span>

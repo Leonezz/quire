@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Button, Kbd, NumberField, Segment, Segmented, Sheet, SheetDialog, Switch, TextField } from "@read/ui";
 import type { AgentStatus, Settings, SettingsPatch } from "../../shared/contracts";
 import { AboutSection } from "./AboutSection";
+import { FeedbackSection } from "./FeedbackSection";
 import { agentStore, useAgentStatus } from "./agentStore";
 import { read } from "./api";
 import { KEYBOARD_MAP } from "./keyboardMap";
@@ -13,10 +14,10 @@ type Field = keyof Patch;
 /** The one-line privacy note of the Jev judge, from the Settings contract. */
 export const JEV_PRIVACY_NOTE = "Jev refines the blocks the rules are unsure about over the network; the page text of those blocks leaves the machine.";
 type FieldErrors = Partial<Record<Field, string>>;
-export type SettingsSection = "reading" | "sources" | "agent" | "storage" | "keyboard" | "about";
+export type SettingsSection = "reading" | "sources" | "agent" | "storage" | "feedback" | "keyboard" | "about";
 
 const SECTIONS: { id: SettingsSection; title: string }[] = [
-  { id: "reading", title: "Reading" }, { id: "sources", title: "Sources" }, { id: "agent", title: "Agent" }, { id: "storage", title: "Storage" }, { id: "keyboard", title: "Keyboard" }, { id: "about", title: "About" },
+  { id: "reading", title: "Reading" }, { id: "sources", title: "Sources" }, { id: "agent", title: "Agent" }, { id: "storage", title: "Storage" }, { id: "feedback", title: "Feedback" }, { id: "keyboard", title: "Keyboard" }, { id: "about", title: "About" },
 ];
 
 function Section({ id, title, children }: { id: SettingsSection; title: string; children: React.ReactNode }) {
@@ -182,6 +183,10 @@ export function SettingsSheet({ open, onClose, section, onOpenLink }: { open: bo
               </button>
               <span className="text-[11.5px] text-label-3">{copied ? "Copied." : "Click to copy the path."}</span>
             </Row>
+          </Section>
+
+          <Section id="feedback" title="Feedback">
+            <FeedbackSection onOpenLink={onOpenLink} />
           </Section>
 
           <Section id="keyboard" title="Keyboard">

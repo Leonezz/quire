@@ -1,4 +1,6 @@
-import { Toolbar as AriaToolbar, ToggleButton, composeRenderProps, type ToggleButtonProps, type ToolbarProps } from "react-aria-components";
+import { Button as AriaButton, Toolbar as AriaToolbar, ToggleButton, composeRenderProps, type ButtonProps, type ToggleButtonProps, type ToolbarProps } from "react-aria-components";
+import { ChevronDown } from "lucide-react";
+import { Icon } from "./Icon";
 import { cx } from "../cx";
 
 /**
@@ -55,5 +57,28 @@ export function AskButton({ className, ...props }: ToggleButtonProps) {
         cls,
       ))}
     />
+  );
+}
+
+export type ToolbarPillTone = "neutral" | "warning";
+const pillTones: Record<ToolbarPillTone, string> = {
+  neutral: "bg-fill text-label-2 data-[hovered]:bg-fill-2 data-[hovered]:text-label",
+  warning: "bg-orange-soft text-orange-text data-[hovered]:brightness-95",
+};
+
+/** A small status pill in the toolbar that opens something (a menu) when pressed; `warning` tints it orange. */
+export function ToolbarPill({ tone = "neutral", className, children, ...props }: ButtonProps & { tone?: ToolbarPillTone | undefined }) {
+  return (
+    <AriaButton
+      {...props}
+      className={composeRenderProps(className, (cls) => cx(
+        "inline-flex h-[20px] cursor-default select-none items-center gap-0.5 rounded-pill pl-2 pr-1.5 text-[11px] font-medium outline-none transition-colors duration-100",
+        "data-[focus-visible]:ring-[3px] data-[focus-visible]:ring-accent-ring data-[disabled]:opacity-45",
+        pillTones[tone],
+        cls,
+      ))}
+    >
+      {composeRenderProps(children, (child) => <>{child}<Icon of={ChevronDown} size="sm" className="opacity-60" /></>)}
+    </AriaButton>
   );
 }

@@ -27,6 +27,9 @@ import { registerM3Handlers } from "./ipc-m3";
 import { isMaterialViewId } from "./engine/material-views";
 import { UpdateService } from "./engine/updates";
 import { createElectronInstaller } from "./update-installer";
+import { FeedbackStore } from "./engine/feedback";
+import { registerFeedbackHandlers } from "./ipc-feedback";
+import normalizePackage from "../../../../packages/normalize/package.json";
 
 const userData = app.getPath("userData");
 const settings = new SettingsStore(join(userData, "settings.json"), userData, { warn: (message) => console.warn(`[settings] ${message}`), encryptor: electronEncryptor(safeStorage) });
@@ -60,7 +63,7 @@ function annotationView(value: unknown) {
   return value;
 }
 
-function broadcast(channel: "library:changed" | "sources:changed" | "agent:event" | "agent:sessions:changed" | "agent:status:changed" | "update:state", payload?: AgentEvent | UpdateState) {
+function broadcast(channel: "library:changed" | "sources:changed" | "agent:event" | "agent:sessions:changed" | "agent:status:changed" | "update:state" | "feedback:changed", payload?: AgentEvent | UpdateState) {
   for (const win of BrowserWindow.getAllWindows()) win.webContents.send(channel, payload);
 }
 
@@ -314,6 +317,18 @@ ipcMain.handle("update:check", () => updates.check());
 ipcMain.handle("update:install", () => updates.install());
 ipcMain.handle("update:openRelease", () => updates.openReleasePage());
 
+// --- Rendering feedback: bundles under <userData>/feedback, filed by hand as issues on the release repository. ---
+const feedback = new FeedbackStore(join(userData, "feedback"), {
+  materials: store,
+  app: { version: app.getVersion(), platform: process.platform, normalize: normalizePackage.version },
+  warn: (message) => console.warn(message),
+});
+registerFeedbackHandlers({
+  feedback, repo: UPDATE_FEED, broadcast,
+  openExternal: (url) => shell.openExternal(url),
+  showItemInFolder: (path) => shell.showItemInFolder(path),
+});
+
 // One window. Native vibrancy behind a transparent page so the glass panels
 // in the renderer sit on the real desktop, not on a painted gradient.
 function createWindow(): BrowserWindow {
@@ -330,6 +345,8 @@ function createWindow(): BrowserWindow {
     backgroundColor: "#00000000",
     webPreferences: {
       preload: join(__dirname, "../preload/index.js"),
+      // The preload reads the app version from here; it cannot ask `app` itself in the sandbox.
+      additionalArguments: [`--quire-version=${app.getVersion()}`],
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,

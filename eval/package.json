@@ -8,7 +8,9 @@
     "fetch": "node scripts/fetch.mjs",
     "eval": "vitest run",
     "golden": "GOLDEN=1 vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "judge": "node judge/run.mjs",
+    "import-feedback": "node scripts/import-feedback.mjs"
   },
   "dependencies": {
     "@read/normalize": "workspace:*"

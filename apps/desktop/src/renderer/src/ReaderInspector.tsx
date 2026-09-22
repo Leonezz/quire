@@ -37,6 +37,8 @@ export interface ReaderInspectorProps {
   /** The conversation the reader wants shown (its rebuild runs there), and which one the panel shows. */
   agentSessionId?: string | undefined;
   onAgentSessionChange?: ((sessionId: string | undefined) => void) | undefined;
+  /** "Report…" on the Info panel's Quality row: opens the feedback sheet for the current view. */
+  onReport?: (() => void) | undefined;
   /** The reader's "Rebuild with the agent", as the Info panel offers it. */
   onRebuild?: RebuildProps["onRebuild"];
   rebuild?: RebuildProps["rebuild"] | undefined;
@@ -45,10 +47,10 @@ export interface ReaderInspectorProps {
 
 /** The reader's side panel, shared by the article and PDF readers: one of Info (i), Notes (n), Agent (⌘J), with its name and × on top. */
 export function ReaderInspector(props: ReaderInspectorProps) {
-  const { material, views, panel, onClose, subject, agentContext, onClearSelection, annotations, annotationsError, mirroredViews, activeAnnotation, noteDraft, onNoteDraftChange, onJump, onUpdateNote, onDeleteAnnotation, sectionFor, onMaterialSaved, onOpenLink, onOpenMaterial, onOpenSettings, agentSessionId, onAgentSessionChange, onRebuild, rebuild = "idle", rebuildError } = props;
+  const { material, views, panel, onClose, subject, agentContext, onClearSelection, annotations, annotationsError, mirroredViews, activeAnnotation, noteDraft, onNoteDraftChange, onJump, onUpdateNote, onDeleteAnnotation, sectionFor, onMaterialSaved, onOpenLink, onOpenMaterial, onOpenSettings, agentSessionId, onAgentSessionChange, onReport, onRebuild, rebuild = "idle", rebuildError } = props;
   return (
     <Panel title={PANEL_TITLES[panel]} onClose={onClose} className="h-full">
-      {panel === "info" ? <InfoPanel material={material} views={views} onSaved={onMaterialSaved} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError} /> : null}
+      {panel === "info" ? <InfoPanel material={material} views={views} onSaved={onMaterialSaved} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onReport={onReport} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError} /> : null}
       {panel === "notes" ? (
         <NotesPanel material={material} view={views.view} mirroredViews={mirroredViews} annotations={annotations} error={annotationsError} activeId={activeAnnotation} draft={noteDraft} onDraftChange={onNoteDraftChange}
           onJump={onJump} onUpdateNote={onUpdateNote} onDelete={onDeleteAnnotation} sectionFor={sectionFor} />

@@ -2,8 +2,11 @@ import { contextBridge, ipcRenderer } from "electron";
 import type { AgentEvent, ReadApi, UpdateState } from "../shared/contracts";
 
 // The only bridge. Method names mirror the main-process handlers one to one.
+// Passed by the main process through additionalArguments (see the BrowserWindow in main/index.ts).
+const appVersion = process.argv.find((arg) => arg.startsWith("--quire-version="))?.slice("--quire-version=".length) ?? "unknown";
+
 const api: ReadApi = {
-  version: "0.0.1",
+  version: appVersion,
   platform: process.platform,
   setTheme: (theme) => ipcRenderer.invoke("theme:set", theme),
   onLibraryChanged: (listener) => {
@@ -97,6 +100,18 @@ const api: ReadApi = {
     const handler = (_event: Electron.IpcRendererEvent, state: UpdateState) => listener(state);
     ipcRenderer.on("update:state", handler);
     return () => ipcRenderer.removeListener("update:state", handler);
+  },
+  // Rendering feedback: local bundles; the issue is opened in the browser, the bundle revealed in Finder.
+  feedbackCreate: (draft) => ipcRenderer.invoke("feedback:create", draft),
+  feedbackList: () => ipcRenderer.invoke("feedback:list"),
+  feedbackDelete: (id) => ipcRenderer.invoke("feedback:delete", id),
+  feedbackOpenIssue: (id) => ipcRenderer.invoke("feedback:openIssue", id),
+  feedbackSetIssueUrl: (id, issueUrl) => ipcRenderer.invoke("feedback:setIssueUrl", id, issueUrl),
+  feedbackReveal: (id) => ipcRenderer.invoke("feedback:reveal", id),
+  onFeedbackChanged: (listener) => {
+    const handler = () => listener();
+    ipcRenderer.on("feedback:changed", handler);
+    return () => ipcRenderer.removeListener("feedback:changed", handler);
   },
 };
 contextBridge.exposeInMainWorld("read", api);

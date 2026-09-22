@@ -10,9 +10,10 @@ export function mockRead(overrides: Partial<ReadApi> = {}): ReadApi {
     "queryLibrary", "updateMaterialMeta", "refreshMetadata", "exportBibtex", "listTags", "deleteMaterials", "keepItem", "getSettings", "updateSettings", "listAgentSessions", "getAgentSession", "deleteAgentSession", "onAgentSessionsChanged",
     "fetchMaterialView", "getMaterialView", "setPrimaryView",
     "getUpdateState", "checkForUpdates", "installUpdate", "openReleasePage", "onUpdateState",
+    "feedbackCreate", "feedbackList", "feedbackDelete", "feedbackOpenIssue", "feedbackSetIssueUrl", "feedbackReveal", "onFeedbackChanged",
   ];
   const base = Object.fromEntries(names.map((name) => [name, vi.fn(async () => { throw new Error(`read.${name} is not stubbed in this test`); })])) as unknown as ReadApi;
-  const subscriptions = { onLibraryChanged: () => () => undefined, onSourcesChanged: () => () => undefined, onAgentEvent: () => () => undefined, onAgentOpenSession: () => () => undefined, onAgentSessionsChanged: () => () => undefined, onAgentStatusChanged: () => () => undefined, onUpdateState: () => () => undefined };
+  const subscriptions = { onLibraryChanged: () => () => undefined, onSourcesChanged: () => () => undefined, onAgentEvent: () => () => undefined, onAgentOpenSession: () => () => undefined, onAgentSessionsChanged: () => () => undefined, onAgentStatusChanged: () => () => undefined, onUpdateState: () => () => undefined, onFeedbackChanged: () => () => undefined };
   return { ...base, ...subscriptions, version: "test", platform: "test", ...overrides };
 }
 

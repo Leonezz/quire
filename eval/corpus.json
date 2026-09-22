@@ -515,5 +515,15 @@
       "images",
       "zh"
     ]
+  },
+  {
+    "slug": "arxiv-2609-24983",
+    "url": "https://arxiv.org/html/2609.24983",
+    "framework": "unknown",
+    "tags": [
+      "extra_content",
+      "metadata",
+      "feedback"
+    ]
   }
 ]

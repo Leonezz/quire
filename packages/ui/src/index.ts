@@ -1,6 +1,7 @@
 export { Button, Kbd } from "./primitives/Button";
 export type { ButtonProps, ButtonVariant, ButtonSize } from "./primitives/Button";
-export { Toolbar, ToolbarGroup, ToolbarTitle, ToolbarButton, AskButton } from "./primitives/Toolbar";
+export { Toolbar, ToolbarGroup, ToolbarTitle, ToolbarButton, AskButton, ToolbarPill } from "./primitives/Toolbar";
+export type { ToolbarPillTone } from "./primitives/Toolbar";
 export { Sidebar, SidebarSection, SidebarItem } from "./primitives/Sidebar";
 export type { SidebarItemProps, SidebarHealth } from "./primitives/Sidebar";
 export { ItemList, ItemGroup, ItemSection, ItemRow } from "./primitives/ItemList";
@@ -40,3 +41,6 @@ export { MenuSelect } from "./primitives/MenuSelect";
 export type { MenuSelectOption, MenuSelectProps } from "./primitives/MenuSelect";
 export { CreatorRow } from "./primitives/CreatorRow";
 export type { CreatorRowProps } from "./primitives/CreatorRow";
+export { ChoiceChips } from "./primitives/ChoiceChips";
+export type { ChoiceChipOption, ChoiceChipsProps } from "./primitives/ChoiceChips";
+export { Checkbox } from "./primitives/Checkbox";

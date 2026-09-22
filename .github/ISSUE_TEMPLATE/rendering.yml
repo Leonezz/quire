@@ -1,0 +1,41 @@
+name: Page rendered badly
+description: A web page, feed item or PDF that Quire extracted or rendered wrong.
+title: "Rendering: <site or paper>"
+labels: ["rendering"]
+body:
+  - type: input
+    id: url
+    attributes:
+      label: URL
+      description: The page or PDF. Quire's Report sheet fills this in.
+    validations:
+      required: true
+  - type: checkboxes
+    id: kinds
+    attributes:
+      label: What went wrong
+      options:
+        - label: Body text, sections or the ending are missing
+        - label: Navigation, related posts, comments, share or subscribe blocks kept as body
+        - label: Paragraphs or sections out of order
+        - label: Code blocks or formulas broken
+        - label: Tables mangled or dropped
+        - label: Figures missing, duplicated or wrong
+        - label: Wrong or missing title, author or date
+        - label: Headings, lists, quotes or footnotes wrong
+        - label: Other
+  - type: textarea
+    id: note
+    attributes:
+      label: Details
+      description: What you expected, and where on the page it goes wrong.
+  - type: textarea
+    id: versions
+    attributes:
+      label: Versions and quality report
+      description: Quire's Report sheet fills this in (app version, extractor version, quality, problems).
+      render: text
+  - type: markdown
+    attributes:
+      value: |
+        **Attach the bundle.** In Quire, Settings › Feedback › *Reveal bundle* opens the folder; drag it (zipped) onto this issue. It holds the saved original page, so the problem can be reproduced and added to the evaluation set. Skip it if the page is private.

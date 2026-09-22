@@ -110,6 +110,12 @@
 - 设置：`reflowJudge` rules|jev，TypeSafe key 用 `safeStorage` 加密存 `settings.json`（`engine/secrets.ts`，无法加密即拒绝），只回报 `typesafeApiKeySet`，无 key 拒绝选 Jev，删 key 自动回到 rules；Settings › Agent 有密码框与分段控件，Info › Views 显示 "refined by Jev · n asked · m changed"。
 - 评测 `eval/pdf/`（`node run.mjs`，语料本地不入库）：20 篇 PDF 规则 vs Jev 并排，报告 `eval/pdf/report.md`（含手写 verdicts.md）。整轮约 1.3 M input tokens（≈ $0.05）。Jev 明显帮到的：RFC 页脚 / 版权、幻灯片图片授权行、遗漏的无编号标题与小写编号小节、表格行成文的裁图、OCR 全大写标题；曾伤到、已加护栏的：粗体行内小标题被升为标题（run-in 提示 + ≥ 25 词多行正文拒绝 heading）、逐行裁表（同页同栏、行距 ≤ 1.5 行高的 table 判定合并成一张图并挂最近的 "Table N" caption）、长段落被当家具（> 12 词且不在页边 12% 内保留）；仍会伤到的：句号结尾的标题被当 run-in、OCR 乱码行升标题、RFC 目录短行被当家具。
 
+### 第 15 刀：文章质量的两条回路 — 已完成 2026-09-23
+- 设计：`docs/design/eval-feedback.md`。一个数据格式：用户在 app 里报的"这页渲染坏了"就是评测集的一条 case（`report.json` + 语料条目布局的 `meta.json` + `page.html.gz` + `extracted.md`）。
+- app 内反馈：阅读器工具栏的质量 pill 变成菜单（Report rendering problem… / Rebuild with the agent），Info › Quality 行与低质量横幅也有 Report…；`FeedbackSheet` 九种问题（`RenderingProblemKind`，与 judge 同一词表）+ 备注 + "附上保存的原始页面"，明列将保存的内容；只写本地 `<userData>/feedback/<id>/`，第二步才由用户打开预填的 GitHub issue（模板 `.github/ISSUE_TEMPLATE/rendering.yml`）并手动附 bundle；Settings › Feedback 列出所有报告。主进程 `engine/feedback.ts` / `feedback-issue.ts` / `ipc-feedback.ts`。
+- 自动测评 `eval/judge/`：`pnpm --filter @read/eval judge [slug…] [--force] [--model] [--max] [--update-baseline]` 用 `codex exec --output-schema` 按七维量规给每篇 PASS / MINOR / MAJOR + issues[kind]，按内容哈希缓存 `out/`，与提交的 `baseline.json` 比较，任何 slug 变差即失败；报告 `eval/judge/report.md` 含按 kind 的问题计数。`pnpm --filter @read/eval import-feedback <bundle>` 把用户 bundle 变成语料条目。首次跑通：arXiv HTML 的报告 → 语料 → golden → judge 判 MAJOR（byline 缺失、GFM 里公式 TeX 注释与符号重复、附录表格成转义 HTML）——这三条是下一刀抽取器要修的。
+- 顺手修：preload 的 `version` 原来写死 0.0.1，现在由主进程经 `additionalArguments` 传入。
+
 ## 评测集导入 app
 - Developer 菜单 → Import Evaluation Corpus（⌘⇧I，仅开发检出可见）把 `eval/corpus` 全部快照按当前抽取器入库；2026-09-18 实测 64 篇导入、0 失败。浏览器预览也直接列出导出后的语料（`EXPORT=1`）。
 - 第二轮独立评审（`eval/quality-review-2.md`）：46 通过 / 4 轻微 / 14 严重（首轮 36 / 6 / 22）；随后又修了 Paul Graham 脚注、卡片链接的 Markdown、尾部 discuss / read-my-book 段。剩余主要是站点级残留（Quanta、Stratechery 的相关文章卡片），留给 L3 profile。

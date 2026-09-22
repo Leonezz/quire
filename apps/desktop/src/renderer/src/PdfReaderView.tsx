@@ -17,11 +17,12 @@ import { useReadingPrefs } from "./readingPrefs";
 import { useTextViewContent } from "./useTextViewContent";
 import { reportQuoteJump } from "./quoteJump";
 import { revealPdfQuote } from "./pdfQuoteSearch";
+import { qualityLabel } from "./qualityLabel";
 
 type Loaded = { status: "loading" } | { status: "ready"; url: string } | { status: "error"; message: string };
 
 /** PDF reading: the same toolbar contract as the article reader, the pages rendered by pdf.js. */
-export function PdfReaderView({ material, content, views, pendingJump, onJumpDone, onJumpAcross, jumpToQuote, initialPanel, onPanelChange, onBack, onOpenLink, onOpenMaterial, onProgress, onMaterialSaved, onOpenSettings, trailing }: ReaderProps) {
+export function PdfReaderView({ material, content, views, pendingJump, onJumpDone, onJumpAcross, jumpToQuote, initialPanel, onPanelChange, onBack, onOpenLink, onOpenMaterial, onProgress, onMaterialSaved, onOpenSettings, onReport, trailing }: ReaderProps) {
   const pdf = content.pdf;
   const view = content.view;
   const [loaded, setLoaded] = useState<Loaded>({ status: "loading" });
@@ -97,6 +98,8 @@ export function PdfReaderView({ material, content, views, pendingJump, onJumpDon
     const onKey = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
       const typing = target?.tagName === "INPUT" || target?.tagName === "TEXTAREA";
+      // A sheet (Settings, the feedback report) has its own keys; the reader's single letters stay out of it.
+      if (target?.closest("[role=dialog]")) return;
       if (event.key === "Escape" && !typing) { event.preventDefault(); if (panel) setPanel(null); else onBack?.(); }
       if ((event.metaKey || event.ctrlKey) && event.key === "j") { event.preventDefault(); setPanel((open) => (open === "agent" ? null : "agent")); }
       if (event.key === "n" && !typing && !event.metaKey && !event.ctrlKey) { event.preventDefault(); setPanel((open) => (open === "notes" ? null : "notes")); }
@@ -134,7 +137,7 @@ export function PdfReaderView({ material, content, views, pendingJump, onJumpDon
     setPanel("notes"); setActiveAnnotation(saved.id); setNoteDraft({ id: saved.id, value: "" });
   };
   const panelOpen = panel !== null;
-  const badge = pdf?.textLayer === "absent" ? { text: "scanned PDF", low: true } : { text: "PDF", low: false };
+  const badge = qualityLabel(material, content);
 
   // The PDF has no header of its own, so creators · publication · date ride in the title bar before the host.
   const subtitle = [...headerParts(material.meta), material.origin === "agent" ? "Agent" : hostLabel(material), pdf ? `${pdf.pages} pages` : "", `${content.readingMinutes} min`, `${progress}%`].filter(Boolean).join(" · ");
@@ -142,7 +145,7 @@ export function PdfReaderView({ material, content, views, pendingJump, onJumpDon
 
   return (
     <div className="grid h-full grid-cols-[minmax(0,1fr)] grid-rows-[52px_minmax(0,1fr)]">
-      <ReaderToolbar title={material.title} subtitle={subtitle} badge={badge} tocPinned={tocPinned} tocDisabled={outline.length === 0} onTocChange={setTocPinned} panel={panel} onPanelChange={setPanel} prefs={prefs} onPrefsChange={setPrefs} trailing={trailing} views={viewSwitch} />
+      <ReaderToolbar title={material.title} subtitle={subtitle} badge={badge} onReport={onReport} tocPinned={tocPinned} tocDisabled={outline.length === 0} onTocChange={setTocPinned} panel={panel} onPanelChange={setPanel} prefs={prefs} onPrefsChange={setPrefs} trailing={trailing} views={viewSwitch} />
 
       <SplitGroup id="reader" aria-label="Reader and panel" className="h-full">
       <SplitPanel id="page" minSize={PAGE_MIN}>
@@ -184,7 +187,7 @@ export function PdfReaderView({ material, content, views, pendingJump, onJumpDon
         <>
           <ColumnSeparator label="Resize panel" />
           <SplitPanel id="inspector" defaultSize={sizes.sizeOf("inspector", PANEL_DEFAULT)} minSize={PANEL_MIN} maxSize={PANEL_MAX} onResize={sizes.onResize("inspector")}>
-            <ReaderInspector material={material} views={views} panel={panel} onClose={() => setPanel(null)} subject={material.title} agentContext={agentContext} onClearSelection={() => setAsked(null)}
+            <ReaderInspector material={material} views={views} panel={panel} onClose={() => setPanel(null)} subject={material.title} agentContext={agentContext} onClearSelection={() => setAsked(null)} onReport={onReport}
               annotations={annotations} annotationsError={annotationsError} mirroredViews={mirroredViews(view, textContent)} activeAnnotation={activeAnnotation} noteDraft={noteDraft} onNoteDraftChange={setNoteDraft}
               onJump={(annotation) => { const shown = shownAnnotation(annotation); if (shown) jumpTo(shown); else onJumpAcross(annotation); }} onUpdateNote={(id, note) => void update(id, { note })} onDeleteAnnotation={(id) => void remove(id)} sectionFor={sectionFor}
               onMaterialSaved={onMaterialSaved} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onOpenSettings={onOpenSettings} />

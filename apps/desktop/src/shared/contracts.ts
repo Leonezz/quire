@@ -93,7 +93,7 @@ export interface CorpusImportResult {
   failed: { slug: string; message: string }[];
 }
 
-export interface ReadApi extends ReadApiM1, ReadApiM2, ReadApiM3, ReadApiViews, ReadApiUpdates {
+export interface ReadApi extends ReadApiM1, ReadApiM2, ReadApiM3, ReadApiViews, ReadApiUpdates, ReadApiFeedback {
   version: string;
   platform: string;
   /** Fires after the main process changed the library on its own (an import); the renderer reloads the list. */
@@ -620,4 +620,70 @@ export interface ReadApiUpdates {
   onUpdateState: (listener: (state: UpdateState) => void) => () => void;
   /** Opens the release page in the browser (the manual path). */
   openReleasePage: () => Promise<void>;
+}
+
+// --- Rendering feedback: a reader reports that a page rendered badly; the report is a bundle in the eval corpus's own layout ---
+
+/** What went wrong, in the reader's terms; the same vocabulary the automatic judge (eval/judge) uses for its findings. */
+export type RenderingProblemKind =
+  | "missing_content"   // body text, sections or the ending are missing
+  | "extra_content"     // navigation, related posts, comments, share or subscribe blocks kept as body
+  | "wrong_order"       // paragraphs or sections out of order
+  | "code_or_math"      // code blocks or formulas broken
+  | "tables"            // tables mangled or dropped
+  | "images"            // figures missing, duplicated or wrong
+  | "metadata"          // wrong or missing title, author or date
+  | "layout"            // headings, lists, quotes or footnotes wrong
+  | "other";
+
+export const RENDERING_PROBLEM_KINDS: readonly RenderingProblemKind[] = ["missing_content", "extra_content", "wrong_order", "code_or_math", "tables", "images", "metadata", "layout", "other"];
+
+export interface RenderingFeedbackDraft {
+  materialId: string;
+  /** The view the reader was looking at when it went wrong. */
+  view: MaterialViewId;
+  kinds: RenderingProblemKind[];
+  /** Free text, may be empty. */
+  note: string;
+  /** Put the saved original page (the capture) into the bundle so the problem can be reproduced; requires `record.capture`. */
+  includeCapture: boolean;
+}
+
+export interface RenderingFeedback {
+  id: string;
+  createdAt: string;
+  materialId: string;
+  url: string;
+  title: string;
+  view: MaterialViewId;
+  kinds: RenderingProblemKind[];
+  note: string;
+  /** Versions the report was made with: the app, and the normalize package that extracted the page. */
+  app: { version: string; platform: string; normalize: string };
+  quality: ContentNormalizationQuality;
+  problems: NormalizationProblem[];
+  /** The text view's report when the report is about the text view. */
+  report?: TextViewReport;
+  capture: { included: boolean; byteLength?: number; mediaType?: string };
+  /**
+   * Where the bundle lives: `<userData>/feedback/<id>/` holding report.json (this record), meta.json and
+   * page.html.gz in the eval corpus entry layout (when the capture is included), and extracted.md.
+   * `pnpm --filter @read/eval import-feedback <dir>` turns it into a corpus case.
+   */
+  bundleDir: string;
+  /** The GitHub issue the reader filed for it, once they pasted it back. */
+  issueUrl?: string;
+}
+
+export interface ReadApiFeedback {
+  /** Writes the bundle and the record; nothing leaves the machine. */
+  feedbackCreate: (draft: RenderingFeedbackDraft) => Promise<RenderingFeedback>;
+  feedbackList: () => Promise<RenderingFeedback[]>;
+  feedbackDelete: (id: string) => Promise<void>;
+  /** Opens a new GitHub issue in the browser, prefilled from the record (the capture is never put in the URL; the reader attaches the bundle by hand). */
+  feedbackOpenIssue: (id: string) => Promise<void>;
+  feedbackSetIssueUrl: (id: string, issueUrl: string) => Promise<RenderingFeedback>;
+  /** Reveals the bundle directory in Finder so it can be attached to the issue. */
+  feedbackReveal: (id: string) => Promise<void>;
+  onFeedbackChanged: (listener: () => void) => () => void;
 }

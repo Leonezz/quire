@@ -359,10 +359,15 @@ export class MaterialStore {
     return this.readOptional(view === primaryViewOf(record) ? this.pdfPath(id) : viewPdfPath(this.dir, id, view));
   }
 
+  /** The captured page's bytes as fetched (the <id>.html beside the record); undefined when nothing was captured. */
+  async captureBytes(id: string): Promise<Uint8Array | undefined> {
+    if (!ID.test(id)) return undefined;
+    return this.readOptional(this.htmlPath(id));
+  }
+
   /** The captured page as readable text with its block structure; undefined when nothing was captured. */
   async captureText(id: string): Promise<string | undefined> {
-    if (!ID.test(id)) return undefined;
-    const bytes = await this.readOptional(this.htmlPath(id));
+    const bytes = await this.captureBytes(id);
     return bytes ? captureTextOf(new TextDecoder("utf-8", { fatal: false }).decode(bytes)) : undefined;
   }
 

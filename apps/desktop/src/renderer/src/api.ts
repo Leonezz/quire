@@ -4,6 +4,7 @@ import samplePdf from "./dev/sample-pdf.json";
 import samplePlain from "./dev/sample-plaintext.json";
 import { createPreviewM1 } from "./previewM1";
 import { createPreviewM2, previewArtifacts } from "./previewM2";
+import { createPreviewFeedback } from "./previewFeedback";
 import { createPreviewM3 } from "./previewM3";
 import { kindOfRecord } from "./previewMeta";
 import { rebuiltArtifacts } from "./previewRebuild";
@@ -82,6 +83,8 @@ const browserPreview: ReadApi = {
   ...previewM3,
   // Updates: a fake newer alpha after a short pause, never installable (see previewUpdates.ts).
   ...createPreviewUpdates(),
+  // Rendering feedback: records in localStorage, no bundle, the issue opens in a new tab (see previewFeedback.ts).
+  ...createPreviewFeedback({ getMaterial: previewGetMaterial }),
   version: "preview",
   platform: "browser",
   // The preview paints its own ground (see styles.css), so there is no native appearance to sync.
