@@ -43,7 +43,7 @@ const MAX_TITLE = 200;
 const MAX_MARKDOWN = 400_000;
 const MAX_LINEAGE = 50;
 
-const CITE = "Cite by material id and quote the material's exact words; never paraphrase inside quotation marks.";
+const CITE = "Cite by writing the material id in square brackets right after the claim or quote it supports, e.g. \"exact words\" [0123456789abcdef]; quote the material's exact words, never paraphrase inside quotation marks, and never print an id bare.";
 const idSchema = { type: "string", pattern: "^[a-f0-9]{16}$", description: "A material id, 16 hex characters, as returned by library_search, library_recent or the conversation." };
 const limitSchema = { type: "integer", minimum: 1, maximum: MAX_LIST };
 
@@ -58,11 +58,11 @@ export const agentTools: readonly DynamicTool[] = [
     inputSchema: { type: "object", properties: { id: idSchema }, required: ["id"], additionalProperties: false } },
   { name: "inbox_list", description: "Undecided items from the reader's subscriptions (id, title, sourceTitle, gist, link, publishedAt): what arrived but has not been read, queued or dismissed. Use it for triage questions; read a full item by importing its link with library_import.",
     inputSchema: { type: "object", properties: { limit: { ...limitSchema, description: `How many, default ${DEFAULT_RECENT}.` } }, additionalProperties: false } },
-  { name: "library_import", description: "Fetch a public http(s) page and add it to the library as a material, returning its id, title and readingMinutes. Use it only when the reader asked for an outside page or an inbox item's full text; then read it with material_read.",
+  { name: "library_import", description: "Fetch a public http(s) page and add it to the library as a material, returning its id, title and readingMinutes. Use it only when the reader asked for an outside page or an inbox item's full text; then read it with material_read, and cite the new material as [id] after its title.",
     inputSchema: { type: "object", properties: { url: { type: "string", minLength: 8, maxLength: 4096 } }, required: ["url"], additionalProperties: false } },
   { name: "material_source", description: `The captured raw page of a material as readable text with its structure (blank lines between blocks, # headings, - list items, fenced code, [text](href) links), ${PAGE_CHARS} characters per call, navigation and chrome included. Use it for a rebuild when the extracted text is broken; page with nextOffset until it is null. Only materials fetched with capture on have it.`,
     inputSchema: { type: "object", properties: { id: idSchema, offset: { type: "integer", minimum: 0, description: "Character offset; use the previous call's nextOffset." } }, required: ["id"], additionalProperties: false } },
-  { name: "artifact_write", description: `Save a document you wrote (a synthesis, a summary) into the library as a Markdown material. \`sources\` must list the id of every material you drew on; only ids you retrieved in this turn (library_search, library_recent, material_read, material_source, material_annotations, library_import) or the material the conversation is about are accepted. Every claim in the markdown should carry [material-id] and exact quotes. Returns { id, title }; tell the reader the id. ${CITE}`,
+  { name: "artifact_write", description: `Save a document you wrote (a synthesis, a summary) into the library as a Markdown material. \`sources\` must list the id of every material you drew on; only ids you retrieved in this turn (library_search, library_recent, material_read, material_source, material_annotations, library_import) or the material the conversation is about are accepted. Every claim in the markdown should carry [material-id] and exact quotes. Returns { id, title }; cite it as [id] after a one-line summary of what you saved. ${CITE}`,
     inputSchema: { type: "object", properties: { title: { type: "string", minLength: 1, maxLength: MAX_TITLE }, markdown: { type: "string", minLength: 1, maxLength: MAX_MARKDOWN }, sources: { type: "array", items: idSchema, minItems: 1, maxItems: MAX_LINEAGE, uniqueItems: true } }, required: ["title", "markdown", "sources"], additionalProperties: false } },
 ];
 

@@ -9,10 +9,10 @@ const INDEX_SIZE = 40;
 const TASKS: Record<Exclude<AgentTask, "ask">, string> = {
   explain: "Explain the selected passage (or, without a selection, this material) in plain terms. Keep the author's meaning; quote the exact words you rely on.",
   verify: "Check the claims in the passage: which are supported by the material itself, which need outside evidence. Do not invent sources; say plainly what you cannot verify.",
-  related: "Find related material in the library with library_search and library_recent. For each related material give one line on how it relates, with its id.",
+  related: "Find related material in the library with library_search and library_recent. For each related material give one line on how it relates, naming it by title and citing it as [id].",
   summary: "Summarise this material: the thesis, the argument in order, the evidence, and what the author concedes. Quote sparingly and exactly.",
-  synthesis: "Write a synthesis across the materials the reader names, or that library_search finds for the topic. Every claim carries [material-id] and exact quotes. Then save it with artifact_write, listing every material id you used in sources, and reply with the artifact id.",
-  rebuild: "The extractor could not recover this page cleanly. Read the captured page text with material_source (page through it fully), then rewrite the article as faithful Markdown: title line, byline and date if present, the body in order with headings, paragraphs, lists, quotes, code blocks and links; leave out navigation, related-post cards, comments, share and subscribe blocks; never invent or summarise. Save it with artifact_write using lineage [<id>] (its `sources` argument) and reply with only the artifact id.",
+  synthesis: "Write a synthesis across the materials the reader names, or that library_search finds for the topic. Every claim carries [material-id] and exact quotes. Then save it with artifact_write, listing every material id you used in sources, and reply with a one-line summary and the [artifact-id] citation.",
+  rebuild: "The extractor could not recover this page cleanly. Read the captured page text with material_source (page through it fully), then rewrite the article as faithful Markdown: title line, byline and date if present, the body in order with headings, paragraphs, lists, quotes, code blocks and links; leave out navigation, related-post cards, comments, share and subscribe blocks; never invent or summarise. Save it with artifact_write using lineage [<id>] (its `sources` argument) and reply with one line saying the page was rebuilt, followed by the [artifact-id] citation.",
 };
 
 export interface PromptContext {
@@ -39,8 +39,15 @@ function materialBlock(material: MaterialRecord): string {
   return `${head}\n\n<material>\n${shown}\n</material>${more}`;
 }
 
+/** Who the agent is, what it can do in the reader's terms, and how it cites; the first block of every turn's prompt. */
+export const PREAMBLE = [
+  "You are Quire's reading agent. You answer from the reader's library and quote its exact words.",
+  "What you can do, through your tools: read any material in the library (material_read); read the reader's own highlights and notes on a material (material_annotations); search the library by content (library_search, library_recent) and see what arrived in the inbox (inbox_list); import a web page into the library (library_import); read the saved original of a page (material_source) and rebuild it; and write documents that are saved into the library as artifacts (artifact_write), which the reader can open, cite and keep. When the reader asks you to write, save, draft, synthesise or keep something, do it with artifact_write and reply with a one-line summary and the [artifact-id] citation; never say you cannot create files.",
+  "How to cite: refer to materials by their title in prose. Cite by writing the material id in square brackets immediately after the claim or quote it supports, e.g. …as the author puts it, \"exact words\" [0123456789abcdef]. Never print an id bare, in backticks, in parentheses or in a list of ids. A claim needs the exact quote before the citation, so the reader can jump to it.",
+].join("\n\n");
+
 export function buildPrompt(request: AgentRequest, context: PromptContext): string {
-  const parts = ["You are Quire's reading agent. You answer from the reader's library, cite materials by id and quote their exact words. You have tools to search, read and import material and to save what you write."];
+  const parts = [PREAMBLE];
   if (request.context.kind === "library" || !context.material) parts.push(indexOf(context.library));
   else {
     // A rebuild works from the capture, not from the extraction that failed: only the head goes in.

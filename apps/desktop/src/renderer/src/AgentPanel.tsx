@@ -9,6 +9,7 @@ import { truncate } from "./format";
 import { useAgent, type AgentTurnState, type AskFailure } from "./useAgent";
 import { useAgentSessions } from "./useAgentSessions";
 import { useMaterialTitles } from "./useMaterialTitles";
+import { clearQuoteJumpReport, useQuoteJumpReport } from "./quoteJump";
 
 interface QuickAction { label: string; task: AgentTask; /** Needs the user's words: arms the composer instead of sending. */ prompts?: boolean }
 const materialActions: QuickAction[] = [
@@ -48,7 +49,8 @@ export interface AgentPanelProps {
   openMaterialButton?: boolean | undefined;
   /** Wider transcript for a full-pane layout. */
   wide?: boolean | undefined;
-  onOpenMaterial: (id: string) => void;
+  /** Opens a cited material; a citation that quotes a passage passes it, so the reader can jump there. */
+  onOpenMaterial: (id: string, quote?: string) => void;
   onOpenLink: (url: string) => void;
   onClearSelection?: (() => void) | undefined;
   /** Opens the Settings sheet at the Agent section (Codex path, model), offered when the agent is unavailable. */
@@ -70,6 +72,9 @@ export function AgentPanel({ context, subject: rawSubject, sessionId, onSessionC
   const available = status?.available === true;
   const canSend = available && !running;
   const contextSessions = useMemo(() => sessions.forContext(context), [sessions, context]);
+  // A citation with a quote asked the reader to jump: the reader reports whether the passage was there.
+  const jumpReport = useQuoteJumpReport();
+  const openCitation = useCallback((id: string, quote?: string) => { clearQuoteJumpReport(); if (quote) onOpenMaterial(id, quote); else onOpenMaterial(id); }, [onOpenMaterial]);
 
   // Follow the stream: the transcript stays pinned to its end unless the reader scrolled up.
   const lastLength = useMemo(() => turns.reduce((sum, turn) => sum + turn.answer.length + turn.tools.length, 0), [turns]);
@@ -125,7 +130,8 @@ export function AgentPanel({ context, subject: rawSubject, sessionId, onSessionC
           {sessions.error ? <p role="alert" className="text-[12.5px] text-red-text">{sessions.error}</p> : null}
           {sessionError ? <p role="alert" className="text-[12.5px] text-red-text">{sessionError}</p> : null}
           {titlesError ? <p role="alert" className="text-[12.5px] text-red-text">{titlesError}</p> : null}
-          {turns.map((turn) => <TurnView key={turn.id} turn={turn} titleOf={titleOf} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onRetry={canSend ? () => void retry(turn) : undefined} />)}
+          {turns.map((turn) => <TurnView key={turn.id} turn={turn} titleOf={titleOf} onOpenLink={onOpenLink} onOpenMaterial={openCitation} onRetry={canSend ? () => void retry(turn) : undefined} />)}
+          {jumpReport && !jumpReport.found ? <p role="status" className="text-[12px] text-label-3">Opened; the quoted passage was not found</p> : null}
           {askFailure ? <AskFailureLine failure={askFailure} onRetry={canSend ? () => void retry({ task: askFailure.task, prompt: askFailure.text }) : undefined} /> : null}
           {stopError ? <p role="alert" className="text-[12.5px] text-red-text">{stopError}</p> : null}
         </div>
@@ -154,7 +160,7 @@ function AskFailureLine({ failure, onRetry }: { failure: AskFailure; onRetry: ((
 }
 
 /** One exchange: the user bubble, the tool lines, the answer (streaming or final), and how it ended. */
-function TurnView({ turn, titleOf, onOpenLink, onOpenMaterial, onRetry }: { turn: AgentTurnState; titleOf: (id: string) => string | undefined; onOpenLink: (url: string) => void; onOpenMaterial: (id: string) => void; onRetry: (() => void) | undefined }) {
+function TurnView({ turn, titleOf, onOpenLink, onOpenMaterial, onRetry }: { turn: AgentTurnState; titleOf: (id: string) => string | undefined; onOpenLink: (url: string) => void; onOpenMaterial: (id: string, quote?: string) => void; onRetry: (() => void) | undefined }) {
   const timedOut = turn.status === "failed" && turn.code === "TURN_TIMEOUT";
   return (
     <div className="grid gap-2">

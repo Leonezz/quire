@@ -52,6 +52,42 @@ describe("AgentMarkdown", () => {
     expect(isVerifiedCitation(REAL, { sources: [REAL], titleOf: () => undefined })).toBe(true);
   });
 
+  it("turns a backticked id and a bare library id into titled pills, and leaves other hex alone", () => {
+    const h = handlers();
+    render(<AgentMarkdown text={`Code \`${REAL}\`, bare ${REAL}, and a hash ${FAKE} nobody knows; \`${FAKE}\` in code is still a citation.`} {...h} sources={[REAL]} />);
+    const real = screen.getAllByRole("button", { name: "Open CSS Custom Highlight API" });
+    expect(real).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: `Open material ${FAKE} (unverified citation)` })).toHaveLength(1);
+    expect(screen.getByText(/and a hash deadbeefdeadbeef nobody knows/)).toBeTruthy();
+    expect(document.querySelector("code:not(pre code)")).toBeNull();
+    fireEvent.click(real[1]!);
+    expect(h.onOpenMaterial).toHaveBeenCalledWith(REAL);
+  });
+
+  it("does not read a bare id out of a longer word, url or hash", () => {
+    const h = handlers();
+    render(<AgentMarkdown text={`See https://x.org/${REAL}/v and ${REAL}abc and #${REAL} and v1.${REAL} and ${REAL}.md.`} {...h} />);
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("reads a bare id that ends a sentence or stands in parentheses", () => {
+    const h = handlers();
+    render(<AgentMarkdown text={`It is ${REAL}. Also (${REAL}), and ${REAL}: done.`} {...h} />);
+    expect(screen.getAllByRole("button", { name: "Open CSS Custom Highlight API" })).toHaveLength(3);
+  });
+
+  it("carries the quoted passage that ends right before the pill", () => {
+    const h = handlers();
+    const quote = "styling arbitrary text ranges on a document";
+    render(<AgentMarkdown text={`The page says “${quote}” [${REAL}]. Another line, "too short" [${REAL}], and a plain one [${REAL}].\n\n- “A **quoted** list item, stripped of markup” — ${REAL}`} {...h} />);
+    const pills = screen.getAllByRole("button", { name: "Open CSS Custom Highlight API" });
+    expect(pills.map((pill) => pill.getAttribute("data-quote"))).toEqual([quote, null, null, "A quoted list item, stripped of markup"]);
+    fireEvent.click(pills[0]!);
+    expect(h.onOpenMaterial).toHaveBeenLastCalledWith(REAL, quote);
+    fireEvent.click(pills[2]!);
+    expect(h.onOpenMaterial).toHaveBeenLastCalledWith(REAL);
+  });
+
   it("falls back to library membership for a stored turn without sources", () => {
     const h = handlers();
     render(<AgentMarkdown text={`Real [${REAL}] and fake [${FAKE}].`} {...h} />);

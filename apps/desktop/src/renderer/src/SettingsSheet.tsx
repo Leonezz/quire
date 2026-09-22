@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { Button, Kbd, NumberField, Segment, Segmented, Sheet, SheetDialog, Switch, TextField } from "@read/ui";
 import type { AgentStatus, Settings, SettingsPatch } from "../../shared/contracts";
 import { AboutSection } from "./AboutSection";
+import { agentStore, useAgentStatus } from "./agentStore";
 import { read } from "./api";
 import { KEYBOARD_MAP } from "./keyboardMap";
 import { ReadingControls } from "./ReadingSettings";
@@ -54,16 +55,13 @@ export function SettingsSheet({ open, onClose, section, onOpenLink }: { open: bo
   const [loadError, setLoadError] = useState<string | undefined>(undefined);
   const [errors, setErrors] = useState<FieldErrors>({});
   const [saved, setSaved] = useState<Field | undefined>(undefined);
-  const [agent, setAgent] = useState<AgentStatus | undefined>(undefined);
-  const [agentError, setAgentError] = useState<string | undefined>(undefined);
+  // The agent's status is the store's (the sidebar and every panel read the same one): saving the Codex path, model or
+  // effort reads it again, and so does the bridge's own change notice, so the line flips without reopening the sheet.
+  const { status: agent, statusError: agentError } = useAgentStatus();
+  const refreshAgent = agentStore.refreshStatus;
   const [copied, setCopied] = useState(false);
   // Text fields are edited locally and saved on blur / Enter, so a half-typed path is not rejected mid-way.
   const [drafts, setDrafts] = useState<{ codexPath: string; agentModel: string; syncIntervalMinutes: number; typesafeApiKey: string }>({ codexPath: "", agentModel: "", syncIntervalMinutes: 30, typesafeApiKey: "" });
-
-  const refreshAgent = useCallback(async () => {
-    try { setAgent(await read.agentStatus()); setAgentError(undefined); }
-    catch (cause: unknown) { setAgentError(cause instanceof Error ? cause.message : "Could not reach the agent."); }
-  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -96,10 +94,7 @@ export function SettingsSheet({ open, onClose, section, onOpenLink }: { open: bo
       setErrors((current) => ({ ...current, [field]: cause instanceof Error ? cause.message : `Could not save ${field}.` }));
     }
   };
-  const login = async () => {
-    try { setAgent(await read.agentLogin()); setAgentError(undefined); }
-    catch (cause: unknown) { setAgentError(cause instanceof Error ? cause.message : "Signing in failed."); }
-  };
+  const login = agentStore.login;
   const copyDirectory = async () => {
     if (!settings) return;
     await navigator.clipboard.writeText(settings.dataDirectory);

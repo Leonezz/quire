@@ -19,6 +19,9 @@ const AUTH_REASON = "Sign in to Codex to use the agent.";
 const CHUNK_MS = 70;
 /** A citation the scripted answer fabricates on purpose: it is never retrieved, so the pill must show as unverified. */
 const FABRICATED_ID = "deadbeefdeadbeef";
+/** The sample article (dev/sample-material.json) and a sentence from its body, so the quoted citation can jump to it. */
+const QUOTED_ID = "526130b61f003c33";
+const QUOTED_PASSAGE = "styling arbitrary text ranges on a document by using JavaScript to create the ranges";
 
 type Mode = "off" | "demo" | "auth";
 function mode(): Mode {
@@ -72,16 +75,20 @@ const taskIntro: Record<AgentTask, string> = {
   rebuild: "## Rebuilt",
 };
 
-/** The scripted answer: a heading, prose with emphasis, a fenced block, a list, a quote and a citation. */
-function scriptedAnswer(request: AgentRequest, subject: string, citation: string | undefined): string {
+/**
+ * The scripted answer: a heading, prose with emphasis, a fenced block, a list, a quote and citations in every
+ * form the agent writes them — `[id]`, an id in inline code, a bare id, and a quoted passage followed by its id.
+ */
+function scriptedAnswer(request: AgentRequest, subject: string, citation: string | undefined, quoted: boolean): string {
   const about = request.context.kind === "selection" ? `the passage “${request.context.quote.slice(0, 60)}${request.context.quote.length > 60 ? "…" : ""}”` : subject;
   const asked = request.text.trim() ? `You asked: *${request.text.trim()}*\n\n` : "";
-  const cite = citation ? ` A second source in your library agrees [${citation}].` : "";
+  const cite = citation ? ` A second source in your library agrees [${citation}]; its id in code reads \`${citation}\`, and bare in prose it is ${citation}.` : "";
+  const passage = quoted ? ` The spec page puts it as “${QUOTED_PASSAGE}” [${QUOTED_ID}].` : "";
   const fabricated = ` A claim about Safari cites [${FABRICATED_ID}], which was never retrieved.`;
   return [
     taskIntro[request.task],
     "",
-    `${asked}This is a **scripted preview answer** about ${about}; the desktop app streams a real one from Codex. The registry keeps \`Highlight\` objects by name, and \`::highlight()\` styles them without touching the DOM.${cite}${fabricated}`,
+    `${asked}This is a **scripted preview answer** about ${about}; the desktop app streams a real one from Codex. The registry keeps \`Highlight\` objects by name, and \`::highlight()\` styles them without touching the DOM.${cite}${passage}${fabricated}`,
     "",
     "```js",
     "const range = new Range();",
@@ -144,6 +151,8 @@ export interface PreviewM2Deps {
 
 /** The main process may ask the window to show a session (a notification was clicked); the preview never does. */
 export interface PreviewOpenSessionApi { onAgentOpenSession: (listener: (sessionId: string) => void) => () => void }
+/** The main process tells the window when the agent's availability changed (a setting was saved); the preview's never does. */
+export interface PreviewAgentStatusApi { onAgentStatusChanged: (listener: () => void) => () => void }
 
 interface ScriptedRun {
   turnId: string;
@@ -158,7 +167,7 @@ interface ScriptedRun {
   finish: (result: { ok: true } | { ok: false; code: "TURN_INTERRUPTED"; message: string }) => void;
 }
 
-export function createPreviewM2(deps: PreviewM2Deps): ReadApiM2 & PreviewOpenSessionApi {
+export function createPreviewM2(deps: PreviewM2Deps): ReadApiM2 & PreviewOpenSessionApi & PreviewAgentStatusApi {
   const listeners = new Set<(event: AgentEvent) => void>();
   const emit = (event: AgentEvent) => { for (const listener of listeners) listener(event); };
   const runs = new Map<string, ScriptedRun>();
@@ -188,6 +197,7 @@ export function createPreviewM2(deps: PreviewM2Deps): ReadApiM2 & PreviewOpenSes
     listAgentRuns: async () => [...runs.entries()].map(([sessionId, run]) => ({ sessionId, turnId: run.turnId, threadId: run.threadId, task: run.task, prompt: run.prompt, answer: run.answer, tools: run.tools.map((tool) => ({ ...tool })), startedAt: run.startedAt })),
     onAgentEvent: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
     onAgentOpenSession: () => () => undefined,
+    onAgentStatusChanged: () => () => undefined,
     agentAsk: async (request) => {
       const current = mode();
       if (current === "auth") return { ok: false, code: "AUTH_REQUIRED", message: AUTH_REASON };
@@ -203,9 +213,10 @@ export function createPreviewM2(deps: PreviewM2Deps): ReadApiM2 & PreviewOpenSes
       appendTurn(sessionId, { role: "user", text: request.text, task: request.task });
       const rebuild = request.task === "rebuild" && material ? { material, artifact: rebuiltArtifactOf(material) } : undefined;
       const citation = materials.find((candidate) => candidate.id !== contextId && /^[a-f0-9]{16}$/.test(candidate.id))?.id;
-      // What the scripted turn "retrieved": the material asked about and the one it cites (or wrote).
-      const sources = rebuild ? [rebuild.material.id, rebuild.artifact.id] : [contextId, citation].filter((id): id is string => id !== undefined);
-      const text = rebuild ? rebuildAnswer(rebuild.material, rebuild.artifact.id) : scriptedAnswer(request, subjectOf(request.context, materials), citation);
+      const quoted = materials.some((candidate) => candidate.id === QUOTED_ID);
+      // What the scripted turn "retrieved": the material asked about, the one it cites (or wrote) and the one it quotes.
+      const sources = rebuild ? [rebuild.material.id, rebuild.artifact.id] : [contextId, citation, quoted ? QUOTED_ID : undefined].filter((id): id is string => id !== undefined);
+      const text = rebuild ? rebuildAnswer(rebuild.material, rebuild.artifact.id) : scriptedAnswer(request, subjectOf(request.context, materials), citation, quoted);
       const threadId = request.threadId ?? session.threadId ?? newId("thread");
       const turnId = newId("turn");
       const chunks = chunksOf(text);

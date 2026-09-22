@@ -44,6 +44,11 @@ describe("agentTools", () => {
     }
     expect(agentTools.map((t) => t.name)).toEqual(["library_search", "library_recent", "material_read", "material_annotations", "inbox_list", "library_import", "material_source", "artifact_write"]);
     expect(agentTools.find((t) => t.name === "material_read")?.description).toMatch(/exact words/);
+    expect(agentTools.find((t) => t.name === "material_read")?.description).toMatch(/\[0123456789abcdef\]/);
+    const artifact = agentTools.find((t) => t.name === "artifact_write")?.description ?? "";
+    expect(artifact).toContain("cite it as [id] after a one-line summary");
+    expect(artifact).not.toContain("tell the reader the id");
+    expect(agentTools.find((t) => t.name === "library_import")?.description).toContain("cite the new material as [id]");
   });
 });
 

@@ -1,6 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname } from "node:path";
 import type { Settings, SettingsPatch } from "../../shared/contracts";
+import { codexBinaryAt, expandCodexPath } from "./codex-path";
 import { openSecret, sealSecret, type Encryptor } from "./secrets";
 
 // One JSON file. Read into memory once; every consumer (scheduler, fetch, codex, the reflow)
@@ -56,6 +58,8 @@ function validApiKey(value: unknown): string {
 
 export interface SettingsStoreOptions {
   exists?: (path: string) => boolean;
+  /** What a leading "~" in codexPath expands to; the home directory by default. */
+  home?: string;
   /** A stored value that no longer validates is reported here, never dropped silently. */
   warn?: (message: string) => void;
   /** Seals and opens the TypeSafe key; without one no key can be stored or read (an explicit error, not an empty key). */
@@ -71,11 +75,13 @@ const noEncryptor: Encryptor = {
 export class SettingsStore {
   private current: Stored;
   private readonly exists: (path: string) => boolean;
+  private readonly home: string;
   private readonly warn: (message: string) => void;
   private readonly encryptor: Encryptor;
 
   constructor(private readonly path: string, private readonly dataDirectory: string, options: SettingsStoreOptions = {}) {
     this.exists = options.exists ?? existsSync;
+    this.home = options.home ?? homedir();
     this.warn = options.warn ?? (() => {});
     this.encryptor = options.encryptor ?? noEncryptor;
     this.current = this.load();
@@ -148,11 +154,14 @@ export class SettingsStore {
     };
   }
 
+  /** Stored as what will run: trimmed, "~" expanded, a directory resolved to the codex binary inside it (codex-path.ts). */
   private validCodexPath(value: unknown): string {
     if (typeof value !== "string" || value.length > MAX_PATH_LENGTH) throw new SettingsError(`codexPath must be a path of at most ${MAX_PATH_LENGTH} characters, or empty to auto-detect.`);
-    const trimmed = value.trim();
-    if (trimmed && !this.exists(trimmed)) throw new SettingsError(`codexPath points to ${trimmed}, which does not exist. Leave it empty to auto-detect the codex binary.`);
-    return trimmed;
+    const expanded = expandCodexPath(value, this.home);
+    if (expanded.length === 0) return "";
+    const binary = codexBinaryAt(expanded, this.exists);
+    if (!binary) throw new SettingsError(`codexPath points to ${expanded}, which does not exist. Leave it empty to auto-detect the codex binary.`);
+    return binary;
   }
 
   private write() {

@@ -7,6 +7,7 @@ import { flush, mockRead } from "./testApi";
 const api = vi.hoisted(() => ({ read: {} as ReturnType<typeof import("./testApi").mockRead> }));
 vi.mock("./api", () => ({ get read() { return api.read; }, isPreview: true }));
 
+import { agentStore } from "./agentStore";
 import { JEV_PRIVACY_NOTE, SettingsSheet } from "./SettingsSheet";
 import { textViewReportText } from "./TextViewBanner";
 
@@ -37,7 +38,40 @@ async function mount(initial: Settings) {
   return handles;
 }
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); agentStore.stop(); vi.restoreAllMocks(); });
+
+describe("SettingsSheet › Agent › status", () => {
+  it("reads the agent's status again after the Codex path is saved, so the line flips without reopening", async () => {
+    const { updateSettings } = await mount(base);
+    expect(screen.getByText("Codex is not installed.")).toBeTruthy();
+    api.read.agentStatus = vi.fn(async () => ({ available: true, running: 0, version: "0.9", account: "me@example.org" }));
+    const field = screen.getByLabelText("Codex path") as HTMLInputElement;
+    fireEvent.change(field, { target: { value: "/opt/codex/bin/codex" } });
+    await act(async () => { fireEvent.keyDown(field, { key: "Enter" }); await flush(); });
+    expect(updateSettings).toHaveBeenCalledWith({ codexPath: "/opt/codex/bin/codex" });
+    expect(api.read.agentStatus).toHaveBeenCalled();
+    expect(screen.getByText("Codex 0.9 · me@example.org")).toBeTruthy();
+    expect(agentStore.getState().status?.available).toBe(true);
+  });
+
+  it("follows the bridge's own change notice while open", async () => {
+    let notify: (() => void) | undefined;
+    api.read = mockRead({
+      getSettings: vi.fn(async () => base), updateSettings: vi.fn(async () => base),
+      agentStatus: vi.fn(async () => ({ available: false, reason: "Codex is not installed.", running: 0 })),
+      getUpdateState: vi.fn(async () => ({ phase: "idle" as const, current: "0.1.0" })),
+      listAgentRuns: vi.fn(async () => []),
+      onAgentStatusChanged: (listener: () => void) => { notify = listener; return () => { notify = undefined; }; },
+    } as Partial<ReturnType<typeof mockRead>>);
+    await act(() => agentStore.start());
+    render(<SettingsSheet open onClose={() => undefined} section="agent" onOpenLink={() => undefined} />);
+    await act(flush);
+    expect(screen.getByText("Codex is not installed.")).toBeTruthy();
+    api.read.agentStatus = vi.fn(async () => ({ available: true, running: 0, version: "0.9" }));
+    await act(async () => { notify?.(); await flush(); });
+    expect(screen.getByText("Codex 0.9")).toBeTruthy();
+  });
+});
 
 describe("SettingsSheet › Agent › TypeSafe key and reflow judge", () => {
   it("offers a password field without a stored key, keeps Jev disabled, and shows the privacy note", async () => {

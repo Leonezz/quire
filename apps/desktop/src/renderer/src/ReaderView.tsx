@@ -20,6 +20,7 @@ import type { MaterialRecord, MaterialViewContent } from "../../shared/contracts
 import { mirroredViews, resolveViewAnnotations } from "./mirroredAnnotations";
 import { TextViewBanner } from "./TextViewBanner";
 import type { MaterialViewController } from "./useMaterialView";
+import { flashQuoteRange, reportQuoteJump, resolveQuoteRange, scrollQuoteIntoView, type MaterialQuoteJump } from "./quoteJump";
 
 type OutlineEntry = { id: string; label: string; level: number };
 
@@ -71,13 +72,15 @@ export interface ReaderProps {
   onJumpDone: () => void;
   /** The Notes panel jumps to a note on another view: the owner switches the view and hands the jump to the next reader. */
   onJumpAcross: (annotation: Annotation) => void;
+  /** A passage a citation quoted: revealed and flashed once the body is up, and reported through quoteJump.ts. */
+  jumpToQuote?: MaterialQuoteJump | undefined;
   /** The panel that was open before a view switch, and where the reader reports its own. */
   initialPanel?: ReaderPanel | null | undefined;
   onPanelChange?: ((panel: ReaderPanel | null) => void) | undefined;
   onBack?: (() => void) | undefined;
   onOpenLink: (url: string) => void;
-  /** Opens another library material (a citation in an agent answer, an artifact's source, the rebuilt version). */
-  onOpenMaterial: (id: string) => void;
+  /** Opens another library material (a citation in an agent answer, an artifact's source, the rebuilt version); a citation may pass the passage it quotes. */
+  onOpenMaterial: (id: string, quote?: string) => void;
   /** Reports the scrolled fraction (0–1) so the owner can record a finished reading. */
   onProgress?: ((fraction: number) => void) | undefined;
   /** The Info panel saved metadata: the owner replaces its record so the header and body follow. */
@@ -87,7 +90,7 @@ export interface ReaderProps {
   trailing?: ReactNode;
 }
 
-export function ReaderView({ material, content, views, pendingJump, onJumpDone, onJumpAcross, initialPanel, onPanelChange, onBack, onOpenLink, onOpenMaterial, onProgress, onMaterialSaved, onOpenSettings, trailing }: ReaderProps) {
+export function ReaderView({ material, content, views, pendingJump, onJumpDone, onJumpAcross, jumpToQuote, initialPanel, onPanelChange, onBack, onOpenLink, onOpenMaterial, onProgress, onMaterialSaved, onOpenSettings, trailing }: ReaderProps) {
   const viewportRef = useRef<HTMLDivElement>(null);
   const onProgressRef = useRef(onProgress);
   onProgressRef.current = onProgress;
@@ -209,7 +212,7 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
   useEffect(() => {
     const frame = requestAnimationFrame(() => { setOutline(outlineOf(bodyRef.current)); setBodyGeneration((value) => value + 1); });
     return () => cancelAnimationFrame(frame);
-  }, [material.id]);
+  }, [identity]);
 
   // The jump handed over from another view runs once the body has rendered (bodyGeneration moves past 0).
   useEffect(() => {
@@ -219,6 +222,17 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
     onJumpDone();
     // jumpTo reads the current body through refs; the jump is keyed by the request and the body generation.
   }, [pendingJump, bodyGeneration, onJumpDone, shownAnnotation]);
+
+  // A citation's quote: found in the rendered body, it is scrolled to the middle and marked for a moment; each request runs once.
+  const handledQuoteJump = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    const root = bodyRef.current;
+    if (!jumpToQuote || bodyGeneration === 0 || !root || jumpToQuote.materialId !== material.id || handledQuoteJump.current === jumpToQuote.nonce) return;
+    handledQuoteJump.current = jumpToQuote.nonce;
+    const range = resolveQuoteRange(root, jumpToQuote.quote);
+    if (range) { scrollQuoteIntoView(root, range); flashQuoteRange(root, range); }
+    reportQuoteJump({ materialId: material.id, quote: jumpToQuote.quote, found: range !== undefined });
+  }, [jumpToQuote, bodyGeneration, material.id]);
 
   useEffect(() => {
     const viewport = viewportRef.current;
@@ -273,8 +287,8 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
         {findOpen ? <FindBar root={bodyRef.current} generation={bodyGeneration} onClose={() => setFindOpen(false)} /> : null}
         <SelectionToolbar root={bodyRef.current} viewport={viewportRef.current} capture={captureSelection} onHighlight={onHighlight} onNote={(capture) => void onNote(capture)} onCopy={onCopyCapture} onAsk={(capture) => { setAsked(capture); setPanel("agent"); }} />
         {outline.length > 1 ? (
-          <div className="pointer-events-none absolute inset-y-6 right-5 z-10 flex items-center">
-            <TocRail aria-label="Contents" entries={outline.map((entry) => ({ id: entry.id, label: entry.label, level: entry.level - 1 }))} activeId={activeHeading} pinned={tocPinned} onSelect={(id) => document.getElementById(id)?.scrollIntoView({ block: "start", behavior: "smooth" })} />
+          <div className="pointer-events-none absolute inset-y-6 right-1.5 z-10 flex items-center">
+            <TocRail aria-label="Contents" entries={outline.map((entry) => ({ id: entry.id, label: entry.label, level: entry.level - 1 }))} activeId={activeHeading} pinned={tocPinned} resting="hidden" onSelect={(id) => document.getElementById(id)?.scrollIntoView({ block: "start", behavior: "smooth" })} />
           </div>
         ) : null}
         <div ref={viewportRef} className="reader-viewport overflow-auto px-14 pb-[120px] pt-12" style={prefsStyle(prefs)}>

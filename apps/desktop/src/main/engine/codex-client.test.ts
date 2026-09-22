@@ -50,7 +50,7 @@ function harness(script: (message: Json, fake: FakeProcess) => void, options: { 
     if (args[0] === "--version") setTimeout(() => { fake.stdout.write("codex-cli 0.144.1\n"); fake.exit(0); }, 0);
     return fake;
   };
-  const client = new CodexClient({ spawn, env: { CODEX_PATH: "/fake/codex", HOME: "/home/reader" }, exists: () => true, onDiagnostic: (m) => diagnostics.push(m), sleep: () => Promise.resolve(), ...options });
+  const client = new CodexClient({ spawn, env: { CODEX_PATH: "/fake/codex", HOME: "/home/reader" }, exists: (p) => p === "/fake/codex", onDiagnostic: (m) => diagnostics.push(m), sleep: () => Promise.resolve(), ...options });
   return { client, processes, diagnostics, server: () => processes.find((p) => p.args[0] === "app-server")! };
 }
 
@@ -84,6 +84,20 @@ describe("resolveCodexBinary", () => {
     expect(error).toBeInstanceOf(CodexError);
     expect((error as CodexError).code).toBe("AGENT_UNAVAILABLE");
     expect((error as CodexError).message).toMatch(/npm i -g @openai\/codex/);
+  });
+
+  it("trims and expands ~ in a configured path, and accepts a directory holding codex or the path of the npm shim", () => {
+    const shim = "/home/reader/.npm-global/lib/node_modules/@openai/codex/bin/codex.js";
+    const exists = (p: string) => p === "/home/reader/.local/bin/codex" || p === shim;
+    expect(resolveCodexBinary({ HOME: "/home/reader" }, exists, " ~/.local/bin/codex ")).toBe("/home/reader/.local/bin/codex");
+    expect(resolveCodexBinary({ HOME: "/home/reader" }, exists, "~/.local/bin")).toBe("/home/reader/.local/bin/codex");
+    expect(resolveCodexBinary({ HOME: "/home/reader" }, exists, "/home/reader/.local/bin/")).toBe("/home/reader/.local/bin/codex");
+    expect(resolveCodexBinary({ HOME: "/home/reader" }, exists, shim)).toBe(shim);
+    expect(resolveCodexBinary({ HOME: "/home/reader", CODEX_PATH: "~/.local/bin" }, exists)).toBe("/home/reader/.local/bin/codex");
+    // Blank means "not configured": the search continues to the install locations and PATH, and says what to install.
+    expect(() => resolveCodexBinary({ HOME: "/home/reader" }, exists, "   ")).toThrow(/Codex CLI was not found/);
+    expect(() => resolveCodexBinary({ HOME: "/home/reader" }, exists, "~/elsewhere")).toThrow(/Codex path in Settings \(\/home\/reader\/elsewhere\) does not exist/);
+    expect(() => resolveCodexBinary({ HOME: "/home/reader", CODEX_PATH: "~/gone" }, exists)).toThrow(/CODEX_PATH points to \/home\/reader\/gone/);
   });
 });
 
@@ -302,7 +316,7 @@ describe("CodexClient", () => {
     let configured = "";
     const commands: string[] = [];
     const spawn: Spawn = (command, args) => { commands.push(command); const fake = new FakeProcess(args, () => {}); setTimeout(() => { fake.stdout.write("codex-cli 0.144.1\n"); fake.exit(0); }, 0); return fake; };
-    const client = new CodexClient({ spawn, env: { CODEX_PATH: "/env/codex" }, exists: () => true, configuredPath: () => configured });
+    const client = new CodexClient({ spawn, env: { CODEX_PATH: "/env/codex" }, exists: (p) => p === "/env/codex" || p === "/settings/codex", configuredPath: () => configured });
     expect(client.binary()).toBe("/env/codex");
     await client.version();
     configured = "/settings/codex";

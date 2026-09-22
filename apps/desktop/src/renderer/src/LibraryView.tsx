@@ -13,6 +13,7 @@ import { isTypingTarget, timeOf } from "./format";
 import { KIND_LABELS, publicationOf } from "./materialMeta";
 import { viewLabel } from "./materialViews";
 import type { Library } from "./useLibrary";
+import type { MaterialQuoteJump } from "./quoteJump";
 
 /** "Preprint · arxiv.org · Web + PDF": the bibliographic kind, then the publication when there is one, else where it came from, then the stored views when there are several. */
 export function rowSource(item: MaterialSummary): string {
@@ -35,7 +36,9 @@ export interface LibraryViewProps {
   selected: Selection;
   onSelectionChange: (selection: Selection) => void;
   onOpenLink: (url: string) => void;
-  onOpenMaterial: (id: string) => void;
+  onOpenMaterial: (id: string, quote?: string) => void;
+  /** A passage to reveal in the selected material (a citation's quote); handed to its reader. */
+  jumpToQuote?: MaterialQuoteJump | undefined;
   onOpenSettings: () => void;
   shell: ShellSlots;
   /** The scope is narrower than the whole library (a cut or a tag): an empty list says so. */
@@ -47,7 +50,7 @@ export interface LibraryViewProps {
  * after asking, an action bar at the bottom while something is selected), the reader of the one
  * selected material on the right.
  */
-export function LibraryView({ library, selected, onSelectionChange, onOpenLink, onOpenMaterial, onOpenSettings, shell, narrowed }: LibraryViewProps) {
+export function LibraryView({ library, selected, onSelectionChange, onOpenLink, onOpenMaterial, jumpToQuote, onOpenSettings, shell, narrowed }: LibraryViewProps) {
   const { materials, error, loading } = library;
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -117,7 +120,7 @@ export function LibraryView({ library, selected, onSelectionChange, onOpenLink, 
       </ListColumn>
       <ContentColumn>
         {chosen ? (
-          <ErrorBoundary key={chosen.id} label="The reader"><MaterialReader id={chosen.id} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onOpenSettings={onOpenSettings} trailing={shell.trailing} /></ErrorBoundary>
+          <ErrorBoundary key={chosen.id} label="The reader"><MaterialReader id={chosen.id} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} jumpToQuote={jumpToQuote} onOpenSettings={onOpenSettings} trailing={shell.trailing} /></ErrorBoundary>
         ) : (
           <ContentPane toolbar={<ContentToolbar trailing={shell.trailing} />} panel={shell.agentPanel}>
             <EmptySentence>{ids.length > 1 ? `${ids.length} materials selected — ⌫ deletes them, or select one to read it.` : "Select something to read."}</EmptySentence>

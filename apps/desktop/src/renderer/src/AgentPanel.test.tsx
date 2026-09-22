@@ -9,6 +9,7 @@ vi.mock("./api", () => ({ get read() { return api.read; }, isPreview: true }));
 
 import { agentStore } from "./agentStore";
 import { AgentPanel } from "./AgentPanel";
+import { clearQuoteJumpReport, reportQuoteJump } from "./quoteJump";
 
 /** A bridge that is available and empty, whose `agentAsk` the test settles by hand. */
 function setup(agentAsk: () => Promise<AgentResult>) {
@@ -28,9 +29,19 @@ async function mountPanel() {
   await act(flush);
 }
 
-afterEach(() => { cleanup(); agentStore.stop(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); agentStore.stop(); clearQuoteJumpReport(); vi.restoreAllMocks(); });
 
 describe("AgentPanel", () => {
+  it("says quietly when a citation's quoted passage was not found, until the next citation is pressed", async () => {
+    setup(async () => ({ ok: true, sessionId: "s1", turnId: "t1" }));
+    await mountPanel();
+    expect(screen.queryByRole("status")).toBeNull();
+    act(() => reportQuoteJump({ materialId: "526130b61f003c33", quote: "a passage that is not there", found: false }));
+    expect(screen.getByRole("status").textContent).toBe("Opened; the quoted passage was not found");
+    act(() => reportQuoteJump({ materialId: "526130b61f003c33", quote: "a passage that is there", found: true }));
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
   it("shows the question and Thinking… in the same commit as the quick action, before the bridge answers", async () => {
     const asked = deferred<AgentResult>();
     setup(() => asked.promise);

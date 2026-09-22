@@ -14,7 +14,7 @@ import type { SettingsPatch, SettingsStore } from "./engine/settings";
 // M3 handlers: library management, settings, agent sessions. Same rule as index.ts: validate
 // every argument before touching a store, broadcast after every change the renderer must see.
 
-export type M3Channel = "library:changed" | "sources:changed" | "agent:sessions:changed";
+export type M3Channel = "library:changed" | "sources:changed" | "agent:sessions:changed" | "agent:status:changed";
 
 export interface M3Deps {
   store: MaterialStore;
@@ -24,6 +24,7 @@ export interface M3Deps {
   events: EventStore;
   settings: SettingsStore;
   sessions: SessionStore;
+  /** agent:status:changed goes out after any agent setting changed, so the renderer re-reads agentStatus(). */
   broadcast: (channel: M3Channel) => void;
   /** The codexPath changed: the running app-server must be restarted with the new binary. */
   onCodexPathChanged: () => void;
@@ -39,6 +40,8 @@ const META_KEYS = ["kind", "title", "shortTitle", "creators", "abstract", "publi
 const KINDS: readonly NonNullable<LibraryFilter["kind"]>[] = ["all", "articles", "pdf", "artifact", "feed"];
 const SORTS: readonly NonNullable<LibraryFilter["sort"]>[] = ["fetched", "published", "title"];
 const SETTING_KEYS = ["syncIntervalMinutes", "keepCapture", "codexPath", "agentModel", "agentReasoningEffort", "checkUpdatesAutomatically", "reflowJudge", "typesafeApiKey"] as const;
+/** The settings the agent's status depends on. */
+const AGENT_SETTING_KEYS = ["codexPath", "agentModel", "agentReasoningEffort"] as const;
 
 function materialId(value: unknown): string {
   if (typeof value !== "string" || !/^[a-f0-9]{16}$/.test(value)) throw new Error("IPC_INVALID_ID");
@@ -163,6 +166,7 @@ export function registerM3Handlers(deps: M3Deps): void {
     const before = settings.get();
     const after = settings.update(settingsPatch(patch));
     if (before.codexPath !== after.codexPath) deps.onCodexPathChanged();
+    if (AGENT_SETTING_KEYS.some((key) => before[key] !== after[key])) broadcast("agent:status:changed");
     return after;
   });
 

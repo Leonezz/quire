@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { createInterface } from "node:readline";
 import type { Readable } from "node:stream";
+import { codexBinaryAt, expandCodexPath } from "./codex-path";
 import { CodexError, TurnBinding, isObject, str, type Json, type ToolReply, type TurnHost, type TurnOptions, type TurnOutcome } from "./codex-turns";
 
 // A client for `codex app-server`: one JSON object per line on stdio, JSON-RPC shaped
@@ -52,16 +53,23 @@ const THREAD_BUSY = "The agent is still answering in this conversation; wait for
 
 const defaultSpawn: Spawn = (command, args, options) => nodeSpawn(command, args, { env: options.env, stdio: ["pipe", "pipe", "pipe"] });
 
-/** The settings' path first, then CODEX_PATH, then the usual install locations, then PATH. Missing everywhere is an actionable error, not a later ENOENT. */
+/**
+ * The settings' path first, then CODEX_PATH, then the usual install locations, then PATH. Missing everywhere is an
+ * actionable error, not a later ENOENT. A configured path is trimmed, "~" is expanded, and a directory holding a
+ * codex binary (or the npm shim) stands for that binary (codex-path.ts).
+ */
 export function resolveCodexBinary(env: NodeJS.ProcessEnv, exists: (path: string) => boolean, configuredPath?: string): string {
-  const fromSettings = str(configuredPath);
+  const home = str(env.HOME) ?? homedir();
+  const fromSettings = expandCodexPath(configuredPath ?? "", home);
   if (fromSettings) {
-    if (exists(fromSettings)) return fromSettings;
+    const binary = codexBinaryAt(fromSettings, exists);
+    if (binary) return binary;
     throw new CodexError("AGENT_UNAVAILABLE", `The Codex path in Settings (${fromSettings}) does not exist. Fix it or clear it to auto-detect.`);
   }
-  const configured = str(env.CODEX_PATH);
+  const configured = expandCodexPath(env.CODEX_PATH ?? "", home);
   if (configured) {
-    if (exists(configured)) return configured;
+    const binary = codexBinaryAt(configured, exists);
+    if (binary) return binary;
     throw new CodexError("AGENT_UNAVAILABLE", `CODEX_PATH points to ${configured}, which does not exist. ${INSTALL_HINT}`);
   }
   const fixed = ["/opt/homebrew/bin/codex", "/usr/local/bin/codex"].find((candidate) => exists(candidate));

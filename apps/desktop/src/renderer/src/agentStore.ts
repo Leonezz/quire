@@ -51,6 +51,8 @@ export interface AgentStoreApi {
   listAgentRuns: () => Promise<AgentRun[]>;
   onAgentEvent: (listener: (event: AgentEvent) => void) => () => void;
   onAgentSessionsChanged: (listener: () => void) => () => void;
+  /** The bridge says the agent's availability changed (a setting was saved, a login landed): the status is read again. Absent on an older bridge. */
+  onAgentStatusChanged?: ((listener: () => void) => () => void) | undefined;
   /** Whether the session now holds an agent turn recorded at or after `since`. */
   sessionSettled: (sessionId: string, since: string) => Promise<boolean>;
 }
@@ -181,7 +183,8 @@ export function createAgentStore(api: AgentStoreApi) {
       if (stop) return;
       const offEvent = api.onAgentEvent(onEvent);
       const offSessions = api.onAgentSessionsChanged(onSessionsChanged);
-      stop = () => { offEvent(); offSessions(); };
+      const offStatus = api.onAgentStatusChanged?.(() => { void refreshStatus(); });
+      stop = () => { offEvent(); offSessions(); offStatus?.(); };
       void refreshStatus();
       await syncRuns();
     },
@@ -242,6 +245,7 @@ export const agentStore: AgentStore = createAgentStore({
   listAgentRuns: () => read.listAgentRuns(),
   onAgentEvent: (listener) => read.onAgentEvent(listener),
   onAgentSessionsChanged: (listener) => read.onAgentSessionsChanged(listener),
+  onAgentStatusChanged: (listener) => onAgentStatusChanged(listener),
   sessionSettled,
 });
 
@@ -288,6 +292,13 @@ export function useAgentStatus(): { status: AgentStatus | undefined; statusError
 }
 
 interface OpenSessionApi { onAgentOpenSession: (listener: (sessionId: string) => void) => () => void }
+interface StatusChangedApi { onAgentStatusChanged: (listener: () => void) => () => void }
+
+/** The main process says the agent's availability changed (Settings saved a Codex path, a login landed); a no-op on a bridge without it. */
+export function onAgentStatusChanged(listener: () => void): () => void {
+  const bridge = read as unknown as Partial<StatusChangedApi>;
+  return typeof bridge.onAgentStatusChanged === "function" ? bridge.onAgentStatusChanged(listener) : () => undefined;
+}
 
 /** The main process asks the window to show a session (a notification was clicked); a no-op on a bridge without it. */
 export function onAgentOpenSession(listener: (sessionId: string) => void): () => void {

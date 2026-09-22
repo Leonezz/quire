@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentEvent, MaterialRecord } from "../../shared/contracts";
 import { AgentService, QUIT_MESSAGE, type AgentClient, type AgentServiceDeps, type AgentSettings } from "./agent";
-import { buildPrompt } from "./agent-prompt";
+import { PREAMBLE, buildPrompt } from "./agent-prompt";
 import { SessionStore } from "./agent-sessions";
 import { CodexError, type TurnOptions, type TurnOutcome } from "./codex-client";
 import { openDatabase, type Database } from "./db";
@@ -106,6 +106,20 @@ function service(client: AgentClient, opened: string[] = [], settings?: AgentSet
 const library = { context: { kind: "library" as const }, task: "ask" as const };
 
 describe("buildPrompt", () => {
+  it("opens with what the agent can do in the reader's terms and how to cite", () => {
+    const prompt = buildPrompt({ context: { kind: "library" }, task: "ask", text: "Draft a note on momentum." }, { library: [] });
+    expect(prompt.startsWith(PREAMBLE)).toBe(true);
+    for (const tool of ["material_read", "material_annotations", "library_search", "library_import", "material_source", "artifact_write"]) expect(PREAMBLE).toContain(tool);
+    expect(PREAMBLE).toContain("write, save, draft, synthesise or keep something, do it with artifact_write and reply with a one-line summary and the [artifact-id] citation; never say you cannot create files");
+    expect(PREAMBLE).toContain("refer to materials by their title in prose");
+    expect(PREAMBLE).toContain('"exact words" [0123456789abcdef]');
+    expect(PREAMBLE).toContain("Never print an id bare, in backticks, in parentheses or in a list of ids");
+    expect(PREAMBLE).toContain("A claim needs the exact quote before the citation");
+    for (const task of ["synthesis", "rebuild"] as const) expect(buildPrompt({ context: { kind: "library" }, task, text: "" }, { library: [] })).toContain("[artifact-id] citation");
+    expect(buildPrompt({ context: { kind: "library" }, task: "related", text: "" }, { library: [] })).toContain("citing it as [id]");
+    expect(buildPrompt({ context: { kind: "library" }, task: "rebuild", text: "" }, { library: [] })).not.toContain("reply with only the artifact id");
+  });
+
   it("indexes the library for library questions and appends the reader's words", () => {
     const prompt = buildPrompt({ context: { kind: "library" }, task: "ask", text: "What did I read about momentum?" }, { library: summaries });
     expect(prompt).toMatch(/^You are Quire's reading agent/);

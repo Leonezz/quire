@@ -21,6 +21,7 @@ import { applyTheme, loadPrefs } from "./readingPrefs";
 import { useAgentSessions } from "./useAgentSessions";
 import { useLibrary, type LibraryFocus } from "./useLibrary";
 import { useLists } from "./useLists";
+import type { MaterialQuoteJump } from "./quoteJump";
 import { CUT_LABELS, scopeFamily, useScope, type Scope } from "./useScope";
 
 const SIDEBAR_KEY = "read:layout:sidebar-collapsed";
@@ -62,6 +63,9 @@ export function App() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [settings, setSettings] = useState<{ open: boolean; section?: SettingsSection | undefined }>({ open: false });
   const [routeError, setRouteError] = useState<string | undefined>(undefined);
+  // A citation that quotes a passage: the reader of that material jumps to it once its body is up (see quoteJump.ts).
+  const [quoteJump, setQuoteJump] = useState<MaterialQuoteJump | undefined>(undefined);
+  const jumpNonce = useRef(0);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(loadSidebarCollapsed);
   const sidebarRef = useSplitPanelRef();
   const shellSizes = useSplitSizes("shell");
@@ -135,7 +139,12 @@ export function App() {
   useEffect(() => { if (sourceSelected === undefined && lists.sources[0]) setSourceSelected(lists.sources[0].id); }, [lists.sources, sourceSelected]);
 
   // Opening a material from elsewhere (search, a citation, "Open in Library") must show it, whatever the Library was narrowed to.
-  const showMaterial = useCallback((id: string) => { library.setQuery(""); setScope({ kind: "library", id: "all" }); setLibrarySelected(new Set([id])); }, [library, setScope]);
+  // A quote rides along as a jump request; the same material stays mounted, so the jump happens in place.
+  const showMaterial = useCallback((id: string, quote?: string) => {
+    library.setQuery(""); setScope({ kind: "library", id: "all" }); setLibrarySelected(new Set([id]));
+    jumpNonce.current += 1;
+    setQuoteJump(quote ? { materialId: id, quote, nonce: jumpNonce.current } : undefined);
+  }, [library, setScope]);
   const submitUrl = async (url: string) => {
     setAddBusy(true); setAddError(undefined);
     const result = await read.openUrl(url);
@@ -216,7 +225,7 @@ export function App() {
       case "queue":
         return <QueueView items={lists.queue} selectedId={queueSelected} onSelect={setQueueSelected} refresh={lists.refresh} onOpenLink={openLink} onOpenMaterial={showMaterial} shell={shell} error={shellError} />;
       case "library": case "tag":
-        return <LibraryView library={library} selected={librarySelected} onSelectionChange={setLibrarySelected} onOpenLink={openLink} onOpenMaterial={showMaterial} onOpenSettings={() => openSettings("agent")} shell={shell} narrowed={scope.kind === "tag" || scope.id !== "all"} />;
+        return <LibraryView library={library} selected={librarySelected} onSelectionChange={setLibrarySelected} onOpenLink={openLink} onOpenMaterial={showMaterial} jumpToQuote={quoteJump} onOpenSettings={() => openSettings("agent")} shell={shell} narrowed={scope.kind === "tag" || scope.id !== "all"} />;
       case "agent":
         return <AgentView sessions={agentSessions} requestedSession={requestedSession} onOpenMaterial={showMaterial} onOpenLink={openLink} onOpenSettings={() => openSettings("agent")} shell={shell} />;
       case "sources":

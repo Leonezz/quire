@@ -8,6 +8,7 @@ import { PdfReaderView } from "./PdfReaderView";
 import type { ReaderPanel } from "./ReaderInspector";
 import { ReaderView } from "./ReaderView";
 import { useMaterialView } from "./useMaterialView";
+import type { MaterialQuoteJump } from "./quoteJump";
 
 const FINISHED_AT = 0.95;
 /** Materials whose "finished" event was recorded in this session: once per material, whatever pane shows it. */
@@ -16,7 +17,9 @@ const finished = new Set<string>();
 export interface MaterialReaderProps {
   id: string;
   onOpenLink: (url: string) => void;
-  onOpenMaterial: (id: string) => void;
+  onOpenMaterial: (id: string, quote?: string) => void;
+  /** A passage to reveal once the body is up (a citation's quote); the reader ignores one for another material. */
+  jumpToQuote?: MaterialQuoteJump | undefined;
   onBack?: (() => void) | undefined;
   onOpenSettings?: (() => void) | undefined;
   /** The shell's Add · Search icons for the toolbar segment. */
@@ -27,7 +30,7 @@ export interface MaterialReaderProps {
  * Loads a material by id and renders the reader for its chosen view inside a pane; records "finished" when reading passes 95%.
  * A metadata save from the Info panel replaces the record here, so the header, body and inspector show the new values at once.
  */
-export function MaterialReader({ id, onOpenLink, onOpenMaterial, onBack, onOpenSettings, trailing }: MaterialReaderProps) {
+export function MaterialReader({ id, onOpenLink, onOpenMaterial, jumpToQuote, onBack, onOpenSettings, trailing }: MaterialReaderProps) {
   const [material, setMaterial] = useState<MaterialRecord | undefined>(undefined);
   const [error, setError] = useState<string | undefined>(undefined);
   const [eventError, setEventError] = useState<string | undefined>(undefined);
@@ -56,7 +59,7 @@ export function MaterialReader({ id, onOpenLink, onOpenMaterial, onBack, onOpenS
   if (!material) return <div className="grid flex-1 place-items-center text-[13px] text-label-3">Opening…</div>;
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
-      <LoadedMaterialReader material={material} onMaterialChanged={setMaterial} onBack={onBack} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onProgress={onProgress} onOpenSettings={onOpenSettings} trailing={trailing} />
+      <LoadedMaterialReader material={material} onMaterialChanged={setMaterial} onBack={onBack} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} jumpToQuote={jumpToQuote} onProgress={onProgress} onOpenSettings={onOpenSettings} trailing={trailing} />
       {eventError ? <div role="alert" className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-pill bg-red-soft px-3.5 py-1.5 text-[12.5px] text-red-text shadow-float">{eventError}</div> : null}
     </div>
   );
@@ -69,7 +72,7 @@ interface LoadedProps extends Omit<MaterialReaderProps, "id"> {
 }
 
 /** The chosen view of a loaded material: the PDF reader or the document reader for its content, remounted per view so position and progress are the view's own. */
-function LoadedMaterialReader({ material, onMaterialChanged, onBack, onOpenLink, onOpenMaterial, onProgress, onOpenSettings, trailing }: LoadedProps) {
+function LoadedMaterialReader({ material, onMaterialChanged, onBack, onOpenLink, onOpenMaterial, jumpToQuote, onProgress, onOpenSettings, trailing }: LoadedProps) {
   const views = useMaterialView(material, onMaterialChanged);
   // A note on another view: the reader switches first, then the next reader jumps to it once its body is up.
   const [pendingJump, setPendingJump] = useState<Annotation | undefined>(undefined);
@@ -100,7 +103,7 @@ function LoadedMaterialReader({ material, onMaterialChanged, onBack, onOpenLink,
   return (
     <>
       <Reader key={`${material.id}:${views.view}`} material={material} content={content.content} views={views} onBack={onBack} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onProgress={onProgress}
-        onMaterialSaved={onMaterialChanged} onOpenSettings={onOpenSettings} trailing={trailing} pendingJump={pendingJump} onJumpDone={onJumpDone} onJumpAcross={jumpAcross} initialPanel={panelRef.current} onPanelChange={onPanelChange} />
+        onMaterialSaved={onMaterialChanged} onOpenSettings={onOpenSettings} trailing={trailing} pendingJump={pendingJump} onJumpDone={onJumpDone} onJumpAcross={jumpAcross} jumpToQuote={jumpToQuote} initialPanel={panelRef.current} onPanelChange={onPanelChange} />
       {fetchError ? (
         <div role="alert" className="absolute bottom-3 left-1/2 flex max-w-[min(640px,90%)] -translate-x-1/2 items-center gap-2 rounded-pill bg-red-soft py-1 pl-3.5 pr-1 text-[12.5px] text-red-text shadow-float">
           <span className="min-w-0 truncate">Could not fetch the {failedView?.label ?? fetchError.view} view — {fetchError.message}</span>

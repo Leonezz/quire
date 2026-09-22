@@ -54,6 +54,12 @@ const api: ReadApi = {
     ipcRenderer.on("agent:event", handler);
     return () => ipcRenderer.removeListener("agent:event", handler);
   },
+  // The agent's settings changed or a sign-in ended: re-read agentStatus().
+  onAgentStatusChanged: (listener) => {
+    const handler = () => listener();
+    ipcRenderer.on("agent:status:changed", handler);
+    return () => ipcRenderer.removeListener("agent:status:changed", handler);
+  },
   // A clicked notification names the session to show.
   onAgentOpenSession: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, sessionId: string) => listener(sessionId);

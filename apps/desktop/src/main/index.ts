@@ -60,7 +60,7 @@ function annotationView(value: unknown) {
   return value;
 }
 
-function broadcast(channel: "library:changed" | "sources:changed" | "agent:event" | "agent:sessions:changed" | "update:state", payload?: AgentEvent | UpdateState) {
+function broadcast(channel: "library:changed" | "sources:changed" | "agent:event" | "agent:sessions:changed" | "agent:status:changed" | "update:state", payload?: AgentEvent | UpdateState) {
   for (const win of BrowserWindow.getAllWindows()) win.webContents.send(channel, payload);
 }
 
@@ -288,7 +288,8 @@ ipcMain.handle("agent:status", () => agent.status());
 ipcMain.handle("agent:ask", (_event, request: unknown) => agent.ask(agentRequest(request)));
 ipcMain.handle("agent:interrupt", (_event, sessionId: unknown) => agent.interrupt(boundedString(sessionId, 64, "IPC_INVALID_ID")));
 ipcMain.handle("agent:runs", () => agent.listRuns());
-ipcMain.handle("agent:login", () => agent.login());
+// A finished sign-in (or its failure) changes what agentStatus() says: every window re-reads it.
+ipcMain.handle("agent:login", async () => { const status = await agent.login(); broadcast("agent:status:changed"); return status; });
 
 // --- M3: metadata, library management, settings, agent sessions. ------------------------------
 registerM3Handlers({
@@ -306,6 +307,7 @@ const updates = new UpdateService({
   onState: (state) => broadcast("update:state", state),
   autoCheck: () => settings.get().checkUpdatesAutomatically,
   openExternal: (url) => shell.openExternal(url),
+  warn: (message) => console.warn(message),
 });
 ipcMain.handle("update:state", () => updates.getState());
 ipcMain.handle("update:check", () => updates.check());

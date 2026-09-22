@@ -55,6 +55,20 @@ describe("SettingsStore", () => {
     expect(store.update({}).syncIntervalMinutes).toBe(30);
   });
 
+  it("stores codexPath as what will run: whitespace trimmed, ~ expanded, a directory resolved to the codex binary in it", async () => {
+    const home = "/home/reader";
+    const has = (candidate: string) => candidate === "/home/reader/.local/bin/codex" || candidate === "/opt/codex/bin/codex";
+    const store = new SettingsStore(path(), root, { exists: has, home });
+    expect(store.update({ codexPath: " ~/.local/bin/codex " }).codexPath).toBe("/home/reader/.local/bin/codex");
+    expect(store.update({ codexPath: "~/.local/bin" }).codexPath).toBe("/home/reader/.local/bin/codex");
+    expect(store.update({ codexPath: "/opt/codex/bin" }).codexPath).toBe("/opt/codex/bin/codex");
+    expect(JSON.parse(await readFile(path(), "utf8")).codexPath).toBe("/opt/codex/bin/codex");
+    expect(new SettingsStore(path(), root, { exists: has, home }).get().codexPath).toBe("/opt/codex/bin/codex");
+    expect(() => store.update({ codexPath: "~/nowhere/codex" })).toThrow("codexPath points to /home/reader/nowhere/codex, which does not exist. Leave it empty to auto-detect the codex binary.");
+    expect(() => store.update({ codexPath: "/nowhere/codex" })).toThrow("codexPath points to /nowhere/codex, which does not exist. Leave it empty to auto-detect the codex binary.");
+    expect(store.update({ codexPath: "   " }).codexPath).toBe("");
+  });
+
   it("refuses a file that is not JSON, and reports a stored value that no longer validates instead of dropping it silently", async () => {
     await writeFile(path(), "{ not json");
     expect(() => new SettingsStore(path(), root)).toThrow(/settings\.json is not valid JSON/);

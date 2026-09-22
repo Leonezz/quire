@@ -3,10 +3,12 @@ import { CitationPill } from "@read/ui";
 
 // A deliberately small Markdown renderer for agent answers: headings, paragraphs, emphasis,
 // inline code, fenced code, bullet and numbered lists, links, blockquotes. Anything else is a
-// paragraph. `[0123456789abcdef]` (a 16-hex material id in brackets) becomes a citation pill —
-// a verified one only when the turn's `sources` name it (or, for a stored turn without sources,
-// when the id is in the library); otherwise an "unverified" pill that says the agent never
-// retrieved it. Streaming text is rendered as it arrives, so an unterminated fence is still code.
+// paragraph. A 16-hex material id becomes a citation pill titled with the material's name, whether
+// written `[id]`, as inline code, or bare in the prose (bare only when the library knows the id, so
+// other hex is left alone) — a verified pill only when the turn's `sources` name it (or, for a stored
+// turn without sources, when the id is in the library); otherwise an "unverified" pill that says the
+// agent never retrieved it. A quoted passage right before the pill travels with it, so opening the
+// material can jump to it. Streaming text is rendered as it arrives, so an unterminated fence is still code.
 
 type Block =
   | { kind: "heading"; level: number; text: string }
@@ -64,13 +66,29 @@ export function parseBlocks(source: string): Block[] {
   return blocks;
 }
 
-const INLINE = /(\*\*[^*\n]+\*\*|`[^`\n]+`|\[([^\]\n]+)\]\(([^)\s]+)\)|\[([a-f0-9]{16})\]|\*[^*\n]+\*|_[^_\n]+_)/g;
+const INLINE = /(\*\*[^*\n]+\*\*|`[^`\n]+`|\[([^\]\n]+)\]\(([^)\s]+)\)|\[([a-f0-9]{16})\]|(?<![\w/#-])(?<!\w\.)[a-f0-9]{16}(?![\w/-]|\.\w)|\*[^*\n]+\*|_[^_\n]+_)/g;
 const CITATION = /^\[([a-f0-9]{16})\]$/;
+const CODE_CITATION = /^`([a-f0-9]{16})`$/;
+const BARE_CITATION = /^[a-f0-9]{16}$/;
 const LINK = /^\[([^\]]+)\]\(([^)\s]+)\)$/;
+/** A passage in quotation marks that ends right before the pill (whitespace or a dash / comma / colon between), at least QUOTE_MIN characters. */
+const QUOTE_BEFORE = /[“"]([^“”"\n]+)[”"][\s,;:—–-]*$/;
+export const QUOTE_MIN = 12;
+
+/**
+ * The quoted passage a citation carries: text inside “ ” or " " that ends right before it in the same
+ * paragraph or list item, at least QUOTE_MIN characters once inline markup is stripped; else undefined.
+ */
+export function quoteBefore(text: string, index: number): string | undefined {
+  const match = QUOTE_BEFORE.exec(text.slice(0, index));
+  const quote = match?.[1]?.replace(/[*_`]/g, "").replace(/\s+/g, " ").trim();
+  return quote && quote.length >= QUOTE_MIN ? quote : undefined;
+}
 
 export interface InlineHandlers {
   onOpenLink: (url: string) => void;
-  onOpenMaterial: (id: string) => void;
+  /** Opens a cited material; with the passage the citation quotes, when it carries one. */
+  onOpenMaterial: (id: string, quote?: string) => void;
   /** A title for a cited material id, when the caller knows one. */
   titleOf?: ((id: string) => string | undefined) | undefined;
   /**
@@ -98,11 +116,14 @@ export function renderInline(text: string, handlers: InlineHandlers): ReactNode[
     if (start > last) nodes.push(text.slice(last, start));
     last = start + token.length;
     key += 1;
-    const citation = CITATION.exec(token);
+    const citation = CITATION.exec(token)?.[1] ?? CODE_CITATION.exec(token)?.[1] ?? (BARE_CITATION.test(token) && handlers.titleOf?.(token) !== undefined ? token : undefined);
     const link = LINK.exec(token);
-    if (citation?.[1]) {
-      const id = citation[1];
-      nodes.push(<CitationPill key={key} id={id} label={handlers.titleOf?.(id)} unverified={!isVerifiedCitation(id, handlers)} onPress={() => handlers.onOpenMaterial(id)} />);
+    if (citation) {
+      const quote = quoteBefore(text, start);
+      const open = () => (quote ? handlers.onOpenMaterial(citation, quote) : handlers.onOpenMaterial(citation));
+      nodes.push(<CitationPill key={key} id={citation} label={handlers.titleOf?.(citation)} unverified={!isVerifiedCitation(citation, handlers)} data-quote={quote} onPress={open} />);
+    } else if (BARE_CITATION.test(token)) {
+      nodes.push(token);
     } else if (link?.[1] && link[2]) {
       const url = link[2];
       nodes.push(<a key={key} href={url} className="text-accent-text underline decoration-accent-text/40 underline-offset-2" onClick={(event) => { event.preventDefault(); handlers.onOpenLink(url); }}>{renderInline(link[1], handlers)}</a>);
@@ -137,7 +158,7 @@ function BlockView({ block, handlers }: { block: Block; handlers: InlineHandlers
   }
 }
 
-/** The agent's answer as Markdown. Links go through `onOpenLink`; `[material-id]` citations through `onOpenMaterial`. */
+/** The agent's answer as Markdown. Links go through `onOpenLink`; material-id citations through `onOpenMaterial` (with their quoted passage). */
 export function AgentMarkdown({ text, className, ...handlers }: { text: string; className?: string } & InlineHandlers) {
   const blocks = parseBlocks(text);
   return (

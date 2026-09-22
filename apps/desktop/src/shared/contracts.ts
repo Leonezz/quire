@@ -345,6 +345,8 @@ export interface ReadApiM2 {
   /** Starts the ChatGPT login flow in the browser; resolves once the account is available or with the failure reason. */
   agentLogin: () => Promise<AgentStatus>;
   onAgentEvent: (listener: (event: AgentEvent) => void) => () => void;
+  /** The Codex path, model or effort changed, or a sign-in ended: re-read agentStatus(). */
+  onAgentStatusChanged: (listener: () => void) => () => void;
   /** A system notification for a finished turn was clicked: show that session. */
   onAgentOpenSession: (listener: (sessionId: string) => void) => () => void;
 }

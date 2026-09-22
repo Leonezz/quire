@@ -1,8 +1,10 @@
 import type { UpdateState } from "../../shared/contracts";
+import { parseReleaseFeed } from "./release-feed";
 import { compareSemver, formatSemver, parseSemver, type SemVer } from "./semver";
 
 // In-app updates over GitHub Releases. Two paths share one state machine:
-//   manual  — always: the releases API names the newest version; the user downloads it from the release page.
+//   manual  — always: the releases feed (no rate limit; the API only when the feed cannot be read) names
+//             the newest version; the user downloads it from the release page.
 //   install — a signed, packaged build (electron-updater behind `installer`): download, then restart into it.
 // State moves idle → checking → up-to-date | available | error, and from available → downloading → ready
 // on install. Every change goes out through `onState`; `check()` never throws, the state carries the failure.
@@ -20,13 +22,22 @@ export interface UpdateFeed { owner: string; repo: string }
 export interface GithubRelease {
   tag_name: string;
   html_url: string;
+  /** Release notes: Markdown from the API, plain text from the feed. */
   body?: string | null;
   draft?: boolean;
   prerelease?: boolean;
+  published_at?: string | null;
 }
 
-export interface UpdateFetchResponse { ok: boolean; status: number; json: () => Promise<unknown> }
+export interface UpdateFetchResponse {
+  ok: boolean;
+  status: number;
+  headers: { get: (name: string) => string | null };
+  json: () => Promise<unknown>;
+  text: () => Promise<string>;
+}
 export type UpdateFetch = (url: string, init: { headers: Record<string, string> }) => Promise<UpdateFetchResponse>;
+type ReleasesOutcome = { ok: true; releases: unknown } | { ok: false; message: string };
 
 export interface InstallerEvents {
   onProgress: (percent: number) => void;
@@ -58,6 +69,8 @@ export interface UpdateServiceOptions {
   autoCheck: () => boolean;
   openExternal: (url: string) => Promise<void>;
   now?: (() => Date) | undefined;
+  /** The feed could not be used and the API was asked instead: said here, never silently. */
+  warn?: ((message: string) => void) | undefined;
 }
 
 interface PickedRelease { version: SemVer; release: GithubRelease }
@@ -88,6 +101,19 @@ function messageOf(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
 }
 
+/** "HH:MM" in the machine's zone from GitHub's x-ratelimit-reset (epoch seconds); undefined when the header is missing or not a time. */
+export function rateLimitResetLabel(reset: string | null): string | undefined {
+  const seconds = reset === null ? Number.NaN : Number(reset);
+  if (!Number.isFinite(seconds) || seconds <= 0) return undefined;
+  return new Date(seconds * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+/** What a 403 with no requests left means to the reader: not the bare status, but when to try again. */
+export function rateLimitMessage(reset: string | null): string {
+  const label = rateLimitResetLabel(reset);
+  return `GitHub's rate limit is exhausted; try again after ${label ?? "a few minutes"}.`;
+}
+
 export class UpdateService {
   private state: UpdateState;
   private inFlight: Promise<UpdateState> | undefined;
@@ -110,6 +136,15 @@ export class UpdateService {
 
   private get apiUrl(): string {
     return `https://api.github.com/repos/${this.options.feed.owner}/${this.options.feed.repo}/releases?per_page=${RELEASES_PER_PAGE}`;
+  }
+
+  private get feedUrl(): string {
+    return `${this.releasesUrl}.atom`;
+  }
+
+  private get userAgent(): string {
+    const { currentVersion, platform, arch } = this.options;
+    return `Quire/${currentVersion} (${platform}; ${arch})`;
   }
 
   private set(next: UpdateState) {
@@ -145,26 +180,48 @@ export class UpdateService {
   }
 
   private async fetchLatest(): Promise<UpdateState> {
-    const { currentVersion, platform, arch } = this.options;
+    const { currentVersion } = this.options;
     const current = parseSemver(currentVersion);
     if (!current) return this.failure(`The running version "${currentVersion}" is not a version number, so releases cannot be compared with it.`);
-    let response: UpdateFetchResponse;
-    try {
-      response = await this.options.fetch(this.apiUrl, { headers: { accept: "application/vnd.github+json", "user-agent": `Quire/${currentVersion} (${platform}; ${arch})` } });
-    } catch (cause: unknown) {
-      return this.failure(`Could not reach GitHub: ${messageOf(cause)}`);
-    }
-    if (response.status === 404) return this.failure(`No releases yet at ${this.releasesUrl}.`);
-    if (!response.ok) return this.failure(`GitHub answered HTTP ${response.status} for ${this.apiUrl}.`);
-    let body: unknown;
-    try { body = await response.json(); }
-    catch (cause: unknown) { return this.failure(`GitHub's answer was not JSON: ${messageOf(cause)}`); }
-    const latest = pickLatestRelease(body);
+    const releases = await this.fetchReleases();
+    if (!releases.ok) return this.failure(releases.message);
+    const latest = pickLatestRelease(releases.releases);
     if (!latest) return this.failure(`No releases yet at ${this.releasesUrl}.`);
     const checkedAt = this.stamp();
     if (compareSemver(latest.version, current) <= 0) return { phase: "up-to-date", current: currentVersion, checkedAt };
     const notes = notesOf(latest.release);
     return { phase: "available", current: currentVersion, latest: formatSemver(latest.version), ...(notes ? { notes } : {}), url: latest.release.html_url, canInstall: this.canInstall(), checkedAt };
+  }
+
+  /** The feed first, because it has no rate limit; the API only when the feed is unreachable or unparsable, which is reported. */
+  private async fetchReleases(): Promise<ReleasesOutcome> {
+    const fromFeed = await this.fetchFeed();
+    if (fromFeed.ok) return fromFeed;
+    this.options.warn?.(`[updates] The releases feed could not be used (${fromFeed.message}); asking the GitHub API instead.`);
+    return this.fetchApi();
+  }
+
+  private async fetchFeed(): Promise<ReleasesOutcome> {
+    let response: UpdateFetchResponse;
+    try { response = await this.options.fetch(this.feedUrl, { headers: { accept: "application/atom+xml", "user-agent": this.userAgent } }); }
+    catch (cause: unknown) { return { ok: false, message: `Could not reach GitHub: ${messageOf(cause)}` }; }
+    if (!response.ok) return { ok: false, message: `GitHub answered HTTP ${response.status} for ${this.feedUrl}.` };
+    let xml: string;
+    try { xml = await response.text(); }
+    catch (cause: unknown) { return { ok: false, message: `The releases feed could not be read: ${messageOf(cause)}` }; }
+    try { return { ok: true, releases: parseReleaseFeed(xml) }; }
+    catch (cause: unknown) { return { ok: false, message: messageOf(cause) }; }
+  }
+
+  private async fetchApi(): Promise<ReleasesOutcome> {
+    let response: UpdateFetchResponse;
+    try { response = await this.options.fetch(this.apiUrl, { headers: { accept: "application/vnd.github+json", "user-agent": this.userAgent } }); }
+    catch (cause: unknown) { return { ok: false, message: `Could not reach GitHub: ${messageOf(cause)}` }; }
+    if (response.status === 404) return { ok: false, message: `No releases yet at ${this.releasesUrl}.` };
+    if (response.status === 403 && response.headers.get("x-ratelimit-remaining") === "0") return { ok: false, message: rateLimitMessage(response.headers.get("x-ratelimit-reset")) };
+    if (!response.ok) return { ok: false, message: `GitHub answered HTTP ${response.status} for ${this.apiUrl}.` };
+    try { return { ok: true, releases: await response.json() }; }
+    catch (cause: unknown) { return { ok: false, message: `GitHub's answer was not JSON: ${messageOf(cause)}` }; }
   }
 
   /**

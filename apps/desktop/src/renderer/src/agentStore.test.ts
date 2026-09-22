@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AgentEvent, AgentResult, AgentRun } from "../../shared/contracts";
+import type { AgentEvent, AgentResult, AgentRun, AgentStatus } from "../../shared/contracts";
 import { FINISHED_TTL_MS, SWAP_GRACE_MS, createAgentStore, runningCount, type AgentStoreApi } from "./agentStore";
 
 function harness(overrides: Partial<AgentStoreApi> = {}, runs: AgentRun[] = []) {
@@ -27,6 +27,21 @@ beforeEach(() => { vi.useFakeTimers(); });
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe("agentStore", () => {
+  it("reads the status again when the bridge says the agent's availability changed", async () => {
+    const statusListeners = new Set<() => void>();
+    const agentStatus = vi.fn<() => Promise<AgentStatus>>(async () => ({ available: false, running: 0, reason: "Codex CLI was not found." }));
+    const { store } = harness({ agentStatus, onAgentStatusChanged: (listener) => { statusListeners.add(listener); return () => { statusListeners.delete(listener); }; } });
+    await store.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.getState().status?.available).toBe(false);
+    agentStatus.mockResolvedValue({ available: true, running: 0, version: "0.9" });
+    for (const listener of statusListeners) listener();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(store.getState().status).toEqual({ available: true, running: 0, version: "0.9" });
+    store.stop();
+    expect(statusListeners.size).toBe(0);
+  });
+
   it("seeds from listAgentRuns and reads the status", async () => {
     const seeded: AgentRun = { sessionId: "s0", turnId: "t0", task: "explain", prompt: "", answer: "So far", tools: [{ name: "library_search", status: "done", summary: "2 hits" }], startedAt: "2026-09-19T10:00:00.000Z" };
     const { store, api } = harness({}, [seeded]);

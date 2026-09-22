@@ -15,11 +15,13 @@ import { read } from "./api";
 import { mirroredViews, resolveViewAnnotations } from "./mirroredAnnotations";
 import { useReadingPrefs } from "./readingPrefs";
 import { useTextViewContent } from "./useTextViewContent";
+import { reportQuoteJump } from "./quoteJump";
+import { revealPdfQuote } from "./pdfQuoteSearch";
 
 type Loaded = { status: "loading" } | { status: "ready"; url: string } | { status: "error"; message: string };
 
 /** PDF reading: the same toolbar contract as the article reader, the pages rendered by pdf.js. */
-export function PdfReaderView({ material, content, views, pendingJump, onJumpDone, onJumpAcross, initialPanel, onPanelChange, onBack, onOpenLink, onOpenMaterial, onProgress, onMaterialSaved, onOpenSettings, trailing }: ReaderProps) {
+export function PdfReaderView({ material, content, views, pendingJump, onJumpDone, onJumpAcross, jumpToQuote, initialPanel, onPanelChange, onBack, onOpenLink, onOpenMaterial, onProgress, onMaterialSaved, onOpenSettings, trailing }: ReaderProps) {
   const pdf = content.pdf;
   const view = content.view;
   const [loaded, setLoaded] = useState<Loaded>({ status: "loading" });
@@ -75,6 +77,20 @@ export function PdfReaderView({ material, content, views, pendingJump, onJumpDon
     setPanel("notes");
     onJumpDone();
   }, [pendingJump, loaded.status, onJumpDone, shownAnnotation]);
+
+  // A citation's quote: the pages are searched for it, the viewer goes to its page and the match is marked for a moment; each request runs once.
+  const handledQuoteJump = useRef<number | undefined>(undefined);
+  const [jumpError, setJumpError] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    if (!jumpToQuote || loaded.status !== "ready" || jumpToQuote.materialId !== material.id || handledQuoteJump.current === jumpToQuote.nonce) return;
+    handledQuoteJump.current = jumpToQuote.nonce;
+    const { quote } = jumpToQuote;
+    let cancelled = false;
+    revealPdfQuote({ url: loaded.url, quote, pageRoot: () => mainRef.current, goToPage: (page) => viewerRef.current?.goToPage(page), isCancelled: () => cancelled })
+      .then((found) => { if (!cancelled) reportQuoteJump({ materialId: material.id, quote, found }); })
+      .catch((cause: unknown) => { if (!cancelled) setJumpError(cause instanceof Error ? cause.message : "Could not search the PDF for the quoted passage."); });
+    return () => { cancelled = true; };
+  }, [jumpToQuote, loaded, material.id]);
 
   // On `document`, not `window`: the shell's own ⌘J listens on the window and yields when a reader already handled it.
   useEffect(() => {
@@ -134,8 +150,8 @@ export function PdfReaderView({ material, content, views, pendingJump, onJumpDon
         <div className="bg-separator-soft"><i className="block h-full bg-accent opacity-80" style={{ width: `${progress}%` }} /></div>
         <SelectionToolbar root={mainRef.current} viewport={mainRef.current} capture={captureSelection} onHighlight={(capture, color) => void add({ ...capture, kind: "highlight", color, view })} onNote={(capture) => void onNote(capture)} onCopy={(capture) => void navigator.clipboard.writeText(citationFor(material, { quote: capture.quote }))} onAsk={(capture) => { setAsked(capture); setPanel("agent"); }} />
         {outline.length > 1 ? (
-          <div className="pointer-events-none absolute inset-y-6 right-6 z-10 flex items-center">
-            <TocRail aria-label="Contents" entries={tocEntries} activeId={activeEntry} pinned={tocPinned} onSelect={(id) => { const entry = outline.find((item) => item.id === id); if (entry) viewerRef.current?.goToPage(entry.page); }} />
+          <div className="pointer-events-none absolute inset-y-6 right-1.5 z-10 flex items-center">
+            <TocRail aria-label="Contents" entries={tocEntries} activeId={activeEntry} pinned={tocPinned} resting="hidden" onSelect={(id) => { const entry = outline.find((item) => item.id === id); if (entry) viewerRef.current?.goToPage(entry.page); }} />
           </div>
         ) : null}
         {loaded.status === "ready" && pdf ? (
@@ -159,6 +175,8 @@ export function PdfReaderView({ material, content, views, pendingJump, onJumpDon
         )}
         {textView.status === "error" ? (
           <div role="alert" className="absolute bottom-3 left-1/2 max-w-[min(640px,90%)] -translate-x-1/2 truncate rounded-pill bg-red-soft px-3.5 py-1.5 text-[12.5px] text-red-text shadow-float">Notes from the Text view cannot be shown — {textView.message}</div>
+        ) : jumpError ? (
+          <div role="alert" className="absolute bottom-3 left-1/2 max-w-[min(640px,90%)] -translate-x-1/2 truncate rounded-pill bg-red-soft px-3.5 py-1.5 text-[12.5px] text-red-text shadow-float">{jumpError}</div>
         ) : null}
       </main>
       </SplitPanel>
