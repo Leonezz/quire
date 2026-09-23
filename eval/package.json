@@ -10,7 +10,8 @@
     "golden": "GOLDEN=1 vitest run",
     "typecheck": "tsc --noEmit",
     "judge": "node judge/run.mjs",
-    "import-feedback": "node scripts/import-feedback.mjs"
+    "import-feedback": "node scripts/import-feedback.mjs",
+    "judge:publish": "node judge/publish.mjs"
   },
   "dependencies": {
     "@read/normalize": "workspace:*"

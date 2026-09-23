@@ -114,6 +114,7 @@
 - 设计：`docs/design/eval-feedback.md`。一个数据格式：用户在 app 里报的"这页渲染坏了"就是评测集的一条 case（`report.json` + 语料条目布局的 `meta.json` + `page.html.gz` + `extracted.md`）。
 - app 内反馈：阅读器工具栏的质量 pill 变成菜单（Report rendering problem… / Rebuild with the agent），Info › Quality 行与低质量横幅也有 Report…；`FeedbackSheet` 九种问题（`RenderingProblemKind`，与 judge 同一词表）+ 备注 + "附上保存的原始页面"，明列将保存的内容；只写本地 `<userData>/feedback/<id>/`，第二步才由用户打开预填的 GitHub issue（模板 `.github/ISSUE_TEMPLATE/rendering.yml`）并手动附 bundle；Settings › Feedback 列出所有报告。主进程 `engine/feedback.ts` / `feedback-issue.ts` / `ipc-feedback.ts`。
 - 自动测评 `eval/judge/`：`pnpm --filter @read/eval judge [slug…] [--force] [--model] [--max] [--update-baseline]` 用 `codex exec --output-schema` 按七维量规给每篇 PASS / MINOR / MAJOR + issues[kind]，按内容哈希缓存 `out/`，与提交的 `baseline.json` 比较，任何 slug 变差即失败；报告 `eval/judge/report.md` 含按 kind 的问题计数。`pnpm --filter @read/eval import-feedback <bundle>` 把用户 bundle 变成语料条目。首次跑通：arXiv HTML 的报告 → 语料 → golden → judge 判 MAJOR（byline 缺失、GFM 里公式 TeX 注释与符号重复、附录表格成转义 HTML）——这三条是下一刀抽取器要修的。
+- 第二版（同日）：judge 变成 Claude Code + Codex 混合，`eval/judge/config.json` 定策略（默认 Haiku 筛查、Codex 确认），每个结果带两边的 opinions；`judge:publish --html` 出自包含交互报告，`--issue` 把带 Mermaid 图表的报告发成一条可反复更新的 GitHub issue，`--cases` 给最严重的 case 各开一条 issue。
 - 顺手修：preload 的 `version` 原来写死 0.0.1，现在由主进程经 `additionalArguments` 传入。
 
 ## 评测集导入 app

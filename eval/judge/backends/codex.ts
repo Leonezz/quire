@@ -1,12 +1,11 @@
-// One judge call: build the prompt, run `codex exec` with the answer schema in a scratch directory,
-// parse the last message strictly, verify the evidence quotes. The runner is a parameter so tests
-// can judge without Codex.
+// The Codex backend: `codex exec` with the answer schema in a scratch directory, the prompt on stdin,
+// nothing persisted. The runner is a parameter so tests can judge without Codex.
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { cacheKey, type JudgeResult } from "./cache";
-import { AnswerFormatError, ANSWER_SCHEMA, RUBRIC_VERSION, buildPrompt, evidenceOccurs, parseAnswer, type PromptInput } from "./rubric";
+import { preflightCodex } from "./preflight.mjs";
+import { BackendRunError, outputTail, type BackendRunMeta, type JudgeBackend } from "./types";
 
 export interface CodexCall { prompt: string; schema: unknown; model: string | undefined; bin: string; timeoutMs: number }
 export interface CodexRun {
@@ -56,31 +55,32 @@ export const runCodexExec: CodexRunner = async ({ prompt, schema, model, bin, ti
   }
 };
 
-export interface JudgeCaseOptions { runner: CodexRunner; bin: string; model: string | undefined; timeoutMs: number; now?: () => Date }
+export interface CodexBackendOptions {
+  bin: string;
+  /** "default" runs whatever the Codex configuration selects; anything else goes to `-m`. */
+  model: string;
+  runner?: CodexRunner;
+}
 
-const MAX_STDERR = 4_000;
-const tail = (text: string) => text.trim().slice(-MAX_STDERR);
-
-/** Judges one case. Never throws for a bad answer: that is a FailedCase with the reason and the raw text. */
-export async function judgeCase(input: PromptInput, options: JudgeCaseOptions): Promise<JudgeResult> {
-  const model = options.model ?? "default";
-  const base = { key: cacheKey(input.source, input.extracted, RUBRIC_VERSION, model), slug: input.slug, model, rubricVersion: RUBRIC_VERSION, truncated: input.truncated.source || input.truncated.extracted };
-  const started = Date.now();
-  const finish = <T extends object>(fields: T) => ({ ...base, ...fields, wallMs: Date.now() - started, judgedAt: (options.now ?? (() => new Date()))().toISOString() });
-  let run: CodexRun;
-  try { run = await options.runner({ prompt: buildPrompt(input), schema: ANSWER_SCHEMA, model: options.model, bin: options.bin, timeoutMs: options.timeoutMs }); }
-  catch (error) { return finish({ error: `codex could not start: ${error instanceof Error ? error.message : String(error)}` }); }
+/** Tokens and model from the header/tail Codex prints on stderr, as far as it printed them. */
+export function codexRunMeta(run: Pick<CodexRun, "stderr">): BackendRunMeta {
   const resolvedModel = parseResolvedModel(run.stderr);
   const tokens = parseTokens(run.stderr);
-  const meta = { ...(resolvedModel ? { resolvedModel } : {}), ...(tokens !== undefined ? { tokens } : {}) };
-  if (run.timedOut) return finish({ ...meta, error: `codex exec exceeded ${options.timeoutMs} ms and was killed` });
-  if (run.status !== 0) return finish({ ...meta, error: `codex exec exited with ${String(run.status)}: ${tail(run.stderr) || tail(run.stdout) || "no output"}` });
-  if (run.lastMessage === undefined || !run.lastMessage.trim()) return finish({ ...meta, error: `codex exec wrote no last message: ${tail(run.stderr) || "no output"}` });
-  try {
-    const answer = parseAnswer(run.lastMessage);
-    return finish({ ...meta, verdict: answer.verdict, issues: answer.issues.map((issue) => ({ ...issue, verified: evidenceOccurs(issue.evidence, input.source, input.extracted) })), summary: answer.summary });
-  } catch (error) {
-    if (error instanceof AnswerFormatError) return finish({ ...meta, error: error.message, rawAnswer: run.lastMessage.slice(0, MAX_STDERR) });
-    throw error;
-  }
+  return { ...(resolvedModel ? { resolvedModel } : {}), ...(tokens !== undefined ? { tokens } : {}) };
+}
+
+export function codexBackend({ bin, model, runner = runCodexExec }: CodexBackendOptions): JudgeBackend {
+  return {
+    id: "codex",
+    model,
+    preflight: async () => { preflightCodex(bin); },
+    run: async ({ prompt, schema, timeoutMs }) => {
+      const run = await runner({ prompt, schema, model: model === "default" ? undefined : model, bin, timeoutMs });
+      const meta = codexRunMeta(run);
+      if (run.timedOut) throw new BackendRunError(`codex exec exceeded ${timeoutMs} ms and was killed`, meta);
+      if (run.status !== 0) throw new BackendRunError(`codex exec exited with ${String(run.status)}: ${outputTail(run.stderr) || outputTail(run.stdout) || "no output"}`, meta);
+      if (run.lastMessage === undefined || !run.lastMessage.trim()) throw new BackendRunError(`codex exec wrote no last message: ${outputTail(run.stderr) || "no output"}`, meta);
+      return { raw: run.lastMessage, ...meta };
+    },
+  };
 }

@@ -42,6 +42,27 @@
 - **Settings › Feedback**：列出所有报告（标题、时间、原因、是否已开 issue），每条可 Open issue / Reveal / Delete；空态一句话说明报告只存本地。
 - **闭环**：`pnpm --filter @read/eval import-feedback <bundleDir>`（或 zip）把 bundle 复制成 `eval/corpus/<slug>/`，在 `corpus.json` 追加条目（tags = kinds），然后 `GOLDEN=1` 生成 golden，`judge` 给出结论。
 
+## C. 混合 judge、结构化报告、发布到 issue（2026-09-23 第二版）
+
+**两个后端，一个策略文件。** `eval/judge/config.json`：
+
+```json
+{ "policy": "screen-then-confirm",
+  "screen":  { "backend": "claude", "model": "haiku" },
+  "confirm": { "backend": "codex",  "model": "default" },
+  "escalateOn": ["MINOR", "MAJOR"], "concurrency": 3 }
+```
+
+- `claude` 后端 = Claude Code 无头模式（`claude -p --output-format json --json-schema … --tools "" --permission-mode plan --max-turns 1`），走 Claude 订阅；`codex` 后端 = `codex exec --output-schema`，走 ChatGPT 订阅。两边都只读文本、禁工具、结构化输出、注入式 runner 可测。
+- 三种策略：`single`（一个后端）、`screen-then-confirm`（便宜的筛查者判全部，不是 PASS 的再由确认者复判，最终以确认者为准，意见不同记 `disputed`）、`both`（都判，取更严重者，issues 取并集）。默认 screen-then-confirm，Haiku 4.5 筛查（$1/$5 每百万 token）、Codex 确认——一半以上的 case 在 PASS 处停下，只付筛查的钱。
+- 每个结果记录所有 `opinions[]`（后端、模型、verdict、issues、token、美元、耗时）和 `resolution`；缓存键含策略与模型，换策略即重判。
+- 命令行：`judge [slug…] --policy … --backend … --model … --screen-model … --confirm-model … --force --max --update-baseline --concurrency`。只预检策略用到的后端；Claude 未登录时立刻报 `claude login`。
+
+**报告三种形态**（`pnpm --filter @read/eval judge:publish`）：
+- `report.md`（入库）：总计、按 kind 计数、每 case 一行（由谁裁定、是否有分歧）。
+- `report.html`（`--html`，本地、不入库）：自包含交互页——verdict 环图、按 kind 的堆叠条形图、筛查 vs 确认的混淆矩阵、相对基线的退步/进步、可筛选排序的 case 表，展开看每条 issue 的证据引用与两个后端并排的意见。
+- GitHub issue（`--issue`）：一条带 `quality-report` 标签的跟踪 issue，正文含 Mermaid 饼图与条形图（GitHub 原生渲染）、基线对比、每个 MAJOR case 一个 `<details>`；同一 issue 反复更新并追加"Updated …"评论。`--cases --max-cases N` 另为最严重的 N 个 case 各开一条 `rendering` + `judge` 标签的 issue，按标题去重。`--dry-run` 只打印。
+
 ## 不做的
 
 - 不做自动上传 / 遥测端点。等有了自己的收集服务再加 `Settings.feedbackEndpoint`，bundle 的 JSON 信封已经定好。

@@ -1,0 +1,8 @@
+{
+  "$comment": "Default judge policy. Cost-effective: a cheap screener (Claude Haiku 4.5 through Claude Code) judges every case; only cases it does not PASS are confirmed by Codex. Override per run with --policy / --backend / --model / --screen-model / --confirm-model.",
+  "policy": "screen-then-confirm",
+  "screen": { "backend": "claude", "model": "haiku" },
+  "confirm": { "backend": "codex", "model": "default" },
+  "escalateOn": ["MINOR", "MAJOR"],
+  "concurrency": 3
+}

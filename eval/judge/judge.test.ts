@@ -1,10 +1,13 @@
-// Unit tests for the judge's pure parts: cache key, answer parsing, baseline comparison, report,
-// the case flow with an injected runner, and that the kind vocabulary is the app's. No Codex here.
+// Unit tests for the judge's pure parts: cache key, answer parsing, baseline comparison, report, the
+// Codex backend with an injected runner, and that the kind vocabulary is the app's. The policy flow
+// is in policy.test.ts, the Claude backend in backends/claude.test.ts. No CLI is spawned here.
 import { describe, expect, it } from "vitest";
 import { RENDERING_PROBLEM_KINDS } from "../../apps/desktop/src/shared/contracts";
 import { compareToBaseline, describeDelta, updateBaseline, type Baseline } from "./baseline";
-import { cacheKey, isJudged, type JudgedCase, type JudgeResult } from "./cache";
-import { judgeCase, parseResolvedModel, parseTokens, type CodexRun, type CodexRunner } from "./codex";
+import { cacheKey, isJudged, type JudgedCase, type JudgeResult, type Opinion } from "./cache";
+import { codexBackend, parseResolvedModel, parseTokens, type CodexCall, type CodexRun, type CodexRunner } from "./backends/codex";
+import { BackendRunError } from "./backends/types";
+import { askOpinion } from "./judge-case";
 import { extractedMarkdown, truncateInput } from "./inputs";
 import { renderReport } from "./report";
 import { ANSWER_SCHEMA, AnswerFormatError, EVIDENCE_MAX_CHARS, PROBLEM_KINDS, RUBRIC_VERSION, buildPrompt, evidenceOccurs, parseAnswer } from "./rubric";
@@ -133,6 +136,8 @@ describe("baseline", () => {
 });
 
 describe("renderReport", () => {
+  const opinion = (backend: Opinion["backend"], model: string, verdict: Opinion["verdict"], extra: Partial<Opinion> = {}): Opinion => ({ backend, model, verdict, issues: [], summary: `${backend} says ${verdict}`, wallMs: 1, ...extra });
+
   it("counts verdicts and errors, ranks kinds, lists one row per case, and keeps evidence out", () => {
     const rows = [
       { result: judged("beta", "MAJOR", ["missing_content", "layout"], { issues: [{ kind: "missing_content", severity: "major", evidence: "SECRET-QUOTE", note: "n", verified: true }, { kind: "layout", severity: "minor", evidence: "q", note: "n", verified: false }] }), origin: "fresh" as const },
@@ -140,18 +145,40 @@ describe("renderReport", () => {
       { result: judged("gamma", "MINOR", ["layout"]), origin: "previous" as const },
       { result: failed("delta"), origin: "fresh" as const },
     ];
-    const text = renderReport(rows, { date: "2026-09-23", model: "default", rubricVersion: RUBRIC_VERSION, ranSlugs: 3 });
-    expect(text).toContain("4 cases: 1 PASS · 1 MINOR · 1 MAJOR · 1 error. This run judged 3 (2 fresh, 1 cached); 1 rows are from earlier runs.");
+    const text = renderReport(rows, { date: "2026-09-23", policy: "policy single · codex/default", rubricVersion: RUBRIC_VERSION, ranSlugs: 3 });
+    expect(text).toContain("4 cases: 1 PASS · 1 MINOR · 1 MAJOR · 1 error. This run judged 3 (2 fresh, 1 cached); 1 rows are from earlier runs. Judge: policy single · codex/default; rubric");
     expect(text).toContain("1 evidence quote(s) could not be found verbatim");
     expect(text).toContain("| layout | 2 | 2 | 0 |");
     expect(text).toContain("| missing_content | 1 | 1 | 1 |");
     expect(text.indexOf("| layout |")).toBeLessThan(text.indexOf("| missing_content |"));
     const table = text.slice(text.indexOf("## Cases"));
     expect(table.split("\n").filter((line) => /^\| (alpha|beta|gamma|delta) /.test(line))).toHaveLength(4);
-    expect(table).toContain("| beta | MAJOR | missing_content!, layout | beta summary | fresh |");
-    expect(table).toContain("| delta | error | – | codex exec exited with 1: boom | fresh |");
+    expect(table).toContain("| beta | MAJOR | missing_content!, layout | beta summary | – | fresh |");
+    expect(table).toContain("| delta | error | – | codex exec exited with 1: boom | – | fresh |");
     expect(text.indexOf("| alpha ")).toBeLessThan(text.indexOf("| beta "));
     expect(text).not.toContain("SECRET-QUOTE");
+    expect(text).not.toContain("Opinions:");
+  });
+
+  it("shows which backend decided each case, marks disputes, and totals opinions, tokens and cost per backend", () => {
+    const rows = [
+      // screened PASS: one opinion
+      { result: judged("alpha", "PASS", [], { opinions: [opinion("claude", "haiku", "PASS", { tokens: 1000, costUsd: 0.01 })], resolution: { policy: "screen-then-confirm", from: "claude", disputed: false } }), origin: "fresh" as const },
+      // escalated and confirmed, verdicts differ
+      { result: judged("beta", "MAJOR", ["layout"], { opinions: [opinion("claude", "haiku", "MINOR", { tokens: 2000, costUsd: 0.02 }), opinion("codex", "default", "MAJOR", { tokens: 30000 })], resolution: { policy: "screen-then-confirm", from: "codex", disputed: true } }), origin: "fresh" as const },
+      // escalated and confirmed, verdicts agree
+      { result: judged("gamma", "MINOR", ["tables"], { opinions: [opinion("claude", "haiku", "MINOR", { tokens: 3000, costUsd: 0.03 }), opinion("codex", "default", "MINOR", { tokens: 40000 })], resolution: { policy: "screen-then-confirm", from: "codex", disputed: false } }), origin: "cached" as const },
+      // a result from before the hybrid judge
+      { result: judged("delta", "PASS"), origin: "previous" as const },
+      { result: failed("epsilon"), origin: "fresh" as const },
+    ];
+    const text = renderReport(rows, { date: "2026-09-23", policy: "policy screen-then-confirm · screen claude/haiku · confirm codex/default (on MINOR, MAJOR)", rubricVersion: RUBRIC_VERSION, ranSlugs: 4 });
+    expect(text).toContain("Opinions: claude/haiku 3 opinions, 6,000 tokens, $0.0600 · codex/default 2 opinions, 70,000 tokens. Escalated 2 of 3 screened. Disputed 1. 1 result(s) predate the hybrid judge and carry no opinions.");
+    expect(text).toContain("| alpha | PASS | – | alpha summary | claude/haiku | fresh |");
+    expect(text).toContain("| beta | MAJOR | layout | beta summary | codex/default (disputed) | fresh |");
+    expect(text).toContain("| gamma | MINOR | tables | gamma summary | codex/default | cached |");
+    expect(text).toContain("| delta | PASS | – | delta summary | – | previous |");
+    expect(text).toContain("| epsilon | error | – | codex exec exited with 1: boom | – | fresh |");
   });
 });
 
@@ -164,47 +191,61 @@ describe("codex output parsing", () => {
   });
 });
 
-describe("judgeCase", () => {
+describe("codexBackend", () => {
   const input = { slug: "s", url: "https://x.test/p", source: "# Title\n\nBy Ada\n\nBody text.", extracted: "# Title\n\nBody text.", truncated: { source: false, extracted: false } };
   const run = (overrides: Partial<CodexRun>): CodexRun => ({ lastMessage: JSON.stringify(goodAnswer), stdout: "", stderr: "model: gpt-test\ntokens used\n1,234\n", status: 0, timedOut: false, ...overrides });
-  const options = (runner: CodexRunner) => ({ runner, bin: "codex", model: undefined, timeoutMs: 1000, now: () => new Date("2026-09-23T12:00:00Z") });
+  const backend = (runner: CodexRunner, model = "default") => codexBackend({ bin: "codex", model, runner });
 
-  it("passes the prompt and schema to the runner and records a verdict with verified evidence", async () => {
-    const calls: unknown[] = [];
-    const result = await judgeCase(input, options(async (call) => { calls.push(call); return run({}); }));
-    expect(calls).toHaveLength(1);
-    expect((calls[0] as { schema: unknown }).schema).toBe(ANSWER_SCHEMA);
-    expect((calls[0] as { prompt: string }).prompt).toContain("===== SOURCE =====\n# Title");
-    expect(isJudged(result)).toBe(true);
-    if (!isJudged(result)) throw new Error("expected a verdict");
-    expect(result).toMatchObject({ slug: "s", model: "default", resolvedModel: "gpt-test", tokens: 1234, rubricVersion: RUBRIC_VERSION, truncated: false, verdict: "MINOR", judgedAt: "2026-09-23T12:00:00.000Z" });
-    expect(result.key).toBe(cacheKey(input.source, input.extracted, RUBRIC_VERSION, "default"));
-    expect(result.issues[0]).toMatchObject({ kind: "metadata", verified: true });
+  it("passes the prompt and schema to the runner, omits -m for the default model, and reports the model and tokens", async () => {
+    const calls: CodexCall[] = [];
+    const output = await backend(async (call) => { calls.push(call); return run({}); }).run({ prompt: "P", schema: ANSWER_SCHEMA, timeoutMs: 1000 });
+    expect(calls).toEqual([{ prompt: "P", schema: ANSWER_SCHEMA, model: undefined, bin: "codex", timeoutMs: 1000 }]);
+    expect(output).toEqual({ raw: JSON.stringify(goodAnswer), resolvedModel: "gpt-test", tokens: 1234 });
   });
 
-  it("uses the requested model in the key and the call", async () => {
+  it("passes a requested model through and reports it on the backend", async () => {
     let seen: string | undefined;
-    const result = await judgeCase(input, { ...options(async (call) => { seen = call.model; return run({}); }), model: "gpt-x" });
+    const codex = backend(async (call) => { seen = call.model; return run({}); }, "gpt-x");
+    expect(codex).toMatchObject({ id: "codex", model: "gpt-x" });
+    await codex.run({ prompt: "P", schema: ANSWER_SCHEMA, timeoutMs: 1000 });
     expect(seen).toBe("gpt-x");
-    expect(result.model).toBe("gpt-x");
-    expect(result.key).toBe(cacheKey(input.source, input.extracted, RUBRIC_VERSION, "gpt-x"));
+  });
+
+  it.each([
+    ["no last message", run({ lastMessage: undefined }), /wrote no last message/],
+    ["a non-zero exit", run({ status: 1, stderr: "not logged in" }), /exited with 1: not logged in/],
+    ["a timeout", run({ timedOut: true, status: null }), /exceeded 1000 ms/],
+  ])("throws BackendRunError for %s, keeping the meta it read", async (_label, outcome, message) => {
+    const failure = await backend(async () => outcome).run({ prompt: "P", schema: ANSWER_SCHEMA, timeoutMs: 1000 }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(BackendRunError);
+    expect((failure as BackendRunError).message).toMatch(message);
+    expect((failure as BackendRunError).meta).toEqual(outcome.stderr.includes("tokens used") ? { resolvedModel: "gpt-test", tokens: 1234 } : {});
+  });
+
+  it("askOpinion turns a good answer into an Opinion with verified evidence", async () => {
+    const outcome = await askOpinion(backend(async () => run({})), input, 1000);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) throw new Error("expected an opinion");
+    const expected: Partial<Opinion> = { backend: "codex", model: "default", resolvedModel: "gpt-test", tokens: 1234, verdict: "MINOR", summary: goodAnswer.summary };
+    expect(outcome.opinion).toMatchObject(expected);
+    expect(outcome.opinion.issues[0]).toMatchObject({ kind: "metadata", verified: true });
   });
 
   it.each([
     ["a malformed answer", run({ lastMessage: '{"verdict":"PASS"}' }), /judge answer rejected/],
-    ["no last message", run({ lastMessage: undefined }), /wrote no last message/],
-    ["a non-zero exit", run({ status: 1, stderr: "not logged in" }), /exited with 1: not logged in/],
-    ["a timeout", run({ timedOut: true, status: null }), /exceeded 1000 ms/],
-  ])("records %s as an error, never as a verdict", async (_label, outcome, message) => {
-    const result = await judgeCase(input, options(async () => outcome));
-    expect(isJudged(result)).toBe(false);
-    if (isJudged(result)) throw new Error("expected an error");
-    expect(result.error).toMatch(message);
+    ["a non-zero exit", run({ status: 1, stderr: "boom" }), /exited with 1: boom/],
+  ])("askOpinion records %s as a failure, never as an opinion", async (_label, outcome, message) => {
+    const result = await askOpinion(backend(async () => outcome), input, 1000);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected a failure");
+    expect(result.failure.error).toMatch(message);
+    expect(result.failure).toMatchObject({ backend: "codex", model: "default" });
+    if (outcome.status === 0) expect(result.failure.rawAnswer).toBe('{"verdict":"PASS"}');
   });
 
-  it("records a runner that cannot start as an error", async () => {
-    const result = await judgeCase(input, options(async () => { throw new Error("spawn codex ENOENT"); }));
-    expect(isJudged(result)).toBe(false);
-    if (!isJudged(result)) expect(result.error).toContain("codex could not start: spawn codex ENOENT");
+  it("askOpinion records a runner that cannot start as a failure", async () => {
+    const result = await askOpinion(backend(async () => { throw new Error("spawn codex ENOENT"); }), input, 1000);
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.failure.error).toBe("codex could not start: spawn codex ENOENT");
   });
 });
