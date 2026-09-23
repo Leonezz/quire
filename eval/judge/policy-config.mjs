@@ -15,10 +15,10 @@ const DEFAULT_ESCALATE_ON = ["MINOR", "MAJOR"];
 
 /**
  * @typedef {{ backend: "codex" | "claude"; model: string }} BackendSpec
- * @typedef {{ policy?: unknown; screen?: unknown; confirm?: unknown; single?: unknown; escalateOn?: unknown; concurrency?: unknown }} JudgeConfigFile
+ * @typedef {{ policy?: unknown; screen?: unknown; confirm?: unknown; single?: unknown; escalateOn?: unknown; escalateOnMajorIssue?: unknown; concurrency?: unknown }} JudgeConfigFile
  * @typedef {{ policy?: string; backend?: string; model?: string; screenModel?: string; confirmModel?: string }} PolicyFlags
  * @typedef {{ policy: "single"; judge: BackendSpec }
- *   | { policy: "screen-then-confirm"; screen: BackendSpec; confirm: BackendSpec; escalateOn: readonly string[] }
+ *   | { policy: "screen-then-confirm"; screen: BackendSpec; confirm: BackendSpec; escalateOn: readonly string[]; escalateOnMajorIssue: boolean }
  *   | { policy: "both"; backends: readonly [BackendSpec, BackendSpec] }} EffectivePolicy
  */
 
@@ -84,7 +84,10 @@ export function resolvePolicy(config, flags = {}) {
   rejectFlag(flags.model, "--model", policy, "single");
   const screen = backendSpec(config.screen, "screen", flags.screenModel);
   const confirm = backendSpec(config.confirm, "confirm", flags.confirmModel);
-  if (policy === "screen-then-confirm") return { policy, screen, confirm, escalateOn: escalateOn(config.escalateOn) };
+  if (policy === "screen-then-confirm") {
+    if (config.escalateOnMajorIssue !== undefined && typeof config.escalateOnMajorIssue !== "boolean") throw new Error(`config.json escalateOnMajorIssue must be true or false, got ${JSON.stringify(config.escalateOnMajorIssue)}`);
+    return { policy, screen, confirm, escalateOn: escalateOn(config.escalateOn), escalateOnMajorIssue: config.escalateOnMajorIssue ?? true };
+  }
   return { policy: "both", backends: [screen, confirm] };
 }
 

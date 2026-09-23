@@ -7,8 +7,8 @@ import { backendsNeeded, describePolicy, resolveConcurrency, resolvePolicy, VERD
 import { judgeCase, parseEffectivePolicy, policyBackends, policyKey, unionIssues, type EffectivePolicy } from "./policy";
 import { RUBRIC_VERSION, VERDICTS } from "./rubric";
 
-const CONFIG = { policy: "screen-then-confirm", screen: { backend: "claude", model: "haiku" }, confirm: { backend: "codex", model: "default" }, escalateOn: ["MINOR", "MAJOR"], concurrency: 3 };
-const SCREEN: EffectivePolicy = { policy: "screen-then-confirm", screen: { backend: "claude", model: "haiku" }, confirm: { backend: "codex", model: "default" }, escalateOn: ["MINOR", "MAJOR"] };
+const CONFIG = { policy: "screen-then-confirm", screen: { backend: "claude", model: "haiku" }, confirm: { backend: "codex", model: "default" }, escalateOn: ["MINOR", "MAJOR"], escalateOnMajorIssue: true, concurrency: 3 };
+const SCREEN: EffectivePolicy = { policy: "screen-then-confirm", screen: { backend: "claude", model: "haiku" }, confirm: { backend: "codex", model: "default" }, escalateOn: ["MINOR", "MAJOR"], escalateOnMajorIssue: true };
 const SINGLE: EffectivePolicy = { policy: "single", judge: { backend: "codex", model: "default" } };
 const BOTH: EffectivePolicy = { policy: "both", backends: [{ backend: "claude", model: "haiku" }, { backend: "codex", model: "default" }] };
 
@@ -93,13 +93,15 @@ describe("parseEffectivePolicy (JUDGE_POLICY)", () => {
 describe("policyKey", () => {
   it("names the policy and every backend/model, so any change re-judges", () => {
     const key = (effective: EffectivePolicy) => cacheKey("src", "md", RUBRIC_VERSION, policyKey(effective));
-    expect(policyKey(SCREEN)).toBe("screen-then-confirm claude/haiku > codex/default on MAJOR,MINOR");
+    expect(policyKey(SCREEN)).toBe("screen-then-confirm claude/haiku > codex/default on MAJOR,MINOR,major-issue");
+    expect(policyKey({ ...SCREEN, escalateOnMajorIssue: false })).toBe("screen-then-confirm claude/haiku > codex/default on MAJOR,MINOR");
     expect(policyKey(SINGLE)).toBe("single codex/default");
     expect(policyKey(BOTH)).toBe("both claude/haiku + codex/default");
     const base = key(SCREEN);
     expect(key({ ...SCREEN })).toBe(base);
     expect(key({ ...SCREEN, escalateOn: ["MAJOR", "MINOR"] })).toBe(base);
     expect(key({ ...SCREEN, escalateOn: ["MAJOR"] })).not.toBe(base);
+    expect(key({ ...SCREEN, escalateOnMajorIssue: false })).not.toBe(base);
     expect(key({ ...SCREEN, screen: { backend: "claude", model: "sonnet" } })).not.toBe(base);
     expect(key({ ...SCREEN, confirm: { backend: "codex", model: "gpt-5.6" } })).not.toBe(base);
     expect(key({ ...SCREEN, screen: { backend: "codex", model: "haiku" } })).not.toBe(base);
@@ -196,6 +198,21 @@ describe("judgeCase under a policy", () => {
     expect(majorOnly.calls).toEqual(["claude/haiku"]);
     if (!isJudged(minor)) throw new Error(minor.error);
     expect(minor.resolution?.from).toBe("claude");
+  });
+
+  it("screen-then-confirm: a PASS that lists a major issue escalates too (unless escalateOnMajorIssue is off)", async () => {
+    const majorIssue = { kind: "missing_content", severity: "major", evidence: "Body text.", note: "the ending is gone" };
+    const strict = options(SCREEN, { "claude/haiku": async () => answer("PASS", [majorIssue]), "codex/default": async () => answer("MAJOR", [majorIssue]) });
+    const result = await judgeCase(input, strict.options);
+    expect(strict.calls).toEqual(["claude/haiku", "codex/default"]);
+    if (!isJudged(result)) throw new Error(result.error);
+    expect(result.verdict).toBe("MAJOR");
+    expect(result.resolution).toEqual({ policy: "screen-then-confirm", from: "codex", disputed: true });
+    const lenient = options({ ...SCREEN, escalateOnMajorIssue: false }, { "claude/haiku": async () => answer("PASS", [majorIssue]), "codex/default": async () => { throw new Error("must not be called"); } });
+    const kept = await judgeCase(input, lenient.options);
+    expect(lenient.calls).toEqual(["claude/haiku"]);
+    if (!isJudged(kept)) throw new Error(kept.error);
+    expect(kept.verdict).toBe("PASS");
   });
 
   it("screen-then-confirm: a failed screener fails the case before any confirmation", async () => {

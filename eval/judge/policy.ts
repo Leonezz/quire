@@ -23,7 +23,7 @@ import { RUBRIC_VERSION, VERDICTS, type PromptInput, type Verdict } from "./rubr
 export type PolicyId = Resolution["policy"];
 export type EffectivePolicy =
   | { policy: "single"; judge: BackendSpec }
-  | { policy: "screen-then-confirm"; screen: BackendSpec; confirm: BackendSpec; escalateOn: readonly Verdict[] }
+  | { policy: "screen-then-confirm"; screen: BackendSpec; confirm: BackendSpec; escalateOn: readonly Verdict[]; /** Also escalate a PASS whose issues include a major one: screeners are lenient, and a major issue contradicts PASS under the rubric. */ escalateOnMajorIssue: boolean }
   | { policy: "both"; backends: readonly [BackendSpec, BackendSpec] };
 
 const POLICIES: readonly PolicyId[] = ["single", "screen-then-confirm", "both"];
@@ -46,7 +46,8 @@ export function parseEffectivePolicy(json: string): EffectivePolicy {
     case "screen-then-confirm": {
       const escalateOn = parsed.escalateOn;
       if (!Array.isArray(escalateOn) || escalateOn.length === 0 || escalateOn.some((verdict) => !(VERDICTS as readonly string[]).includes(verdict))) throw new Error(`JUDGE_POLICY.escalateOn must be a non-empty list from ${VERDICTS.join("|")}: ${json}`);
-      return { policy: "screen-then-confirm", screen: parseSpec(parsed.screen, "screen"), confirm: parseSpec(parsed.confirm, "confirm"), escalateOn: escalateOn as Verdict[] };
+      if (parsed.escalateOnMajorIssue !== undefined && typeof parsed.escalateOnMajorIssue !== "boolean") throw new Error(`JUDGE_POLICY.escalateOnMajorIssue must be a boolean: ${json}`);
+      return { policy: "screen-then-confirm", screen: parseSpec(parsed.screen, "screen"), confirm: parseSpec(parsed.confirm, "confirm"), escalateOn: escalateOn as Verdict[], escalateOnMajorIssue: parsed.escalateOnMajorIssue ?? true };
     }
     case "both": {
       if (!Array.isArray(parsed.backends) || parsed.backends.length !== 2) throw new Error(`JUDGE_POLICY.backends must name two backends: ${json}`);
@@ -59,7 +60,7 @@ export function parseEffectivePolicy(json: string): EffectivePolicy {
 export function policyKey(effective: EffectivePolicy): string {
   switch (effective.policy) {
     case "single": return `single ${describeSpec(effective.judge)}`;
-    case "screen-then-confirm": return `screen-then-confirm ${describeSpec(effective.screen)} > ${describeSpec(effective.confirm)} on ${[...effective.escalateOn].sort().join(",")}`;
+    case "screen-then-confirm": return `screen-then-confirm ${describeSpec(effective.screen)} > ${describeSpec(effective.confirm)} on ${[...effective.escalateOn].sort().join(",")}${effective.escalateOnMajorIssue ? ",major-issue" : ""}`;
     case "both": return `both ${effective.backends.map(describeSpec).join(" + ")}`;
   }
 }
@@ -107,7 +108,8 @@ async function judgeUnderPolicy(input: PromptInput, { policy, backend, timeoutMs
     case "screen-then-confirm": {
       const screen = await ask(policy.screen);
       if (!screen.ok) return failed(screen.failure, `screener ${describeSpec(policy.screen)}: ${screen.failure.error}`);
-      if (!policy.escalateOn.includes(screen.opinion.verdict)) return resolved([screen.opinion], screen.opinion, screen.opinion.issues, "screen-then-confirm", false);
+      const escalate = policy.escalateOn.includes(screen.opinion.verdict) || (policy.escalateOnMajorIssue && screen.opinion.issues.some((issue) => issue.severity === "major"));
+      if (!escalate) return resolved([screen.opinion], screen.opinion, screen.opinion.issues, "screen-then-confirm", false);
       const confirm = await ask(policy.confirm);
       if (!confirm.ok) return failed(confirm.failure, `confirmer ${describeSpec(policy.confirm)} failed after screener ${describeSpec(policy.screen)} said ${screen.opinion.verdict}: ${confirm.failure.error}`, [screen.opinion]);
       return resolved([screen.opinion, confirm.opinion], confirm.opinion, confirm.opinion.issues, "screen-then-confirm", screen.opinion.verdict !== confirm.opinion.verdict);
