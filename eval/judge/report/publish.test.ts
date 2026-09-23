@@ -98,26 +98,28 @@ describe("publishTrackingIssue", () => {
 describe("publishCaseIssues", () => {
   it("files MAJOR cases, skips slugs already named by an open issue and caps at max-cases", () => {
     const { run, calls } = fakeGh({
-      "label list": { stdout: JSON.stringify([{ name: "judge" }]) },
+      "label list": (args) => ({ stdout: args.includes("judge") ? JSON.stringify([{ name: "judge" }]) : "" }),
       "issue list": (args) => ({ stdout: args.includes("gamma-post in:title") ? JSON.stringify([{ title: "Rendering: gamma-post — tables" }]) : "[]" }),
       "issue create": { stdout: "https://github.com/Leonezz/quire/issues/20\n" },
     });
     const { log, lines } = logger();
     const outcome = publishCaseIssues({ data: legacyData(), repo: REPO, run, dryRun: false, maxCases: 5, log });
     expect(outcome).toEqual({ filed: ["delta-post"], skipped: ["gamma-post"], left: [] });
-    const created = calls.filter((call) => call[1] === "create");
+    // The template's "rendering" label is created on first use (gh prints nothing for a label search with no match); "judge" already exists.
+    expect(calls.filter((call) => call[0] === "label" && call[1] === "create").map((call) => call[2])).toEqual(["rendering"]);
+    const created = calls.filter((call) => call[0] === "issue" && call[1] === "create");
     expect(created).toHaveLength(1);
     expect(created[0]!.slice(0, 6)).toEqual(["issue", "create", "--repo", REPO, "--title", "Rendering: delta-post — metadata"]);
     expect(created[0]!.slice(-4)).toEqual(["--label", "rendering", "--label", "judge"]);
-    expect(lines).toEqual(["Skipped gamma-post: an open issue already names it.", "Filed https://github.com/Leonezz/quire/issues/20: Rendering: delta-post — metadata", "Filed 1 of 2 MAJOR cases, skipped 1 already open."]);
+    expect(lines).toEqual(["Created label rendering.", "Skipped gamma-post: an open issue already names it.", "Filed https://github.com/Leonezz/quire/issues/20: Rendering: delta-post — metadata", "Filed 1 of 2 MAJOR cases, skipped 1 already open."]);
   });
 
   it("leaves the rest when the cap is reached and says so", () => {
-    const { run, calls } = fakeGh({ "label list": { stdout: JSON.stringify([{ name: "judge" }]) }, "issue create": { stdout: "https://github.com/Leonezz/quire/issues/21\n" } });
+    const { run, calls } = fakeGh({ "label list": { stdout: JSON.stringify([{ name: "judge" }, { name: "rendering" }]) }, "issue create": { stdout: "https://github.com/Leonezz/quire/issues/21\n" } });
     const { log, lines } = logger();
     const outcome = publishCaseIssues({ data: legacyData(), repo: REPO, run, dryRun: false, maxCases: 1, log });
     expect(outcome).toEqual({ filed: ["gamma-post"], skipped: [], left: ["delta-post"] });
-    expect(calls.filter((call) => call[1] === "create")).toHaveLength(1);
+    expect(calls.filter((call) => call[0] === "issue" && call[1] === "create")).toHaveLength(1);
     expect(lines.at(-1)).toBe("Filed 1 of 2 MAJOR cases, 1 left (raise --max-cases).");
   });
 

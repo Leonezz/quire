@@ -17,6 +17,8 @@ export const TRACKING_TITLE_PREFIX = "Extraction quality report";
 const LABELS = {
   [TRACKING_LABEL]: { color: "0E8A16", description: "Automated extraction quality report from the judge" },
   judge: { color: "0E8A16", description: "Filed by the extraction quality judge" },
+  // The issue template names this label, but GitHub does not create template labels by itself.
+  rendering: { color: "D93F0B", description: "A page, feed item or PDF that Quire extracted or rendered wrong" },
 };
 const DEFAULT_MAX_CASES = 5;
 
@@ -81,6 +83,8 @@ export function gh(run, args) {
 /** @param {GhRunner} run @param {string[]} args */
 function ghJson(run, args) {
   const text = gh(run, args);
+  // gh prints nothing at all (not "[]") when a --search matches no label or issue.
+  if (text.trim() === "") return [];
   try { return JSON.parse(text); }
   catch (error) { throw new Error(`gh ${args.slice(0, 2).join(" ")} returned invalid JSON: ${error instanceof Error ? error.message : String(error)}`); }
 }
@@ -151,8 +155,7 @@ export function publishTrackingIssue({ data, repo, runLabel, run, dryRun, log })
 /** @param {{ data: ReportData; repo: string; run: GhRunner; dryRun: boolean; maxCases: number; log: Log }} options @returns {{ filed: string[]; skipped: string[]; left: string[] }} */
 export function publishCaseIssues({ data, repo, run, dryRun, maxCases, log }) {
   const candidates = majorCases(data);
-  // "rendering" is the issue template's own label and is expected to exist; gh issue create fails loudly if not.
-  if (!dryRun) ensureLabel(run, repo, "judge", log);
+  if (!dryRun) { ensureLabel(run, repo, "rendering", log); ensureLabel(run, repo, "judge", log); }
   const outcome = candidates.reduce((acc, row) => {
     if (acc.filed.length >= maxCases) return { ...acc, left: [...acc.left, row.slug] };
     if (!dryRun && hasOpenCaseIssue(run, repo, row.slug)) { log(`Skipped ${row.slug}: an open issue already names it.`); return { ...acc, skipped: [...acc.skipped, row.slug] }; }
