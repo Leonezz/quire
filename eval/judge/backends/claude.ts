@@ -28,7 +28,7 @@ export function claudeArgs(model: string | undefined, schema: unknown): string[]
     "--no-session-persistence",
     "--tools", "",
     "--permission-mode", "plan",
-    "--max-turns", "1",
+    "--max-turns", "3",
     "--strict-mcp-config",
     "--disable-slash-commands",
   ];

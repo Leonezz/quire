@@ -12,7 +12,7 @@
     "kinds": []
   },
   "arxiv-2609-24983": {
-    "verdict": "MINOR",
+    "verdict": "PASS",
     "kinds": [
       "code_or_math",
       "metadata",
@@ -28,6 +28,7 @@
   "ciechanowski-gps": {
     "verdict": "PASS",
     "kinds": [
+      "code_or_math",
       "metadata",
       "tables"
     ]
@@ -53,7 +54,7 @@
   "csstricks-flexbox": {
     "verdict": "MAJOR",
     "kinds": [
-      "layout",
+      "code_or_math",
       "missing_content"
     ]
   },
@@ -74,8 +75,7 @@
   "eugeneyan-llm-patterns": {
     "verdict": "MAJOR",
     "kinds": [
-      "extra_content",
-      "metadata"
+      "code_or_math"
     ]
   },
   "fasterthanlime-golang": {
@@ -88,7 +88,7 @@
     ]
   },
   "githubblog-copilotx": {
-    "verdict": "MINOR",
+    "verdict": "MAJOR",
     "kinds": [
       "missing_content"
     ]
@@ -100,28 +100,27 @@
     ]
   },
   "gradient-icl": {
-    "verdict": "MINOR",
+    "verdict": "PASS",
     "kinds": [
-      "code_or_math",
       "layout"
     ]
   },
   "gwern-scaling": {
-    "verdict": "MINOR",
+    "verdict": "PASS",
     "kinds": [
-      "layout",
-      "metadata",
-      "missing_content"
+      "images",
+      "metadata"
     ]
   },
   "hamel-evals": {
     "verdict": "PASS",
-    "kinds": []
+    "kinds": [
+      "layout"
+    ]
   },
   "harvard-annotated-transformer": {
-    "verdict": "MAJOR",
+    "verdict": "PASS",
     "kinds": [
-      "code_or_math",
       "metadata",
       "missing_content"
     ]
@@ -143,27 +142,26 @@
   "huyenchip-llm-eng": {
     "verdict": "PASS",
     "kinds": [
-      "tables"
+      "missing_content"
     ]
   },
   "interconnects-o1": {
     "verdict": "PASS",
     "kinds": [
       "extra_content",
-      "images",
       "layout"
     ]
   },
   "jalammar-transformer": {
     "verdict": "PASS",
     "kinds": [
-      "tables"
+      "layout",
+      "missing_content"
     ]
   },
   "jaykmody-gpt": {
     "verdict": "PASS",
     "kinds": [
-      "code_or_math",
       "missing_content"
     ]
   },
@@ -171,7 +169,7 @@
     "verdict": "PASS",
     "kinds": [
       "layout",
-      "missing_content"
+      "other"
     ]
   },
   "joshwcomeau-rerender": {
@@ -185,7 +183,7 @@
     ]
   },
   "jvns-firecracker": {
-    "verdict": "MINOR",
+    "verdict": "PASS",
     "kinds": [
       "missing_content"
     ]
@@ -224,10 +222,9 @@
     ]
   },
   "latentspace-ai-engineer": {
-    "verdict": "MINOR",
+    "verdict": "PASS",
     "kinds": [
-      "layout",
-      "metadata"
+      "layout"
     ]
   },
   "lesswrong-lethalities": {
@@ -238,10 +235,8 @@
     ]
   },
   "lilian-agent": {
-    "verdict": "PASS",
+    "verdict": "MINOR",
     "kinds": [
-      "code_or_math",
-      "layout",
       "missing_content"
     ]
   },
@@ -254,10 +249,8 @@
     ]
   },
   "matklad-architecture": {
-    "verdict": "MINOR",
-    "kinds": [
-      "missing_content"
-    ]
+    "verdict": "PASS",
+    "kinds": []
   },
   "medium-backprop": {
     "verdict": "MAJOR",
@@ -270,9 +263,7 @@
   },
   "mitchellh-large": {
     "verdict": "PASS",
-    "kinds": [
-      "layout"
-    ]
+    "kinds": []
   },
   "mtlynch-google": {
     "verdict": "PASS",
@@ -294,6 +285,7 @@
   "openai-4o": {
     "verdict": "MAJOR",
     "kinds": [
+      "extra_content",
       "metadata",
       "missing_content",
       "tables"
@@ -310,9 +302,7 @@
   },
   "overreacted-useeffect": {
     "verdict": "PASS",
-    "kinds": [
-      "layout"
-    ]
+    "kinds": []
   },
   "paulgraham-greatwork": {
     "verdict": "MINOR",
@@ -321,9 +311,9 @@
     ]
   },
   "pragmaticengineer-product": {
-    "verdict": "MINOR",
+    "verdict": "PASS",
     "kinds": [
-      "extra_content"
+      "missing_content"
     ]
   },
   "pytorch-genai2": {
@@ -372,15 +362,12 @@
     "kinds": [
       "code_or_math",
       "images",
-      "layout",
       "missing_content"
     ]
   },
   "rustblog-1.0": {
     "verdict": "PASS",
-    "kinds": [
-      "layout"
-    ]
+    "kinds": []
   },
   "samaltman-ia": {
     "verdict": "PASS",
@@ -389,8 +376,8 @@
   "simonw-llms-2024": {
     "verdict": "PASS",
     "kinds": [
-      "images",
-      "missing_content"
+      "missing_content",
+      "other"
     ]
   },
   "simonw-wordcamp": {
@@ -414,16 +401,14 @@
     "verdict": "PASS",
     "kinds": [
       "code_or_math",
-      "extra_content",
+      "layout",
       "missing_content"
     ]
   },
   "waitbutwhy-ai": {
     "verdict": "PASS",
     "kinds": [
-      "extra_content",
-      "layout",
-      "missing_content"
+      "layout"
     ]
   },
   "webdev-vitals": {

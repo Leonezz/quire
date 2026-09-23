@@ -25,7 +25,7 @@ describe("claudeArgs", () => {
     expect(args[args.indexOf("--json-schema") + 1]).toBe(JSON.stringify(ANSWER_SCHEMA));
     expect(args[args.indexOf("--tools") + 1]).toBe("");
     expect(args[args.indexOf("--permission-mode") + 1]).toBe("plan");
-    expect(args[args.indexOf("--max-turns") + 1]).toBe("1");
+    expect(args[args.indexOf("--max-turns") + 1]).toBe("3"); // structured output is a tool-call turn; 1 cut long pages off
     expect(args).toContain("--strict-mcp-config");
   });
 
