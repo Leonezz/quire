@@ -82,7 +82,10 @@ describe("renderCaseIssue", () => {
     const rendered = renderCaseIssue(gamma, { repo: REPO });
     expect(rendered.title).toBe("Rendering: gamma-post — missing_content");
     expect(rendered.labels).toEqual(["rendering", "judge"]);
+    expect(rendered.body).toContain("### Case\n\n`gamma-post`");
     expect(rendered.body).toContain("### URL\n\nhttps://gamma.example/gamma-post");
+    expect(rendered.body).toContain("### Found by\n\nthe judge (codex)");
+    expect(rendered.body).toContain("### Done when\n\n- [ ] `pnpm --filter @read/eval judge gamma-post` gives PASS");
     expect(rendered.body).toContain("Verdict **MAJOR** (baseline PASS, regressed); kinds: missing_content!, code_or_math!.");
     expect(rendered.body).toContain("- **code_or_math** (major) — code_or_math is wrong\n  > `quote for code_or_math`");
     expect(rendered.body).toContain("### Details\n\ngamma-post reads badly.");

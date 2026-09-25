@@ -159,10 +159,19 @@ export function topKind(row: CaseRow): string {
 }
 
 export function renderCaseIssue(row: CaseRow, { repo }: { repo: string }): CaseIssueRendered {
+  // Sections mirror .github/ISSUE_TEMPLATE/extraction-defect.yml so hand-filed and judge-filed cases read alike.
   const body = [
+    "### Case",
+    "",
+    `\`${row.slug}\``,
+    "",
     "### URL",
     "",
     row.url || "_not in corpus.json_",
+    "",
+    "### Found by",
+    "",
+    `the judge (${row.decidedBy}${row.disputed ? ", disputed" : ""})`,
     "",
     "### What went wrong",
     "",
@@ -175,15 +184,21 @@ export function renderCaseIssue(row: CaseRow, { repo }: { repo: string }): CaseI
     md(row.summary),
     "",
     ...(row.disputed ? [`The backends disagreed on the verdict: ${row.opinions.map((opinion) => `${opinion.backend} said ${opinion.verdict}`).join(", ")}; the final follows ${row.decidedBy}.`, ""] : []),
-    "### Versions and quality report",
+    "### Judge line",
     "",
     "```",
     `judge: ${row.decidedBy} ${row.model} · rubric ${row.rubricVersion} · judged ${row.judgedAt}${row.truncated ? " · input truncated to fit the prompt" : ""}`,
     "```",
     "",
+    "### Done when",
+    "",
+    `- [ ] \`pnpm --filter @read/eval judge ${row.slug}\` gives PASS (or a verdict agreed here) with the issues above gone`,
+    `- [ ] \`pnpm --filter @read/eval eval\` stays green (golden regenerated for this case only and reviewed)`,
+    "- [ ] no regression against `eval/judge/baseline.json`; baseline updated with `--update-baseline`",
+    "",
     "---",
     "",
-    `Filed by the judge; reproduce with \`pnpm --filter @read/eval judge ${row.slug}\`. Structural report: [eval/judge/report.md](https://github.com/${repo}/blob/main/eval/judge/report.md).`,
+    `Filed by the judge; reproduce with \`pnpm --filter @read/eval judge ${row.slug}\`. Structural report: [eval/judge/report.md](https://github.com/${repo}/blob/main/eval/judge/report.md). Template for hand-filed cases: [extraction-defect](https://github.com/${repo}/issues/new?template=extraction-defect.yml).`,
     "",
   ].join("\n");
   return { title: `Rendering: ${row.slug} — ${topKind(row)}`, body, labels: [...CASE_LABELS] };

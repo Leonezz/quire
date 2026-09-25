@@ -1,0 +1,99 @@
+name: Extraction defect (eval case)
+description: A page in the evaluation corpus that the extractor gets wrong — found by the judge, a review, or an imported user report. Same shape as the issues `judge:publish --cases` files.
+title: "Rendering: <slug> — <kind>"
+labels: ["rendering", "judge"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        One issue per corpus case. The judge files these automatically (`pnpm --filter @read/eval judge:publish --cases`); use this form for a case you found by hand or imported from a reader's report (`import-feedback`). Keep the same sections so the two kinds read alike.
+  - type: input
+    id: slug
+    attributes:
+      label: Case
+      description: The corpus slug in `eval/corpus.json` (add the case first if it is new).
+      placeholder: webdev-vitals
+    validations:
+      required: true
+  - type: input
+    id: url
+    attributes:
+      label: URL
+      placeholder: https://web.dev/articles/vitals
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Main problem kind
+      description: The judge's vocabulary (`RenderingProblemKind`); pick the one that decides the verdict, list others under "What went wrong".
+      options:
+        - missing_content — body text, sections or the ending are missing
+        - extra_content — navigation, related posts, comments, share or subscribe blocks kept as body
+        - wrong_order — paragraphs or sections out of order
+        - code_or_math — code blocks or formulas broken
+        - tables — tables mangled or dropped
+        - images — figures missing, duplicated or wrong
+        - metadata — wrong or missing title, author or date
+        - layout — headings, lists, quotes or footnotes wrong
+        - other
+    validations:
+      required: true
+  - type: dropdown
+    id: verdict
+    attributes:
+      label: Verdict
+      description: PASS / MINOR / MAJOR under the rubric in `eval/judge/rubric.ts` (a 0 on Completeness or Element-fidelity is MAJOR).
+      options:
+        - MAJOR
+        - MINOR
+        - PASS (cosmetic; the case still passes)
+    validations:
+      required: true
+  - type: dropdown
+    id: found_by
+    attributes:
+      label: Found by
+      options:
+        - the judge (eval/judge)
+        - hand review
+        - a reader's report (import-feedback)
+        - structural eval (golden diff)
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What went wrong
+      description: One bullet per issue — kind (severity) — note, then a `>` quote of the exact source or extracted text that shows it (≤ 200 characters, verbatim so it can be searched).
+      placeholder: |
+        - **missing_content** (major) — The "Further Reading" section is omitted.
+          > `Further Reading: If you'd like to dig deeper…`
+        - **metadata** (major) — The byline is missing although the page shows the author.
+          > `byline: (none)`
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+      description: What the extraction should contain or look like at that spot; where the content lives in the page (element, class, position) when you know.
+  - type: textarea
+    id: versions
+    attributes:
+      label: Judge line
+      description: From `eval/judge/out/<slug>.json` or the report — judge backend/model, rubric version, date; leave empty for hand-found cases.
+      render: text
+      placeholder: "judge: codex gpt-5.6-luna · rubric 2026-09-23.3 · judged 2026-09-25T…"
+  - type: checkboxes
+    id: acceptance
+    attributes:
+      label: Done when
+      options:
+        - label: "`pnpm --filter @read/eval judge <slug>` gives PASS, or a verdict no worse than agreed here, with the listed issues gone"
+        - label: "`pnpm --filter @read/eval eval` stays green (goldens regenerated for this case only, with `GOLDEN=1 … -t <slug>`, and reviewed)"
+        - label: "`pnpm --filter @read/eval judge` reports no regression against `eval/judge/baseline.json`; baseline updated with `--update-baseline`"
+  - type: markdown
+    attributes:
+      value: |
+        **Reproduce:** `pnpm --filter @read/eval judge <slug>` (judge), `EXPORT=1 npx vitest run -t <slug>` in `eval/` to get `eval/out/<slug>/{source.txt,extracted.md}` side by side. Evidence quotes for judge-found cases live in `eval/judge/out/<slug>.json` (not committed).
