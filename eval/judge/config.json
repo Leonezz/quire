@@ -1,5 +1,5 @@
 {
-  "$comment": "Default judge policy: a screener (Claude Sonnet 5 through Claude Code; use full model ids, the `haiku`/`sonnet` aliases resolve on their own) judges every case; a case the screener does not PASS, or PASSes while listing a major issue, is confirmed by Codex on GPT-5.6-Luna. Override per run with --policy / --backend / --model / --screen-model / --confirm-model.",
+  "$comment": "Default judge policy: a screener (Claude Sonnet 5 through Claude Code; use full model ids, the `haiku`/`sonnet` aliases resolve on their own) judges every case; a case the screener does not PASS, or PASSes while listing a major issue, is confirmed by Codex on GPT-6-Luna. Override per run with --policy / --backend / --model / --screen-model / --confirm-model.",
   "policy": "screen-then-confirm",
   "screen": {
     "backend": "claude",
@@ -7,7 +7,7 @@
   },
   "confirm": {
     "backend": "codex",
-    "model": "gpt-5.6-luna"
+    "model": "gpt-6-luna"
   },
   "escalateOn": [
     "MINOR",
