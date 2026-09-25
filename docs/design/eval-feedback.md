@@ -48,13 +48,13 @@
 
 ```json
 { "policy": "screen-then-confirm",
-  "screen":  { "backend": "claude", "model": "haiku" },
-  "confirm": { "backend": "codex",  "model": "default" },
+  "screen":  { "backend": "claude", "model": "claude-sonnet-5" },
+  "confirm": { "backend": "codex",  "model": "gpt-5.6-luna" },
   "escalateOn": ["MINOR", "MAJOR"], "concurrency": 3 }
 ```
 
 - `claude` 后端 = Claude Code 无头模式（`claude -p --output-format json --json-schema … --tools "" --permission-mode plan --max-turns 1`），走 Claude 订阅；`codex` 后端 = `codex exec --output-schema`，走 ChatGPT 订阅。两边都只读文本、禁工具、结构化输出、注入式 runner 可测。
-- 三种策略：`single`（一个后端）、`screen-then-confirm`（便宜的筛查者判全部，不是 PASS 的再由确认者复判，最终以确认者为准，意见不同记 `disputed`）、`both`（都判，取更严重者，issues 取并集）。默认 screen-then-confirm，Haiku 4.5 筛查（$1/$5 每百万 token）、Codex 确认——一半以上的 case 在 PASS 处停下，只付筛查的钱。
+- 三种策略：`single`（一个后端）、`screen-then-confirm`（便宜的筛查者判全部，不是 PASS 的再由确认者复判，最终以确认者为准，意见不同记 `disputed`）、`both`（都判，取更严重者，issues 取并集）。默认 screen-then-confirm，Claude Sonnet 5 筛查（$2/$10 每百万 token；2026-09-25 从 Haiku 换过来，Haiku 与 Codex 在 31 次升级里有 12 次意见相左）、Codex GPT-5.6-Luna 确认——约一半的 case 在 PASS 处停下，只付筛查的钱。筛查者若在 PASS 里列出 major issue 也会升级（`escalateOnMajorIssue`）。
 - 每个结果记录所有 `opinions[]`（后端、模型、verdict、issues、token、美元、耗时）和 `resolution`；缓存键含策略与模型，换策略即重判。
 - 命令行：`judge [slug…] --policy … --backend … --model … --screen-model … --confirm-model … --force --max --update-baseline --concurrency`。只预检策略用到的后端；Claude 未登录时立刻报 `claude login`。
 
