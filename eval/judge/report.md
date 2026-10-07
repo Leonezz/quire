@@ -1,21 +1,21 @@
-# Extraction quality judge — 2026-09-23
+# Extraction quality judge — 2026-10-07
 
-66 cases: 42 PASS · 6 MINOR · 18 MAJOR · 0 error. This run judged 66 (12 fresh, 54 cached). Judge: policy screen-then-confirm · screen claude/claude-haiku-4-5 · confirm codex/default (on MINOR, MAJOR); rubric 2026-09-23.3. 13 case(s) had an input cut to fit the prompt. 14 evidence quote(s) could not be found verbatim in the inputs.
+66 cases: 43 PASS · 11 MINOR · 12 MAJOR · 0 error. This run judged 66 (65 fresh, 1 cached). Judge: policy screen-then-confirm · screen claude/claude-sonnet-5 · confirm codex/gpt-6-luna (on MINOR, MAJOR); rubric 2026-09-23.3. 13 case(s) had an input cut to fit the prompt. 12 evidence quote(s) could not be found verbatim in the inputs.
 
-Opinions: claude/claude-haiku-4-5 66 opinions, 2,563,259 tokens, $6.42 · codex/default 31 opinions, 1,082,770 tokens. Escalated 31 of 66 screened. Disputed 12.
+Opinions: claude/claude-sonnet-5 66 opinions, 2,663,859 tokens, $10.91 · codex/gpt-6-luna 23 opinions, 765,671 tokens. Escalated 23 of 66 screened. Disputed 5.
 
 ## Issues by kind
 
 | kind | cases | issues | major |
 |---|---:|---:|---:|
-| missing_content | 24 | 28 | 9 |
-| layout | 21 | 27 | 2 |
-| code_or_math | 19 | 21 | 12 |
-| metadata | 17 | 21 | 15 |
-| extra_content | 9 | 10 | 2 |
-| images | 8 | 9 | 5 |
-| tables | 6 | 8 | 2 |
-| other | 2 | 2 | 0 |
+| missing_content | 30 | 39 | 20 |
+| layout | 27 | 28 | 2 |
+| metadata | 19 | 21 | 6 |
+| images | 16 | 18 | 7 |
+| code_or_math | 13 | 13 | 5 |
+| extra_content | 9 | 9 | 1 |
+| other | 9 | 10 | 0 |
+| tables | 8 | 9 | 5 |
 
 ## Cases
 
@@ -23,69 +23,69 @@ Opinions: claude/claude-haiku-4-5 66 opinions, 2,563,259 tokens, $6.42 · codex/
 
 | slug | verdict | kinds | summary | decided by | origin |
 |---|---|---|---|---|---|
-| acoup-gondor1 | PASS | – | The extraction accurately preserves the article’s title, byline, publication date, complete body, section order, blockquotes, headings, lin… | codex/default (disputed) | fresh |
-| acx-sleeper | PASS | – | The extraction is clean and complete. All metadata is accurate, the article body captures every section in order without extraneous navigat… | claude/claude-haiku-4-5 | cached |
-| anthropic-mapping | PASS | – | The extraction accurately captures the full article with correct metadata (title, no byline, publication date), all body sections in sequen… | claude/claude-haiku-4-5 | cached |
-| arxiv-2609-24983 | PASS | metadata, tables, code_or_math | The extraction accurately captures the article's structure and content through most sections, preserving the title, publication date, and b… | claude/claude-haiku-4-5 | fresh |
-| brendangregg-cpu | PASS | code_or_math | The extraction cleanly captures the title, absent byline, date, full article, figures, section order, and proper article boundaries. Both t… | codex/default (disputed) | cached |
-| ciechanowski-gps | PASS | metadata, code_or_math, tables | The extraction accurately captures the article's full structure and all sections in order with complete content. Title is padded with autho… | claude/claude-haiku-4-5 | fresh |
-| cloudflare-pingora | PASS | – | Clean extraction with all article sections present in order, correct metadata, and properly formatted markdown. The article's content, stru… | claude/claude-haiku-4-5 | cached |
-| codinghorror-nocode | PASS | extra_content, code_or_math | The extraction is largely complete with correct metadata (title, author, date) and all article sections in order. Minor presentation issues… | claude/claude-haiku-4-5 | fresh |
-| colah-lstm | PASS | code_or_math, layout | The article is complete, correctly bounded, and has accurate metadata, headings, images, and section order. Reading quality is reduced slig… | codex/default | cached |
-| csstricks-flexbox | MAJOR | missing_content!, code_or_math | The title, author, date, main technical sections, images, lists, and code blocks are largely preserved. However, both the article opening a… | codex/default (disputed) | fresh |
-| danluu-files | PASS | – | The extraction cleanly captures the full article from its opening paragraph through the acknowledgements, while excluding navigation and ad… | codex/default (disputed) | cached |
-| distill-featurevis | MAJOR | metadata, missing_content!, images!, code_or_math!, layout!, layout | The main prose and section order are largely preserved, but the incomplete authorship, early cutoff, missing visualizations, and badly brok… | codex/default (disputed) | cached |
-| eugeneyan-llm-patterns | MAJOR | code_or_math! | The visible prose, headings, lists, links, and images read coherently, but the article’s many formulas are substantially broken by escaped … | codex/default (disputed) | cached |
-| fasterthanlime-golang | MAJOR | metadata!, layout!, code_or_math!, extra_content! | The prose is substantially complete and ordered, with the correct title and date, but the extraction is badly degraded for reading: section… | codex/default | cached |
-| githubblog-copilotx | MAJOR | missing_content! | The metadata, article boundaries, ordering, and retained elements are otherwise strong, but a complete subsection about GPT-4 is missing fr… | codex/default | fresh |
-| godev-pipelines | MAJOR | code_or_math! | The metadata, article boundaries, prose, section order, and overall completeness are correct. However, pervasive code-block corruption make… | codex/default | cached |
-| gradient-icl | PASS | layout | The extraction is clean overall: metadata correct, all article sections present and in order, body boundaries precise. One minor markdown f… | claude/claude-haiku-4-5 | cached |
-| gwern-scaling | PASS | metadata, images | The extraction correctly captures the article structure, sections, and content in proper order with good markdown formatting of quotes, lin… | claude/claude-haiku-4-5 | fresh |
-| hamel-evals | PASS | layout | Extraction is nearly flawless: metadata correct, all sections present and in order, elements fully intact. Minor issue is that several bull… | claude/claude-haiku-4-5 | cached |
-| harvard-annotated-transformer | PASS | missing_content, metadata | The extraction captures the complete article content with correct code, formulas, and structure. The title is accurate and body sections ar… | claude/claude-haiku-4-5 | cached |
-| hf-rlhf | MAJOR | missing_content!, code_or_math! | The title, authors, date, main prose, headings, lists, and images are largely captured accurately and in order. However, a substantial fina… | codex/default | cached |
-| hillelwayne-engineers | PASS | missing_content, layout | The title, metadata, article boundaries, section order, quotations, links, headings, image, and nearly all body text are preserved well. Th… | codex/default (disputed) | cached |
-| huyenchip-llm-eng | PASS | missing_content | The extraction is comprehensive and well-structured. All article sections are present in the correct order, metadata is accurate, and eleme… | claude/claude-haiku-4-5 | cached |
-| interconnects-o1 | PASS | extra_content, layout | The extraction accurately captured metadata (title, author, publication date) and the complete article body with all sections in order. Min… | claude/claude-haiku-4-5 | cached |
-| jalammar-transformer | PASS | missing_content, layout | The extraction cleanly captures the article's full technical content with correct metadata and all sections in order. The only material iss… | claude/claude-haiku-4-5 | cached |
-| jaykmody-gpt | PASS | missing_content | The extraction correctly captures the article's metadata, title, content flow, and technical elements including code blocks and formulas. O… | claude/claude-haiku-4-5 | cached |
-| joelonsoftware-test | PASS | other, layout | Extraction is complete with correct metadata, proper body boundaries, and all 12 article sections in order, but applies extensive emphasis … | claude/claude-haiku-4-5 | fresh |
-| joshwcomeau-rerender | MAJOR | metadata!, missing_content!, code_or_math!, images!, layout | Most of the main prose remains in order and the extraction ends cleanly, but the date is missing, two article blocks are omitted, and sever… | codex/default | cached |
-| jvns-firecracker | PASS | missing_content | The extraction accurately captures the article's title, byline, date, and content through most of the links section, with all code blocks a… | claude/claude-haiku-4-5 | cached |
-| jxnl-rag | PASS | missing_content | The extraction cleanly captures the article's structure and content, with all major sections present and properly formatted. However, it en… | claude/claude-haiku-4-5 | cached |
-| karpathy-recipe | PASS | – | The extraction is complete and accurate. All metadata is correct (title, date; byline correctly shown as none), the article body runs from … | claude/claude-haiku-4-5 | cached |
-| karpathy-rnn | MAJOR | missing_content!, code_or_math, layout | The extraction preserves the metadata, opening, ending, images, and code samples well, but a large article section is completely missing an… | codex/default | cached |
-| karpathy-software2 | MAJOR | metadata!, extra_content!, layout, images! | The prose is otherwise complete, correctly ordered, and ends cleanly, with the title and author identified correctly. However, the wrong pu… | codex/default (disputed) | cached |
-| kentcdodds-context | MAJOR | metadata! | The article body is clean, complete, correctly bounded, and preserves its headings, lists, links, images, and code blocks. However, both th… | codex/default (disputed) | fresh |
-| latentspace-ai-engineer | PASS | layout | The extraction cleanly captures the article with correct metadata, complete sections in order, and all content intact. Footnote reference n… | claude/claude-haiku-4-5 | cached |
-| lesswrong-lethalities | MINOR | metadata!, layout | The article is otherwise complete, correctly ordered, and cleanly separated from the page chrome and comments, with the correct title, auth… | codex/default | cached |
-| lilian-agent | MINOR | missing_content | The extraction is otherwise strong: metadata, article start, section order, images, formulas, lists, quotations, and code blocks are preser… | codex/default (disputed) | cached |
-| lilian-attention | MAJOR | code_or_math!, tables!, layout | The extraction preserves the complete article in order with correct metadata, boundaries, prose, images, lists, references, and code block.… | codex/default | cached |
-| matklad-architecture | PASS | – | The extraction cleanly captures the full article with correct metadata (title, no byline, exact date). All nine paragraphs and the rust-ana… | claude/claude-haiku-4-5 | cached |
-| medium-backprop | MAJOR | extra_content, images!, code_or_math!, layout | The metadata and full prose are accurate and ordered, and the extraction ends at the correct place. However, the missing figures and degrad… | codex/default | cached |
-| mitchellh-large | PASS | – | The extraction captures the full article accurately with correct metadata, proper section boundaries, and complete content in correct order… | claude/claude-haiku-4-5 | cached |
-| mtlynch-google | PASS | – | The extraction is clean and complete. Metadata is accurate (title, byline Michael Lynch, and date 2018-02-28), the article body is intact f… | claude/claude-haiku-4-5 | cached |
-| nullprogram-sm | PASS | extra_content, layout | The extraction correctly identifies the title, date, and article content, with all sections present and in correct order. A URL navigation … | claude/claude-haiku-4-5 | cached |
-| oneusefulthing-centaurs | PASS | layout | The extraction accurately captures the full article with correct title, byline, and publication date. All content is present in proper orde… | claude/claude-haiku-4-5 | cached |
-| openai-4o | MAJOR | metadata!, missing_content, tables, extra_content | The main article is substantially present in the correct order and ends cleanly, with its images and prose retained. However, both author a… | codex/default | cached |
-| openai-4o-zh | MINOR | metadata!, extra_content, missing_content, tables | The main prose, headings, date, selected image example, and ending are largely preserved in order. The extraction misses the author and par… | codex/default (disputed) | cached |
-| overreacted-useeffect | PASS | – | The extraction is clean and complete. Title, date, and byline are correct; the article body begins with the first real paragraph after prop… | claude/claude-haiku-4-5 | cached |
-| paulgraham-greatwork | MINOR | metadata! | The article text, title image, inline emphasis, and linked footnote references are preserved cleanly and in order throughout the visible po… | codex/default | cached |
-| pragmaticengineer-product | PASS | missing_content | The extraction cleanly captures the article's full content with correct metadata, proper section structure, and preserved elements. A singl… | claude/claude-haiku-4-5 | cached |
-| pytorch-genai2 | MINOR | metadata!, layout | The article is otherwise complete, correctly bounded, in order, and preserves its headings, code block, links, and images. The missing date… | codex/default | cached |
-| quanta-understand | PASS | missing_content, images | The extraction preserves all major article sections in correct order with accurate metadata, but misses the introductory lede and the image… | claude/claude-haiku-4-5 | fresh |
-| raschka-selfattention | MAJOR | code_or_math! | The title, author, date, article boundaries, prose, sections, code blocks, and figures are otherwise complete and correctly ordered. Howeve… | codex/default | cached |
-| raschka-understanding-llms | PASS | missing_content | The extraction is strong and complete—all 19 papers are present with full detail, all sections are in order, and metadata is correct. The s… | claude/claude-haiku-4-5 | cached |
-| regehr-ub | MAJOR | metadata!, code_or_math! | The article text is otherwise complete, correctly ordered, and cleanly bounded, with the correct author and publication day. However, the t… | codex/default | cached |
-| ruanyifeng-curl | PASS | – | The extraction cleanly captures the complete curl reference article with accurate metadata (title: "curl 的用法指南", author: 阮一峰, date: 2019-09… | claude/claude-haiku-4-5 | cached |
-| ruanyifeng-weekly | PASS | – | The extraction is clean and complete. All article content is present in correct order with proper markdown formatting; navigation, metadata… | claude/claude-haiku-4-5 | cached |
-| ruder-optim | MAJOR | missing_content!, code_or_math!, images!, missing_content, images | The title, author, date, article boundaries, prose, code, references, and section order are largely correct. However, a substantive section… | codex/default | cached |
-| rustblog-1.0 | PASS | – | The extraction cleanly captures the entire Rust 1.0 announcement with correct metadata (title, byline, publication date) and complete artic… | claude/claude-haiku-4-5 | cached |
-| samaltman-ia | PASS | – | The extraction cleanly captures the article with correct metadata, complete body text in order, and proper markdown formatting. All seven d… | claude/claude-haiku-4-5 | fresh |
-| simonw-llms-2024 | PASS | missing_content, other | The extraction captures the article's core content accurately, including all 18 major sections with correct title, byline, and publication … | claude/claude-haiku-4-5 | cached |
-| simonw-wordcamp | PASS | missing_content, images | The title, author, date, opening, prose, links, code block, quotations, and nearly all images are extracted cleanly and in order. It has on… | codex/default (disputed) | cached |
-| sivers-ff | PASS | – | The extraction is complete and accurate. Metadata (title, byline, date) are correct; the article body begins cleanly without navigation or … | claude/claude-haiku-4-5 | cached |
-| stratechery-endbeginning | MINOR | metadata! | The article body is complete, correctly ordered, and cleanly preserves its headings, images, quotation, links, and footnote. The only defec… | codex/default | cached |
-| vickiboykis-gguf | PASS | missing_content, code_or_math, layout | The extraction preserves the correct metadata, article boundaries, section order, code blocks, images, and nearly all prose. It has a local… | codex/default | fresh |
-| waitbutwhy-ai | PASS | layout | The extraction cleanly captures the complete article with accurate title, byline, and publication date (2015-01-22). All sections are prese… | claude/claude-haiku-4-5 | cached |
-| webdev-vitals | MAJOR | metadata!, extra_content, missing_content, tables! | Most prose, headings, lists, links, and the code sample survive in order, but the extraction misses the byline metadata and several callout… | codex/default | cached |
+| acoup-gondor1 | PASS | – | Clean extraction: title, byline, and date match the source exactly, the body starts with the actual opening paragraph and ends at the artic… | claude/claude-sonnet-5 | fresh |
+| acx-sleeper | PASS | missing_content, layout | Title, byline, date, body boundaries, element fidelity (images, quotes, lists, headings) and section order are all correct; the only defect… | claude/claude-sonnet-5 | fresh |
+| anthropic-mapping | PASS | missing_content | Clean extraction: title, absent byline, and date are all correct, the article body runs intact and in order from the opening paragraph thro… | claude/claude-sonnet-5 | fresh |
+| arxiv-2609-24983 | MAJOR | metadata!, code_or_math!, tables! | The article text is largely preserved in order, and the title and publication date are correct. Metadata misses the authors, and the equati… | codex/gpt-6-luna | fresh |
+| brendangregg-cpu | MAJOR | metadata, code_or_math!, extra_content | The title, date, article boundaries, section order, and most prose are preserved. The first perf-stat example is materially broken because … | codex/gpt-6-luna | fresh |
+| ciechanowski-gps | MAJOR | metadata, images!, tables!, code_or_math, missing_content! | The extraction preserves the article’s section order and most prose, with the correct byline and date. It has a padded title, loses the int… | codex/gpt-6-luna | fresh |
+| cloudflare-pingora | PASS | – | The extraction is clean and faithful: title, byline, and date all match the source exactly, the body starts at the real first paragraph and… | claude/claude-sonnet-5 | fresh |
+| codinghorror-nocode | PASS | extra_content, code_or_math | Title, byline, date and the article's ending are all captured correctly and the body content matches the source in order and completeness. … | claude/claude-sonnet-5 | fresh |
+| colah-lstm | PASS | code_or_math | A clean, faithful extraction: title, date, and body boundaries are correct, all sections and images appear in original order, and the singl… | claude/claude-sonnet-5 | fresh |
+| csstricks-flexbox | MAJOR | missing_content!, images! | Title, byline, date, code, and most of the main guide are preserved. However, the extraction skips the article’s opening paragraph and cont… | codex/gpt-6-luna | fresh |
+| danluu-files | PASS | layout, other | The extraction faithfully reproduces the entire talk transcript from the italicized intro through the acknowledgements, preserving all head… | claude/claude-sonnet-5 | fresh |
+| distill-featurevis | MAJOR | metadata!, missing_content!, images!, code_or_math!, layout | The extraction preserves the main article sections through Author Contributions and captures most prose in order. It omits the article’s fi… | codex/gpt-6-luna | fresh |
+| eugeneyan-llm-patterns | PASS | code_or_math | Within the visible (truncated) portion, metadata (title, byline, date) is correct, the body starts at the real intro with the discussion-li… | claude/claude-sonnet-5 | fresh |
+| fasterthanlime-golang | MAJOR | layout!, code_or_math!, images!, missing_content!, extra_content, metadata | The extraction preserves most article prose in order and records the author and publication date correctly. However, it drops section headi… | codex/gpt-6-luna | fresh |
+| githubblog-copilotx | MINOR | images, other | The article text is present in order from its opening paragraph through its final paragraph, and the title, author, and original publicatio… | codex/gpt-6-luna (disputed) | fresh |
+| godev-pipelines | MAJOR | code_or_math!, missing_content! | Title, byline, date, and the article body through Further reading are captured in order. Code formatting is inconsistent and some code cont… | codex/gpt-6-luna | fresh |
+| gradient-icl | PASS | layout | A faithful, well-ordered extraction with correct title, byline, date, clean body start and end, and all sections intact; the only flaw is b… | claude/claude-sonnet-5 | fresh |
+| gwern-scaling | PASS | missing_content, layout | The extraction is accurate, well-ordered, and preserves the long article's prose, blockquotes, images/captions and footnote links faithfull… | claude/claude-sonnet-5 | fresh |
+| hamel-evals | PASS | – | The extraction cleanly captures the full article from the "Motivation" heading through the Footnotes, with accurate title, byline, and date… | claude/claude-sonnet-5 | fresh |
+| harvard-annotated-transformer | PASS | missing_content, layout | An extremely faithful, nearly line-by-line reproduction of this long notebook-style article: title, absent byline/date, code blocks, math, … | claude/claude-sonnet-5 | fresh |
+| hf-rlhf | MAJOR | metadata!, missing_content!, images!, other, code_or_math, images | The main article through the lecture link is largely intact and in order, with figures retained. The extraction stops before the Further re… | codex/gpt-6-luna | fresh |
+| hillelwayne-engineers | PASS | missing_content, images | A faithful, well-ordered extraction with correct title, date, and absent byline matching the source; the only flaws are the complete loss o… | claude/claude-sonnet-5 | fresh |
+| huyenchip-llm-eng | PASS | missing_content, tables, layout | A faithful, well-ordered extraction with correct title/byline/date and clean body boundaries; only minor cosmetic issues remain (one small … | claude/claude-sonnet-5 | fresh |
+| interconnects-o1 | PASS | extra_content, layout | A clean, faithful extraction: title, byline and date are correct, all images/blockquotes/footnote content survive, and the article ends at … | claude/claude-sonnet-5 | fresh |
+| jalammar-transformer | PASS | missing_content, tables, layout | A faithful, well-ordered extraction with correct title/byline/date and all headings, body text, and diagrams present in sequence; the only … | claude/claude-sonnet-5 | fresh |
+| jaykmody-gpt | PASS | missing_content | A faithful, well-formed extraction: title, byline, and date are correct, the body starts and (as far as the truncated text shows) tracks th… | claude/claude-sonnet-5 | fresh |
+| joelonsoftware-test | PASS | layout, other | A faithful, well-structured extraction: correct title, byline, date, clean body start and end, and all 12 sections present in order with li… | claude/claude-sonnet-5 | fresh |
+| joshwcomeau-rerender | MINOR | metadata, layout, missing_content!, images | Title and byline are correct, and the body mostly preserves the article’s order and content. The publication date and two passages are miss… | codex/gpt-6-luna | fresh |
+| jvns-firecracker | MINOR | metadata, missing_content! | The article text is otherwise preserved in order, including code blocks, lists, and the image. The extractor stops before the article’s fin… | codex/gpt-6-luna (disputed) | fresh |
+| jxnl-rag | PASS | missing_content, layout | The extraction correctly captures title, byline, date, and the full body in order with all links intact, only tripping on a dangling final … | claude/claude-sonnet-5 | fresh |
+| karpathy-recipe | PASS | – | The extraction is clean: title, date, and absence of byline are all captured correctly, the body starts with the article's actual opening p… | claude/claude-sonnet-5 | fresh |
+| karpathy-rnn | MINOR | metadata, missing_content!, images | The title, date, article opening, and most formatting are preserved. The Further Reading section is missing, and the extraction stops befor… | codex/gpt-6-luna (disputed) | fresh |
+| karpathy-software2 | MINOR | metadata, layout | The article text is otherwise complete, in order, and ends at the article’s final paragraph. The title, author, body boundaries, and inline… | codex/gpt-6-luna | fresh |
+| kentcdodds-context | MINOR | metadata | The article body starts and ends correctly and preserves its sections, code, and lists. Title is correct; author and publication date are m… | codex/gpt-6-luna (disputed) | fresh |
+| latentspace-ai-engineer | PASS | metadata, layout, other | A faithful, well-ordered extraction of the full article body (intro through footnotes) with correct title, date, body-start and body-end bo… | claude/claude-sonnet-5 | fresh |
+| lesswrong-lethalities | MINOR | metadata, layout | The title and byline are correct, and the article body appears complete and in order through its ending. The date metadata is absent, and t… | codex/gpt-6-luna | fresh |
+| lilian-agent | PASS | missing_content, other | A faithful, well-ordered extraction with correct title/byline/date, clean body start, intact code blocks, lists, and math, but it is trunca… | claude/claude-sonnet-5 | fresh |
+| lilian-attention | MINOR | code_or_math, tables | Title, author, date, article boundaries, sections, images, and references are captured. Some formulas have malformed escaping, and the firs… | codex/gpt-6-luna (disputed) | fresh |
+| matklad-architecture | PASS | missing_content | Clean extraction with correct title, no-byline, and matching date; body starts correctly and all footer/UI cruft is excluded, but the extra… | claude/claude-sonnet-5 | fresh |
+| medium-backprop | PASS | extra_content, code_or_math, layout | A faithful, complete extraction with correct title/byline/date and full section coverage in order, marred only by a leading byline/avatar w… | claude/claude-sonnet-5 | fresh |
+| mitchellh-large | PASS | layout | A clean, faithful extraction: title, absent byline, and date all match the source, the body starts and ends at the correct boundaries, and … | claude/claude-sonnet-5 | fresh |
+| mtlynch-google | PASS | – | The extraction is clean: title, byline, and date are correct, the article body starts and ends exactly at the article boundaries, all secti… | claude/claude-sonnet-5 | fresh |
+| nullprogram-sm | PASS | layout, other | The extraction faithfully reproduces the article's title, date, and full body in order, starting at the first real paragraph and ending at … | claude/claude-sonnet-5 | fresh |
+| oneusefulthing-centaurs | PASS | layout, missing_content | A clean, faithful extraction with correct title, byline, date, body start and end, and all images/paragraphs preserved in order; the only f… | claude/claude-sonnet-5 | fresh |
+| openai-4o | MAJOR | metadata, missing_content!, tables!, images! | The main narrative is substantially present and ordered, with the correct title and a clean opening. However, the publication date, evaluat… | codex/gpt-6-luna | fresh |
+| openai-4o-zh | PASS | layout, extra_content, missing_content, tables | The extraction correctly captures title, absent byline, date, and the full article body in order from the intro through model availability,… | claude/claude-sonnet-5 | fresh |
+| overreacted-useeffect | PASS | – | The extraction faithfully reproduces the article: correct title and date, clean body start (donation widget correctly excluded), headings/o… | claude/claude-sonnet-5 | fresh |
+| paulgraham-greatwork | MINOR | metadata | The article body is in order and preserves the visible text and footnote links. The prompt truncates both inputs before the ending, so body… | codex/gpt-6-luna | fresh |
+| pragmaticengineer-product | MINOR | extra_content, missing_content, images | Title, byline, date, and the main article are captured accurately and in order. The extraction extends into promotional material, omits the… | codex/gpt-6-luna | fresh |
+| pytorch-genai2 | MINOR | metadata | The article body starts and ends at the right places, with its sections, images, code, and lists largely intact. Title and byline are corre… | codex/gpt-6-luna | fresh |
+| quanta-understand | PASS | images | Clean extraction: title, byline and date match exactly, the article body starts and ends at the correct points, all paragraphs appear compl… | claude/claude-sonnet-5 | fresh |
+| raschka-selfattention | PASS | code_or_math | The extraction faithfully reproduces the full article in order—title, byline, and date all correct, body starts at the first paragraph and … | claude/claude-sonnet-5 | fresh |
+| raschka-understanding-llms | PASS | missing_content | A faithful, well-ordered extraction that preserves title, byline, date, all 19 numbered paper entries with their images/captions/blockquote… | claude/claude-sonnet-5 | fresh |
+| regehr-ub | MAJOR | metadata!, layout!, missing_content! | Most article prose and sections are present and ordered, and metadata has a plausible byline and timestamp. However, the title is wrong, th… | codex/gpt-6-luna | fresh |
+| ruanyifeng-curl | PASS | layout | Clean, faithful extraction: correct title, byline, and date, body starts at the intro section and ends cleanly at the reference link/（完）, w… | claude/claude-sonnet-5 | fresh |
+| ruanyifeng-weekly | PASS | other, layout | An essentially complete and faithful extraction: title, byline, date, body start/end and section order all match the source exactly, with e… | claude/claude-sonnet-5 | fresh |
+| ruder-optim | PASS | missing_content, images, layout | A faithful, well-ordered extraction of a very long technical post with correct title/byline/date and a clean start and end (navigation, rel… | claude/claude-sonnet-5 | fresh |
+| rustblog-1.0 | PASS | layout, other | Accurate, complete extraction with correct title, byline, date, and body boundaries matching the source article; only minor cosmetic deviat… | claude/claude-sonnet-5 | fresh |
+| samaltman-ia | PASS | – | Clean extraction: title, absent byline, and date (2024-09-22T16:00:00Z matches Sep 23 in UTC+8) are all correct, the article text is comple… | claude/claude-sonnet-5 | fresh |
+| simonw-llms-2024 | PASS | images, missing_content | The extraction cleanly captures title, byline, date, and the full article body from its opening paragraph through the final 'Everything tag… | claude/claude-sonnet-5 | fresh |
+| simonw-wordcamp | PASS | missing_content, images | The extraction faithfully reproduces the title, byline, date, and the full slide-by-slide body text in correct order with code blocks and q… | claude/claude-sonnet-5 | fresh |
+| sivers-ff | PASS | – | Clean extraction: title, byline, and date match the source exactly, the body begins with the article's opening parenthetical and ends at th… | claude/claude-sonnet-5 | fresh |
+| stratechery-endbeginning | PASS | – | The extraction cleanly captures the full article from its opening paragraph through the closing footnote, preserving headings, the blockquo… | claude/claude-sonnet-5 | fresh |
+| vickiboykis-gguf | MAJOR | metadata!, images!, images | The title and date are correct, and the article mostly reads in order through its conclusion. However, the author is missing and the GGML c… | codex/gpt-6-luna | fresh |
+| waitbutwhy-ai | PASS | extra_content, layout | A faithful, well-ordered extraction of a long article with correct title/byline/date and intact images, lists, and footnotes; the only flaw… | claude/claude-sonnet-5 | fresh |
+| webdev-vitals | MAJOR | metadata, extra_content!, missing_content!, tables! | The title, publication date, opening paragraph, and most article sections are captured. However, several explanatory notes and a key paragr… | codex/gpt-6-luna | cached |
