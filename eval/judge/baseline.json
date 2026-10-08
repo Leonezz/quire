@@ -1,44 +1,35 @@
 {
   "acoup-gondor1": {
     "verdict": "PASS",
-    "kinds": []
+    "kinds": [
+      "layout"
+    ]
   },
   "acx-sleeper": {
     "verdict": "PASS",
-    "kinds": [
-      "layout",
-      "missing_content"
-    ]
+    "kinds": []
   },
   "anthropic-mapping": {
     "verdict": "PASS",
-    "kinds": [
-      "missing_content"
-    ]
+    "kinds": []
   },
   "arxiv-2609-24983": {
-    "verdict": "MAJOR",
+    "verdict": "PASS",
     "kinds": [
-      "code_or_math",
-      "metadata",
-      "tables"
-    ]
-  },
-  "brendangregg-cpu": {
-    "verdict": "MAJOR",
-    "kinds": [
-      "code_or_math",
-      "extra_content",
       "metadata"
     ]
   },
+  "brendangregg-cpu": {
+    "verdict": "PASS",
+    "kinds": [
+      "code_or_math"
+    ]
+  },
   "ciechanowski-gps": {
-    "verdict": "MAJOR",
+    "verdict": "PASS",
     "kinds": [
       "code_or_math",
-      "images",
       "metadata",
-      "missing_content",
       "tables"
     ]
   },
@@ -49,37 +40,31 @@
   "codinghorror-nocode": {
     "verdict": "PASS",
     "kinds": [
-      "code_or_math",
       "extra_content"
     ]
   },
   "colah-lstm": {
     "verdict": "PASS",
     "kinds": [
-      "code_or_math"
+      "layout"
     ]
   },
   "csstricks-flexbox": {
-    "verdict": "MAJOR",
+    "verdict": "PASS",
     "kinds": [
-      "images",
       "missing_content"
     ]
   },
   "danluu-files": {
     "verdict": "PASS",
     "kinds": [
-      "layout",
-      "other"
+      "layout"
     ]
   },
   "distill-featurevis": {
     "verdict": "MAJOR",
     "kinds": [
-      "code_or_math",
       "images",
-      "layout",
-      "metadata",
       "missing_content"
     ]
   },
@@ -92,39 +77,28 @@
   "fasterthanlime-golang": {
     "verdict": "MAJOR",
     "kinds": [
-      "code_or_math",
-      "extra_content",
       "images",
-      "layout",
-      "metadata",
-      "missing_content"
+      "layout"
     ]
   },
   "githubblog-copilotx": {
     "verdict": "MINOR",
     "kinds": [
-      "images",
-      "other"
+      "images"
     ]
   },
   "godev-pipelines": {
-    "verdict": "MAJOR",
-    "kinds": [
-      "code_or_math",
-      "missing_content"
-    ]
+    "verdict": "PASS",
+    "kinds": []
   },
   "gradient-icl": {
     "verdict": "PASS",
-    "kinds": [
-      "layout"
-    ]
+    "kinds": []
   },
   "gwern-scaling": {
-    "verdict": "PASS",
+    "verdict": "MINOR",
     "kinds": [
-      "layout",
-      "missing_content"
+      "layout"
     ]
   },
   "hamel-evals": {
@@ -143,65 +117,52 @@
     "kinds": [
       "code_or_math",
       "images",
-      "metadata",
-      "missing_content",
-      "other"
+      "missing_content"
     ]
   },
   "hillelwayne-engineers": {
     "verdict": "PASS",
     "kinds": [
-      "images",
-      "missing_content"
+      "layout"
     ]
   },
   "huyenchip-llm-eng": {
     "verdict": "PASS",
     "kinds": [
-      "layout",
-      "missing_content",
-      "tables"
+      "missing_content"
     ]
   },
   "interconnects-o1": {
     "verdict": "PASS",
     "kinds": [
-      "extra_content",
-      "layout"
+      "missing_content"
     ]
   },
   "jalammar-transformer": {
     "verdict": "PASS",
     "kinds": [
-      "layout",
-      "missing_content",
-      "tables"
+      "missing_content"
     ]
   },
   "jaykmody-gpt": {
     "verdict": "PASS",
-    "kinds": [
-      "missing_content"
-    ]
+    "kinds": []
   },
   "joelonsoftware-test": {
     "verdict": "PASS",
     "kinds": [
-      "layout",
-      "other"
+      "layout"
     ]
   },
   "joshwcomeau-rerender": {
     "verdict": "MINOR",
     "kinds": [
-      "images",
       "layout",
-      "metadata",
-      "missing_content"
+      "metadata"
     ]
   },
   "jvns-firecracker": {
-    "verdict": "MINOR",
+    "verdict": "PASS",
     "kinds": [
       "metadata",
       "missing_content"
@@ -209,10 +170,7 @@
   },
   "jxnl-rag": {
     "verdict": "PASS",
-    "kinds": [
-      "layout",
-      "missing_content"
-    ]
+    "kinds": []
   },
   "karpathy-recipe": {
     "verdict": "PASS",
@@ -221,36 +179,34 @@
   "karpathy-rnn": {
     "verdict": "MINOR",
     "kinds": [
-      "images",
-      "metadata",
-      "missing_content"
+      "code_or_math",
+      "layout",
+      "metadata"
     ]
   },
   "karpathy-software2": {
-    "verdict": "MINOR",
+    "verdict": "MAJOR",
     "kinds": [
-      "layout",
-      "metadata"
+      "images",
+      "layout"
     ]
   },
   "kentcdodds-context": {
     "verdict": "MINOR",
     "kinds": [
+      "images",
       "metadata"
     ]
   },
   "latentspace-ai-engineer": {
     "verdict": "PASS",
     "kinds": [
-      "layout",
-      "metadata",
-      "other"
+      "layout"
     ]
   },
   "lesswrong-lethalities": {
     "verdict": "MINOR",
     "kinds": [
-      "layout",
       "metadata"
     ]
   },
@@ -262,65 +218,55 @@
     ]
   },
   "lilian-attention": {
-    "verdict": "MINOR",
-    "kinds": [
-      "code_or_math",
-      "tables"
-    ]
+    "verdict": "PASS",
+    "kinds": []
   },
   "matklad-architecture": {
     "verdict": "PASS",
-    "kinds": [
-      "missing_content"
-    ]
+    "kinds": []
   },
   "medium-backprop": {
-    "verdict": "PASS",
+    "verdict": "MAJOR",
     "kinds": [
       "code_or_math",
-      "extra_content",
-      "layout"
+      "images"
     ]
   },
   "mitchellh-large": {
     "verdict": "PASS",
-    "kinds": [
-      "layout"
-    ]
+    "kinds": []
   },
   "mtlynch-google": {
     "verdict": "PASS",
-    "kinds": []
+    "kinds": [
+      "images"
+    ]
   },
   "nullprogram-sm": {
     "verdict": "PASS",
-    "kinds": [
-      "layout",
-      "other"
-    ]
+    "kinds": []
   },
   "oneusefulthing-centaurs": {
     "verdict": "PASS",
     "kinds": [
-      "layout",
-      "missing_content"
+      "layout"
     ]
   },
   "openai-4o": {
     "verdict": "MAJOR",
     "kinds": [
       "images",
+      "layout",
       "metadata",
-      "missing_content",
       "tables"
     ]
   },
   "openai-4o-zh": {
-    "verdict": "PASS",
+    "verdict": "MAJOR",
     "kinds": [
-      "extra_content",
+      "images",
       "layout",
-      "missing_content",
+      "metadata",
       "tables"
     ]
   },
@@ -329,23 +275,21 @@
     "kinds": []
   },
   "paulgraham-greatwork": {
-    "verdict": "MINOR",
-    "kinds": [
-      "metadata"
-    ]
+    "verdict": "PASS",
+    "kinds": []
   },
   "pragmaticengineer-product": {
-    "verdict": "MINOR",
+    "verdict": "PASS",
     "kinds": [
-      "extra_content",
-      "images",
-      "missing_content"
+      "extra_content"
     ]
   },
   "pytorch-genai2": {
     "verdict": "MINOR",
     "kinds": [
-      "metadata"
+      "images",
+      "metadata",
+      "other"
     ]
   },
   "quanta-understand": {
@@ -356,19 +300,18 @@
   },
   "raschka-selfattention": {
     "verdict": "PASS",
-    "kinds": [
-      "code_or_math"
-    ]
+    "kinds": []
   },
   "raschka-understanding-llms": {
     "verdict": "PASS",
     "kinds": [
-      "missing_content"
+      "layout"
     ]
   },
   "regehr-ub": {
     "verdict": "MAJOR",
     "kinds": [
+      "code_or_math",
       "layout",
       "metadata",
       "missing_content"
@@ -376,31 +319,22 @@
   },
   "ruanyifeng-curl": {
     "verdict": "PASS",
-    "kinds": [
-      "layout"
-    ]
+    "kinds": []
   },
   "ruanyifeng-weekly": {
     "verdict": "PASS",
-    "kinds": [
-      "layout",
-      "other"
-    ]
+    "kinds": []
   },
   "ruder-optim": {
     "verdict": "PASS",
     "kinds": [
       "images",
-      "layout",
       "missing_content"
     ]
   },
   "rustblog-1.0": {
     "verdict": "PASS",
-    "kinds": [
-      "layout",
-      "other"
-    ]
+    "kinds": []
   },
   "samaltman-ia": {
     "verdict": "PASS",
@@ -409,14 +343,12 @@
   "simonw-llms-2024": {
     "verdict": "PASS",
     "kinds": [
-      "images",
-      "missing_content"
+      "images"
     ]
   },
   "simonw-wordcamp": {
     "verdict": "PASS",
     "kinds": [
-      "images",
       "missing_content"
     ]
   },
@@ -429,23 +361,23 @@
     "kinds": []
   },
   "vickiboykis-gguf": {
-    "verdict": "MAJOR",
+    "verdict": "PASS",
     "kinds": [
-      "images",
-      "metadata"
+      "layout",
+      "missing_content"
     ]
   },
   "waitbutwhy-ai": {
     "verdict": "PASS",
     "kinds": [
-      "extra_content",
-      "layout"
+      "extra_content"
     ]
   },
   "webdev-vitals": {
     "verdict": "MAJOR",
     "kinds": [
-      "extra_content",
+      "images",
+      "layout",
       "metadata",
       "missing_content",
       "tables"
