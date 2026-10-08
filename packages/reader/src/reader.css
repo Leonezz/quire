@@ -9,6 +9,14 @@
 .reader-body h4, .reader-body h5, .reader-body h6 { margin: 22px 0 8px; font: 600 16px/1.4 var(--font); }
 .reader-body p, .reader-body ul, .reader-body ol { margin: 0 0 18px; }
 .reader-body ul, .reader-body ol { padding-left: 26px; }
+/* Tailwind's preflight sets `list-style: none` on every ul/ol; the reader must put the markers back,
+   or bulleted and numbered lists read as indented paragraphs (found by the visual judge, 2026-10-09). */
+.reader-body ul { list-style: disc outside; }
+.reader-body ol { list-style: decimal outside; }
+.reader-body ul ul, .reader-body ol ul { list-style-type: circle; }
+.reader-body ul ul ul, .reader-body ol ul ul, .reader-body ul ol ul { list-style-type: square; }
+.reader-body ol ol { list-style-type: lower-alpha; }
+.reader-body li::marker { color: var(--label-3); }
 .reader-body li { margin: 4px 0; }
 .reader-body a { color: var(--accent-text); text-decoration: underline; text-decoration-color: var(--accent-soft); text-underline-offset: 3px; }
 .reader-body a:hover { text-decoration-color: var(--accent-text); }
