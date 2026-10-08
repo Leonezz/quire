@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildReportData } from "./data";
-import { AT, corpus, emptyData, hybridData, issue, legacyData, legacyResult } from "./fixtures";
+import { AT, corpus, emptyData, hybridData, issue, legacyData, legacyResult, visualData } from "./fixtures";
 import { BODY_LIMIT, majorCases, renderCaseIssue, renderReportIssue, topKind } from "./issue";
 
 const REPO = "Leonezz/quire";
@@ -107,5 +107,33 @@ describe("renderCaseIssue", () => {
 
   it("orders MAJOR cases by their major-issue count, then slug", () => {
     expect(majorCases(data).map((row) => row.slug)).toEqual(["gamma-post", "delta-post"]);
+  });
+});
+
+describe("visual cases in the issues", () => {
+  const data = visualData();
+  const alpha = data.cases.find((row) => row.slug === "alpha-post")!;
+
+  it("a case issue lists the facts, each issue's tile and where the screenshots are, in text only", () => {
+    const { body } = renderCaseIssue(alpha, { repo: REPO });
+    expect(body).toContain("- **images** (major) — images is wrong — rendered tile 2");
+    expect(body).toContain("- **images** (minor) — images is wrong — reference tile 1");
+    expect(body).toContain("**Rendering facts** (measured in the reader page): 1 of 3 images broken, 1 element wider than the column, 2 raw-markup samples, 0 math errors; 1 code blocks, 0 tables, 3 figures, 1200 words.");
+    expect(body).toContain("- broken images: `https://alpha.example/fig2.png`");
+    expect(body).toContain("- overflow: `article > pre` (1500 px)");
+    expect(body).toContain("- raw markup: `$$` in `where $$x^2$$ grows`");
+    expect(body).toContain("- screenshots: eval/render/out/alpha-post/ (local) — the judge saw rendered tiles 1–3 of 3 and reference tile 1 of 2");
+    expect(body).toContain("· visual mode · rubric 2026-10-08.4");
+    expect(body).not.toMatch(/!\[|<img/);
+  });
+
+  it("the tracking issue totals the facts and folds them into each MAJOR case", () => {
+    const { body } = renderReportIssue(data, { repo: REPO });
+    expect(body).toContain("| Cases judged with screenshots | 2 |");
+    expect(body).toContain("| Broken images (measured) | 1 in 1 case |");
+    expect(body).toContain("| Math render errors (measured) | 1 in 1 case |");
+    expect(body).toContain("<code>alpha-post</code>");
+    expect(body).toContain("- screenshots: eval/render/out/alpha-post/ (local)");
+    expect(renderReportIssue(legacyData(), { repo: REPO }).body).not.toContain("screenshots");
   });
 });

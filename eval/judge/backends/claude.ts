@@ -7,23 +7,28 @@
 // cache_creation_input_tokens }, modelUsage: { "<model id>": {...} } }. Newer versions put the
 // schema-conforming answer in structured_output; older ones only print it as the `result` text.
 // `is_error` is the failure signal: a failed call still says subtype "success" (seen on 2.1.x).
+//
+// Images only go in through stream-json (`--input-format stream-json --output-format stream-json
+// --verbose`): stdin is one JSON line, a user message whose content is the base64 image blocks then
+// the prompt text; stdout is JSON lines (system init, assistant turns, ...) ending with the same
+// result envelope as `{"type":"result",...}`. Without images the plain `--output-format json` path is kept.
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { preflightClaude } from "./preflight.mjs";
 import { BackendRunError, outputTail, type BackendRunMeta, type JudgeBackend } from "./types";
 
-export interface ClaudeCall { prompt: string; schema: unknown; model: string | undefined; bin: string; timeoutMs: number }
+export interface ClaudeCall { prompt: string; schema: unknown; model: string | undefined; bin: string; timeoutMs: number; images?: string[] }
 export interface ClaudeRun { stdout: string; stderr: string; status: number | null; timedOut: boolean }
 export type ClaudeRunner = (call: ClaudeCall) => Promise<ClaudeRun>;
 
-/** The arguments that make `claude` answer once, with no tools, and print the JSON envelope. */
-export function claudeArgs(model: string | undefined, schema: unknown): string[] {
+/** The arguments that make `claude` answer once, with no tools, and print the JSON envelope (or, with `stream`, take and print stream-json). */
+export function claudeArgs(model: string | undefined, schema: unknown, stream = false): string[] {
   return [
     "-p",
     ...(model ? ["--model", model] : []),
-    "--output-format", "json",
+    ...(stream ? ["--input-format", "stream-json", "--output-format", "stream-json", "--verbose"] : ["--output-format", "json"]),
     "--json-schema", JSON.stringify(schema),
     "--no-session-persistence",
     "--tools", "",
@@ -34,14 +39,39 @@ export function claudeArgs(model: string | undefined, schema: unknown): string[]
   ];
 }
 
+const MEDIA_TYPES: Record<string, string> = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", gif: "image/gif" };
+
+/** The media type of an image file by its extension; anything else is an error, never a guess. */
+export function imageMediaType(path: string): string {
+  const extension = /\.([a-z0-9]+)$/i.exec(path)?.[1]?.toLowerCase() ?? "";
+  const type = MEDIA_TYPES[extension];
+  if (!type) throw new Error(`cannot attach ${path}: only ${Object.keys(MEDIA_TYPES).join(", ")} images are supported`);
+  return type;
+}
+
+export interface EncodedImage { mediaType: string; data: string }
+
+/** The one stdin line stream-json input takes: a user message with the images first, then the prompt. */
+export function claudeStreamMessage(prompt: string, images: readonly EncodedImage[]): string {
+  const content = [
+    ...images.map((image) => ({ type: "image", source: { type: "base64", media_type: image.mediaType, data: image.data } })),
+    { type: "text", text: prompt },
+  ];
+  return `${JSON.stringify({ type: "user", message: { role: "user", content } })}\n`;
+}
+
+const encodeImages = (paths: readonly string[]): Promise<EncodedImage[]> => Promise.all(paths.map(async (path) => ({ mediaType: imageMediaType(path), data: (await readFile(path)).toString("base64") })));
+
 /** The real thing: `claude -p` in a fresh temp directory so no project settings, CLAUDE.md or MCP servers load. */
-export const runClaudePrint: ClaudeRunner = async ({ prompt, schema, model, bin, timeoutMs }) => {
+export const runClaudePrint: ClaudeRunner = async ({ prompt, schema, model, bin, timeoutMs, images = [] }) => {
+  const stream = images.length > 0;
+  const stdin = stream ? claudeStreamMessage(prompt, await encodeImages(images)) : prompt;
   const dir = await mkdtemp(join(tmpdir(), "quire-judge-claude-"));
   try {
     // CLAUDECODE marks a nested session; a judge run started from inside Claude Code must not inherit it.
     const { CLAUDECODE: _nested, ...env } = process.env;
     return await new Promise<ClaudeRun>((resolve, reject) => {
-      const child = spawn(bin, claudeArgs(model, schema), { cwd: dir, stdio: ["pipe", "pipe", "pipe"], env: { ...env, NO_COLOR: "1" } });
+      const child = spawn(bin, claudeArgs(model, schema, stream), { cwd: dir, stdio: ["pipe", "pipe", "pipe"], env: { ...env, NO_COLOR: "1" } });
       let stdout = "";
       let stderr = "";
       let timedOut = false;
@@ -51,7 +81,7 @@ export const runClaudePrint: ClaudeRunner = async ({ prompt, schema, model, bin,
       child.on("error", (error) => { clearTimeout(timer); reject(error); });
       child.on("close", (status) => { clearTimeout(timer); resolve({ stdout, stderr, status, timedOut }); });
       child.stdin.on("error", () => { /* the process exited before reading the prompt; `close` reports it */ });
-      child.stdin.end(prompt);
+      child.stdin.end(stdin);
     });
   } finally {
     await rm(dir, { recursive: true, force: true });
@@ -101,10 +131,34 @@ const FENCE = /^```(?:json)?\s*\n([\s\S]*?)\n```\s*$/;
 /** The result text without a ```json fence, when the model wrapped its answer in one. */
 export const unfence = (text: string): string => FENCE.exec(text.trim())?.[1] ?? text.trim();
 
+/** The `{"type":"result"}` line of stream-json output: the last one, as later lines win. */
+function findStreamResult(stdout: string): Record<string, unknown> | undefined {
+  for (const line of stdout.trim().split("\n").reverse()) {
+    const text = line.trim();
+    if (!text.startsWith("{")) continue;
+    try {
+      const parsed: unknown = JSON.parse(text);
+      if (isRecord(parsed) && parsed.type === "result") return parsed;
+    } catch { /* not a JSON line */ }
+  }
+  return undefined;
+}
+
 /** Reads the envelope; throws ClaudeEnvelopeError (with the meta it could read) when the call failed or printed no answer. */
 export function parseClaudeEnvelope(stdout: string): ClaudeEnvelope {
   const envelope = findEnvelope(stdout);
   if (!envelope) throw new ClaudeEnvelopeError(`claude -p printed no JSON result envelope: ${outputTail(stdout) || "no output"}`);
+  return readEnvelope(envelope);
+}
+
+/** Reads the result line of stream-json output (the same envelope, one line among many); throws ClaudeEnvelopeError like parseClaudeEnvelope. */
+export function parseClaudeStream(stdout: string): ClaudeEnvelope {
+  const envelope = findStreamResult(stdout);
+  if (!envelope) throw new ClaudeEnvelopeError(`claude -p (stream-json) printed no {"type":"result"} line: ${outputTail(stdout) || "no output"}`);
+  return readEnvelope(envelope);
+}
+
+function readEnvelope(envelope: Record<string, unknown>): ClaudeEnvelope {
   const meta = claudeEnvelopeMeta(envelope);
   if (envelope.is_error === true) {
     const errors = Array.isArray(envelope.errors) ? envelope.errors.filter((item): item is string => typeof item === "string") : [];
@@ -131,13 +185,14 @@ export function claudeBackend({ bin, model, runner = runClaudePrint, env = proce
     id: "claude",
     model,
     preflight: async () => { preflightClaude(bin, env); },
-    run: async ({ prompt, schema, timeoutMs }) => {
-      const run = await runner({ prompt, schema, model: model === "default" ? undefined : model, bin, timeoutMs });
+    run: async ({ prompt, schema, timeoutMs, images }) => {
+      const stream = (images?.length ?? 0) > 0;
+      const run = await runner({ prompt, schema, model: model === "default" ? undefined : model, bin, timeoutMs, ...(stream ? { images } : {}) });
       if (run.timedOut) throw new BackendRunError(`claude -p exceeded ${timeoutMs} ms and was killed`);
-      const envelope = findEnvelope(run.stdout);
-      // A non-zero exit with an envelope is an is_error result: parseClaudeEnvelope reports its message.
+      const envelope = stream ? findStreamResult(run.stdout) : findEnvelope(run.stdout);
+      // A non-zero exit with an envelope is an is_error result: the parser reports its message.
       if (run.status !== 0 && !envelope) throw new BackendRunError(`claude -p exited with ${String(run.status)}: ${outputTail(run.stderr) || outputTail(run.stdout) || "no output"}`);
-      const { raw, answerFrom: _answerFrom, ...meta } = parseClaudeEnvelope(run.stdout);
+      const { raw, answerFrom: _answerFrom, ...meta } = stream ? parseClaudeStream(run.stdout) : parseClaudeEnvelope(run.stdout);
       return { raw, ...meta };
     },
   };

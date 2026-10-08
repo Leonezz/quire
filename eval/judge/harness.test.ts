@@ -1,5 +1,6 @@
 // The judge run: every corpus snapshot (or the ones asked for) judged under the effective policy
-// (config.json + flags, resolved by run.mjs into JUDGE_POLICY), cached in eval/judge/out/<slug>.json,
+// (config.json + flags, resolved by run.mjs into JUDGE_POLICY) in the effective mode (visual: with the
+// render capture from eval/render/out/<slug>/; text: SOURCE and EXTRACTED only), cached in eval/judge/out/<slug>.json,
 // gated by eval/judge/baseline.json, summarized in report.md. Driven by run.mjs, which checks the
 // CLIs the policy needs are there and logged in and passes the options below as env.
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -11,15 +12,17 @@ import { claudeBackend } from "./backends/claude";
 import { codexBackend } from "./backends/codex";
 import type { BackendSpec, JudgeBackend } from "./backends/types";
 import { compareToBaseline, describeDelta, updateBaseline, type Baseline } from "./baseline";
-import { cacheKey, isJudged, readCached, readPrevious, writeResult, type JudgeResult } from "./cache";
+import { isJudged, readCached, readPrevious, writeResult, type FailedCase, type JudgeResult } from "./cache";
 import { extractedMarkdown, truncateInput } from "./inputs";
-import { describePolicy, resolvePolicy } from "./policy-config.mjs";
-import { judgeCase, parseEffectivePolicy, policyKey, type EffectivePolicy } from "./policy";
+import { describePolicy, resolveMaxImages, resolveMode, resolvePolicy } from "./policy-config.mjs";
+import { caseKey, judgeCase, parseEffectivePolicy, type EffectivePolicy } from "./policy";
 import { decidedBy, renderReport, type ReportRow } from "./report";
-import { RUBRIC_VERSION } from "./rubric";
+import { rubricVersionFor, type PromptInput } from "./rubric";
+import { loadCapture, MissingCaptureError, type JudgeMode } from "./visual";
 
 const ROOT = __dirname;
 const OUT = join(ROOT, "out");
+const RENDER_OUT = join(ROOT, "..", "render", "out");
 const BASELINE_PATH = join(ROOT, "baseline.json");
 const ONLY = new Set((process.env.JUDGE_ONLY ?? "").split(",").filter(Boolean));
 const FORCE = process.env.JUDGE_FORCE === "1";
@@ -28,10 +31,11 @@ const UPDATE_BASELINE = process.env.JUDGE_UPDATE_BASELINE === "1";
 const BINS = { codex: process.env.JUDGE_CODEX_BIN || "codex", claude: process.env.JUDGE_CLAUDE_BIN || "claude" } as const;
 /** One backend call may take this long before it counts as failed. */
 const TIMEOUT_MS = Number(process.env.JUDGE_TIMEOUT_MS ?? 15 * 60_000);
-/** run.mjs resolves the policy; run bare (vitest on this file), config.json alone applies. */
-const POLICY: EffectivePolicy = process.env.JUDGE_POLICY
-  ? parseEffectivePolicy(process.env.JUDGE_POLICY)
-  : (resolvePolicy(JSON.parse(readFileSync(join(ROOT, "config.json"), "utf8"))) as EffectivePolicy);
+/** run.mjs resolves the policy and the mode; run bare (vitest on this file), config.json alone applies. */
+const CONFIG = JSON.parse(readFileSync(join(ROOT, "config.json"), "utf8"));
+const POLICY: EffectivePolicy = process.env.JUDGE_POLICY ? parseEffectivePolicy(process.env.JUDGE_POLICY) : (resolvePolicy(CONFIG) as EffectivePolicy);
+const MODE: JudgeMode = resolveMode(CONFIG, process.env.JUDGE_MODE || undefined);
+const MAX_IMAGES = process.env.JUDGE_MAX_IMAGES ? Number(process.env.JUDGE_MAX_IMAGES) : resolveMaxImages(CONFIG);
 const POLICY_LINE = describePolicy(POLICY);
 
 const backendFor = (spec: BackendSpec): JudgeBackend => (spec.backend === "codex" ? codexBackend({ bin: BINS.codex, model: spec.model }) : claudeBackend({ bin: BINS.claude, model: spec.model }));
@@ -44,13 +48,24 @@ function readBaseline(): Baseline {
   return existsSync(BASELINE_PATH) ? (JSON.parse(readFileSync(BASELINE_PATH, "utf8")) as Baseline) : {};
 }
 
+/** A case that could not be judged before any call: reported in this run, never written over the cached result. */
+const notJudged = (slug: string, error: string): FailedCase => ({ key: "", slug, model: "–", rubricVersion: rubricVersionFor(MODE), truncated: false, wallMs: 0, judgedAt: new Date().toISOString(), mode: MODE, error });
+
 async function evaluate(snapshot: Snapshot): Promise<ReportRow> {
   const source = truncateInput(captureTextOf(new TextDecoder().decode(snapshot.bytes)));
   const extracted = truncateInput(extractedMarkdown(normalizeSnapshot(snapshot)));
-  const key = cacheKey(source.text, extracted.text, RUBRIC_VERSION, policyKey(POLICY));
+  let input: PromptInput = { slug: snapshot.slug, url: snapshot.finalUrl, source: source.text, extracted: extracted.text, truncated: { source: source.truncated, extracted: extracted.truncated } };
+  if (MODE === "visual") {
+    try { input = { ...input, visual: loadCapture(RENDER_OUT, snapshot.slug) }; }
+    catch (error) {
+      if (error instanceof MissingCaptureError) return { result: notJudged(snapshot.slug, error.message), origin: "fresh" };
+      throw error;
+    }
+  }
+  const key = caseKey(input, POLICY, MAX_IMAGES);
   const cached = FORCE ? undefined : readCached(OUT, snapshot.slug, key);
   if (cached) return { result: cached, origin: "cached" };
-  const result = await judgeCase({ slug: snapshot.slug, url: snapshot.finalUrl, source: source.text, extracted: extracted.text, truncated: { source: source.truncated, extracted: extracted.truncated } }, { policy: POLICY, backend: backendFor, timeoutMs: TIMEOUT_MS });
+  const result = await judgeCase(input, { policy: POLICY, backend: backendFor, timeoutMs: TIMEOUT_MS, maxImages: MAX_IMAGES });
   writeResult(OUT, result);
   return { result, origin: "fresh" };
 }
@@ -58,7 +73,8 @@ async function evaluate(snapshot: Snapshot): Promise<ReportRow> {
 const describeResult = (result: JudgeResult) => isJudged(result) ? `${result.verdict}${result.issues.length ? ` · ${[...new Set(result.issues.map((issue) => issue.kind))].join(", ")}` : ""} · ${decidedBy(result)}` : `ERROR ${result.error.split("\n")[0]}`;
 const describeCost = (result: JudgeResult) => {
   const cost = isJudged(result) ? (result.opinions ?? []).reduce<number | undefined>((sum, opinion) => (opinion.costUsd === undefined ? sum : (sum ?? 0) + opinion.costUsd), undefined) : undefined;
-  return `${(result.wallMs / 1000).toFixed(0)} s${result.tokens ? ` · ${result.tokens.toLocaleString("en-US")} tokens` : ""}${cost !== undefined ? ` · $${cost.toFixed(4)}` : ""}`;
+  const perOpinion = isJudged(result) && (result.opinions?.length ?? 0) > 0 ? ` [${(result.opinions ?? []).map((opinion) => `${opinion.backend} ${opinion.verdict} ${(opinion.wallMs / 1000).toFixed(0)} s${opinion.tokens ? ` ${opinion.tokens.toLocaleString("en-US")} tok` : ""}${opinion.costUsd !== undefined ? ` $${opinion.costUsd.toFixed(4)}` : ""}${opinion.images ? ` ${opinion.images} img` : ""}`).join(" · ")}]` : "";
+  return `${(result.wallMs / 1000).toFixed(0)} s${result.tokens ? ` · ${result.tokens.toLocaleString("en-US")} tokens` : ""}${cost !== undefined ? ` · $${cost.toFixed(4)}` : ""}${perOpinion}`;
 };
 
 describe.concurrent("judge", () => {
@@ -94,5 +110,5 @@ afterAll(() => {
   if (rows.length === 0) return;
   const ran = new Set(rows.map((row) => row.result.slug));
   const previous: ReportRow[] = corpusEntries().filter((entry) => !ran.has(entry.slug)).flatMap((entry) => { const result = readPrevious(OUT, entry.slug); return result ? [{ result, origin: "previous" as const }] : []; });
-  writeFileSync(join(ROOT, "report.md"), renderReport([...rows, ...previous], { date: new Date().toISOString().slice(0, 10), policy: POLICY_LINE, rubricVersion: RUBRIC_VERSION, ranSlugs: rows.length }));
+  writeFileSync(join(ROOT, "report.md"), renderReport([...rows, ...previous], { date: new Date().toISOString().slice(0, 10), policy: POLICY_LINE, rubricVersion: rubricVersionFor(MODE), ranSlugs: rows.length, mode: MODE }));
 });

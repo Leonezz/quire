@@ -1,5 +1,6 @@
 // The Codex backend: `codex exec` with the answer schema in a scratch directory, the prompt on stdin,
-// nothing persisted. The runner is a parameter so tests can judge without Codex.
+// images attached with `-i <png>` (one flag per image), nothing persisted. The runner is a parameter
+// so tests can judge without Codex.
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -7,7 +8,7 @@ import { join } from "node:path";
 import { preflightCodex } from "./preflight.mjs";
 import { BackendRunError, outputTail, type BackendRunMeta, type JudgeBackend } from "./types";
 
-export interface CodexCall { prompt: string; schema: unknown; model: string | undefined; bin: string; timeoutMs: number }
+export interface CodexCall { prompt: string; schema: unknown; model: string | undefined; bin: string; timeoutMs: number; images?: string[] }
 export interface CodexRun {
   /** The agent's last message (`-o`), when it wrote one. */
   lastMessage: string | undefined;
@@ -27,14 +28,25 @@ export function parseTokens(stderr: string): number | undefined {
   return match?.[1] ? Number(match[1].replace(/,/g, "")) : undefined;
 }
 
+export interface CodexArgsInput { dir: string; schemaPath: string; outPath: string; model: string | undefined; images?: readonly string[] }
+
+/**
+ * The `codex exec` arguments: read-only, ephemeral, the schema and the answer file in `dir`, the prompt
+ * from stdin (`-`). `-i` takes several values, so each image gets its own `-i` and they all come
+ * right after `exec`, where the next token is always another flag and never the `-` prompt marker.
+ */
+export function codexArgs({ dir, schemaPath, outPath, model, images = [] }: CodexArgsInput): string[] {
+  return ["exec", ...images.flatMap((image) => ["-i", image]), "--skip-git-repo-check", "--ephemeral", "--color", "never", "-s", "read-only", "-C", dir, "--output-schema", schemaPath, "-o", outPath, ...(model ? ["-m", model] : []), "-"];
+}
+
 /** The real thing: `codex exec` in a fresh temp directory, the prompt on stdin, nothing persisted. */
-export const runCodexExec: CodexRunner = async ({ prompt, schema, model, bin, timeoutMs }) => {
+export const runCodexExec: CodexRunner = async ({ prompt, schema, model, bin, timeoutMs, images }) => {
   const dir = await mkdtemp(join(tmpdir(), "quire-judge-"));
   try {
     const schemaPath = join(dir, "schema.json");
     const outPath = join(dir, "answer.json");
     await writeFile(schemaPath, JSON.stringify(schema));
-    const args = ["exec", "--skip-git-repo-check", "--ephemeral", "--color", "never", "-s", "read-only", "-C", dir, "--output-schema", schemaPath, "-o", outPath, ...(model ? ["-m", model] : []), "-"];
+    const args = codexArgs({ dir, schemaPath, outPath, model, ...(images?.length ? { images } : {}) });
     const run = await new Promise<Omit<CodexRun, "lastMessage">>((resolve, reject) => {
       const child = spawn(bin, args, { cwd: dir, stdio: ["pipe", "pipe", "pipe"], env: { ...process.env, NO_COLOR: "1" } });
       let stdout = "";
@@ -74,8 +86,8 @@ export function codexBackend({ bin, model, runner = runCodexExec }: CodexBackend
     id: "codex",
     model,
     preflight: async () => { preflightCodex(bin); },
-    run: async ({ prompt, schema, timeoutMs }) => {
-      const run = await runner({ prompt, schema, model: model === "default" ? undefined : model, bin, timeoutMs });
+    run: async ({ prompt, schema, timeoutMs, images }) => {
+      const run = await runner({ prompt, schema, model: model === "default" ? undefined : model, bin, timeoutMs, ...(images?.length ? { images } : {}) });
       const meta = codexRunMeta(run);
       if (run.timedOut) throw new BackendRunError(`codex exec exceeded ${timeoutMs} ms and was killed`, meta);
       if (run.status !== 0) throw new BackendRunError(`codex exec exited with ${String(run.status)}: ${outputTail(run.stderr) || outputTail(run.stdout) || "no output"}`, meta);

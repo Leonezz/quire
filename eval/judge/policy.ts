@@ -14,11 +14,12 @@
 //                       Either failing fails the case.
 //
 // The cache key covers the policy and every backend/model it names, so changing any of them
-// re-judges every case.
+// re-judges every case; in visual mode also the mode, the capture's key and the tiles attached.
 import { cacheKey, type BackendId, type FailedCase, type JudgedCase, type JudgedIssue, type JudgeResult, type Opinion, type Resolution } from "./cache";
 import { describeSpec, type BackendSpec, type JudgeBackend } from "./backends/types";
 import { askOpinion, type OpinionFailure } from "./judge-case";
-import { RUBRIC_VERSION, VERDICTS, type PromptInput, type Verdict } from "./rubric";
+import { RUBRIC_VERSION, TEXT_RUBRIC_VERSION, VERDICTS, type PromptInput, type Verdict } from "./rubric";
+import { DEFAULT_MAX_IMAGES, planImages, renderSummary, visualKeyPart } from "./visual";
 
 export type PolicyId = Resolution["policy"];
 export type EffectivePolicy =
@@ -79,7 +80,19 @@ export interface JudgeCaseOptions {
   /** Builds (or, in tests, fakes) the backend for a spec; called once per opinion. */
   backend: (spec: BackendSpec) => JudgeBackend;
   timeoutMs: number;
+  /** Images per call in visual mode (config.json maxImages). */
+  maxImages?: number;
   now?: () => Date;
+}
+
+/**
+ * The case's cache key. Text mode: exactly the key the text judge always wrote (text rubric version,
+ * policy), so its results stay cached. Visual mode: the visual rubric version, the policy, and the
+ * mode, the capture's key and the tile files attached.
+ */
+export function caseKey(input: PromptInput, policy: EffectivePolicy, maxImages = DEFAULT_MAX_IMAGES): string {
+  if (!input.visual) return cacheKey(input.source, input.extracted, TEXT_RUBRIC_VERSION, policyKey(policy));
+  return cacheKey(input.source, input.extracted, RUBRIC_VERSION, `${policyKey(policy)} ${visualKeyPart(input.visual, planImages(input.visual, maxImages))}`);
 }
 
 const RANK: Record<Verdict, number> = { PASS: 0, MINOR: 1, MAJOR: 2 };
@@ -97,8 +110,8 @@ type Outcome = { ok: true; resolved: Resolved } | { ok: false; failure: OpinionF
 const failed = (failure: OpinionFailure, error: string, opinions: Opinion[] = []): Outcome => ({ ok: false, failure, error, opinions });
 const resolved = (opinions: Opinion[], final: Opinion, issues: JudgedIssue[], policy: PolicyId, disputed: boolean): Outcome => ({ ok: true, resolved: { opinions, final, issues, resolution: { policy, from: final.backend, disputed } } });
 
-async function judgeUnderPolicy(input: PromptInput, { policy, backend, timeoutMs }: JudgeCaseOptions): Promise<Outcome> {
-  const ask = (spec: BackendSpec) => askOpinion(backend(spec), input, timeoutMs);
+async function judgeUnderPolicy(input: PromptInput, { policy, backend, timeoutMs, maxImages = DEFAULT_MAX_IMAGES }: JudgeCaseOptions): Promise<Outcome> {
+  const ask = (spec: BackendSpec) => askOpinion(backend(spec), input, timeoutMs, maxImages);
   switch (policy.policy) {
     case "single": {
       const outcome = await ask(policy.judge);
@@ -137,7 +150,9 @@ const sumTokens = (opinions: readonly { tokens?: number }[]): number | undefined
  */
 export async function judgeCase(input: PromptInput, options: JudgeCaseOptions): Promise<JudgeResult> {
   const started = Date.now();
-  const base = { key: cacheKey(input.source, input.extracted, RUBRIC_VERSION, policyKey(options.policy)), slug: input.slug, rubricVersion: RUBRIC_VERSION, truncated: input.truncated.source || input.truncated.extracted };
+  const maxImages = options.maxImages ?? DEFAULT_MAX_IMAGES;
+  const visual = input.visual ? { mode: "visual" as const, render: renderSummary(input.visual, planImages(input.visual, maxImages)) } : {};
+  const base = { key: caseKey(input, options.policy, maxImages), slug: input.slug, rubricVersion: input.visual ? RUBRIC_VERSION : TEXT_RUBRIC_VERSION, truncated: input.truncated.source || input.truncated.extracted, ...visual };
   const stamp = () => ({ wallMs: Date.now() - started, judgedAt: (options.now ?? (() => new Date()))().toISOString() });
   const outcome = await judgeUnderPolicy(input, options);
   if (!outcome.ok) {

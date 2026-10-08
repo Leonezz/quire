@@ -1,6 +1,8 @@
 // GitHub issue bodies from the report: one tracking "quality report" issue (charts as Mermaid, which
 // GitHub renders; every MAJOR case folded into <details>) and one "Rendering: <slug>" issue per MAJOR
 // case, on the shape of .github/ISSUE_TEMPLATE/rendering.yml. Pure; publish.mjs sends them with gh.
+// A visual case lists its measured rendering facts and each issue's tile in text; the screenshots
+// themselves stay local (gh cannot upload images), named by their path under eval/render/out/.
 import type { CaseIssue, CaseRow, ReportData, VerdictChange } from "./data";
 
 /** GitHub rejects bodies over 65,536 characters; the case list is cut before that with a note. */
@@ -17,12 +19,13 @@ const md = (text: string) => text.replace(/\|/g, "\\|").replace(/\r?\n/g, " ").t
 /** Text inside a quoted Mermaid label: quotes and colons would end the label or the statement. */
 const mermaidLabel = (text: string) => text.replace(/["':]/g, " ").replace(/\s+/g, " ").trim();
 /** The quote as one inline code span so its own markdown (a leading #, |, [![image]) stays literal; the span's fence outruns any backticks inside. */
-function quote(text: string): string {
+function codeSpan(text: string): string {
   const flat = text.replace(/\s+/g, " ").trim();
   const fence = "`".repeat(Math.max(0, ...[...flat.matchAll(/`+/g)].map((run) => run[0].length)) + 1);
   const padded = flat.startsWith("`") || flat.endsWith("`") ? ` ${flat} ` : flat;
-  return `> ${fence}${padded}${fence}`;
+  return `${fence}${padded}${fence}`;
 }
+const quote = (text: string) => `> ${codeSpan(text)}`;
 const fmtTokens = (value: number) => (value >= 1e6 ? `${(value / 1e6).toFixed(1)}M` : value >= 1e3 ? `${(value / 1e3).toFixed(1)}k` : String(value));
 const fmtMs = (value: number) => (value >= 60_000 ? `${Math.floor(value / 60_000)}m ${Math.round((value % 60_000) / 1000)}s` : `${(value / 1000).toFixed(1)}s`);
 const kindList = (row: CaseRow) => row.kinds.map((kind) => `${kind.kind}${kind.severity === "major" ? "!" : ""}`).join(", ") || "no issues";
@@ -38,6 +41,20 @@ function summaryTable(data: ReportData): string[] {
     `| Issues | ${totals.issues} (${totals.majorIssues} major) |`,
     `| Evidence quotes not found verbatim | ${totals.unverified} |`,
     ...(totals.escalated ? [`| Escalated to a second opinion | ${totals.escalated} |`, `| Disputed verdicts | ${totals.disputed} |`] : []),
+    ...renderRows(data),
+  ];
+}
+
+/** The capture facts over the corpus, as summary-table rows; none when no case was judged with a capture. */
+function renderRows({ renderTotals: t }: ReportData): string[] {
+  if (!t.captured) return [];
+  const cases = (n: number) => (n ? ` in ${n} case${n === 1 ? "" : "s"}` : "");
+  return [
+    `| Cases judged with screenshots | ${t.captured} |`,
+    `| Broken images (measured) | ${t.brokenImages}${cases(t.brokenCases)} |`,
+    `| Overflowing elements (measured) | ${t.overflow}${cases(t.overflowCases)} |`,
+    `| Raw markup shown as text (measured) | ${t.rawMarkup}${cases(t.rawMarkupCases)} |`,
+    `| Math render errors (measured) | ${t.mathErrors}${cases(t.mathErrorCases)} |`,
   ];
 }
 
@@ -83,7 +100,30 @@ function backendLines(data: ReportData): string[] {
   ];
 }
 
-const issueLines = (issue: CaseIssue) => [`- **${issue.kind}** (${issue.severity}${issue.verified ? "" : ", quote not found verbatim"}) — ${md(issue.note)}`, ...(issue.evidence.trim() ? [`  ${quote(issue.evidence)}`] : [])];
+const whereText = (issue: CaseIssue) => (issue.where ? ` — ${issue.where.image} tile ${issue.where.tile}` : "");
+const issueLines = (issue: CaseIssue) => [`- **${issue.kind}** (${issue.severity}${issue.verified ? "" : ", quote not found verbatim"}) — ${md(issue.note)}${whereText(issue)}`, ...(issue.evidence.trim() ? [`  ${quote(issue.evidence)}`] : [])];
+
+const FACT_SAMPLES = 3;
+function sideText(row: CaseRow, side: "rendered" | "reference"): string {
+  const sent = row.render?.sent[side] ?? 0;
+  const total = row.render?.tiles[side].length ?? 0;
+  return sent === 0 ? `no ${side} tiles (${total} captured)` : `${side} tile${sent === 1 ? " 1" : `s 1–${sent}`} of ${total}`;
+}
+
+/** The case's measured facts and where its screenshots are, in text; nothing for a case judged without a capture. */
+export function factLines(row: CaseRow): string[] {
+  const render = row.render;
+  if (!render) return [];
+  const { images, overflow, rawMarkup, mathErrors, counts } = render.metrics;
+  const samples = (items: readonly string[]) => `${items.slice(0, FACT_SAMPLES).join(", ")}${items.length > FACT_SAMPLES ? `, and ${items.length - FACT_SAMPLES} more` : ""}`;
+  return [
+    `**Rendering facts** (measured in the reader page): ${images.broken} of ${images.total} images broken, ${overflow.count} element${overflow.count === 1 ? "" : "s"} wider than the column, ${rawMarkup.count} raw-markup sample${rawMarkup.count === 1 ? "" : "s"}, ${mathErrors} math error${mathErrors === 1 ? "" : "s"}; ${counts.codeBlocks} code blocks, ${counts.tables} tables, ${counts.figures} figures, ${counts.words} words.`,
+    ...(images.broken ? [`- broken images: ${samples(images.brokenSrc.map(codeSpan))}`] : []),
+    ...(overflow.count ? [`- overflow: ${samples(overflow.samples.map((sample) => `${codeSpan(sample.path)} (${sample.width} px)`))}`] : []),
+    ...(rawMarkup.count ? [`- raw markup: ${samples(rawMarkup.samples.map((sample) => `${codeSpan(sample.pattern)} in ${codeSpan(sample.text)}`))}`] : []),
+    `- screenshots: eval/render/out/${row.slug}/ (local) — the judge saw ${sideText(row, "rendered")} and ${sideText(row, "reference")}`,
+  ];
+}
 
 function caseDetails(row: CaseRow): string {
   return [
@@ -92,6 +132,7 @@ function caseDetails(row: CaseRow): string {
     ...(row.url ? [`Source: ${row.url}`, ""] : []),
     ...row.issues.flatMap(issueLines),
     "",
+    ...(row.render ? [...factLines(row), ""] : []),
     `_${md(row.summary)}_`,
     "",
     "</details>",
@@ -179,6 +220,7 @@ export function renderCaseIssue(row: CaseRow, { repo }: { repo: string }): CaseI
     "",
     ...(row.issues.length ? row.issues.flatMap(issueLines) : ["No issues listed."]),
     "",
+    ...(row.render ? [...factLines(row), ""] : []),
     "### Details",
     "",
     md(row.summary),
@@ -187,7 +229,7 @@ export function renderCaseIssue(row: CaseRow, { repo }: { repo: string }): CaseI
     "### Judge line",
     "",
     "```",
-    `judge: ${row.decidedBy} ${row.model} · rubric ${row.rubricVersion} · judged ${row.judgedAt}${row.truncated ? " · input truncated to fit the prompt" : ""}`,
+    `judge: ${row.decidedBy} ${row.model}${row.mode === "visual" ? " · visual mode" : ""} · rubric ${row.rubricVersion} · judged ${row.judgedAt}${row.truncated ? " · input truncated to fit the prompt" : ""}`,
     "```",
     "",
     "### Done when",

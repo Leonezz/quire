@@ -1,6 +1,8 @@
 // Small in-memory judge results for the report tests: the legacy shape (no opinions on disk), the
 // hybrid shape (screen + confirm opinions) and a failed case. Nothing here comes from a real page.
+import type { RenderMetrics } from "../../render/types";
 import type { FailedCase, JudgedCase, JudgedIssue, Opinion } from "../cache";
+import type { RenderSummary } from "../visual";
 import { buildReportData, type BaselineEntry, type CorpusEntry, type ReportData } from "./data";
 
 export const RUBRIC = "2026-09-23.3";
@@ -60,3 +62,26 @@ export const hybridResults = (): JudgedCase[] => [
 export const hybridData = (): ReportData => buildReportData({ results: hybridResults(), baseline, corpus, generatedAt: AT });
 
 export const emptyData = (): ReportData => buildReportData({ results: [], baseline: {}, corpus: [], generatedAt: AT });
+
+export const renderMetrics = (overrides: Partial<RenderMetrics> = {}): RenderMetrics => ({
+  images: { total: 3, broken: 0, brokenSrc: [] }, overflow: { count: 0, samples: [] }, rawMarkup: { count: 0, samples: [] },
+  mathErrors: 0, unmarkedLists: 0, emptyCellTables: { count: 0, samples: [] }, emptyHeadings: 0, duplicateTitleHeadings: 0,
+  counts: { codeBlocks: 1, tables: 0, figures: 3, lists: 2, footnotes: 0, headings: 5, words: 1200 }, height: 6000, ...overrides,
+});
+
+export const renderSummary = (metrics: RenderMetrics = renderMetrics(), extra: Partial<RenderSummary> = {}): RenderSummary => ({
+  manifestKey: "mk", tiles: { rendered: ["rendered-01.png", "rendered-02.png", "rendered-03.png"], reference: ["reference-01.png", "reference-02.png"] },
+  sent: { rendered: 3, reference: 1 }, truncated: { rendered: false, reference: false }, metrics, warnings: [], failedReferenceRequests: 0, ...extra,
+});
+
+/** Two visual cases: one with a broken image and raw markup the judge placed on tiles, one clean; plus a text-mode case. */
+export const visualResults = (): JudgedCase[] => [
+  hybridResult("alpha-post", [opinion("claude", "MAJOR", [issue("images", "major", { evidence: "Figure 2: the loss curve", where: { image: "rendered", tile: 2 } }), issue("code_or_math", "minor", { evidence: "$$x^2$$", where: { image: "rendered", tile: 3 } }), issue("layout", "minor", { where: null })], { images: 4 }), opinion("codex", "MAJOR", [issue("images", "major", { evidence: "Figure 2: the loss curve", where: { image: "rendered", tile: 2 } }), issue("images", "minor", { evidence: "Figure 2", where: { image: "reference", tile: 1 } })], { images: 4 })], {
+    mode: "visual", rubricVersion: "2026-10-08.4",
+    render: renderSummary(renderMetrics({ images: { total: 3, broken: 1, brokenSrc: ["https://alpha.example/fig2.png"] }, rawMarkup: { count: 2, samples: [{ pattern: "$$", text: "where $$x^2$$ grows" }] }, overflow: { count: 1, samples: [{ path: "article > pre", width: 1500 }] } })),
+  }),
+  hybridResult("beta-post", [opinion("claude", "PASS", [], { images: 4 })], { mode: "visual", rubricVersion: "2026-10-08.4", render: renderSummary(renderMetrics({ mathErrors: 1 })) }),
+  legacyResult("gamma-post", "PASS"),
+];
+
+export const visualData = (): ReportData => buildReportData({ results: visualResults(), baseline, corpus, generatedAt: AT });

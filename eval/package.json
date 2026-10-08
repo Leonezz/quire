@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit",
     "judge": "node judge/run.mjs",
     "import-feedback": "node scripts/import-feedback.mjs",
-    "judge:publish": "node judge/publish.mjs"
+    "judge:publish": "node judge/publish.mjs",
+    "render": "node render/run.mjs"
   },
   "dependencies": {
     "@read/normalize": "workspace:*"
@@ -19,6 +20,7 @@
   "devDependencies": {
     "typescript": "5.9.3",
     "vitest": "4.1.11",
-    "@types/node": "^22"
+    "@types/node": "^22",
+    "playwright": "1.63.0"
   }
 }

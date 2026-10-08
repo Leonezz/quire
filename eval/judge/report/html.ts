@@ -1,8 +1,10 @@
 // eval/judge/report.html: the structured report as one self-contained page (inline CSS, JS and SVG,
 // nothing fetched). It carries evidence quotes from third-party pages, so the file is gitignored.
 // The table is rendered here in full; the script only filters, sorts and expands what is already
-// on the page, so the report reads without JavaScript too.
-import type { Agreement, BackendStat, CaseIssue, CaseOpinion, CaseRow, KindStat, ReportData, Totals } from "./data";
+// on the page, so the report reads without JavaScript too. A visual case shows its rendered and
+// reference tiles as lazy thumbnails linked (relatively, from eval/judge/report.html) to the local
+// captures in eval/render/out/<slug>/, with the tiles its issues point at marked.
+import type { Agreement, BackendStat, CaseIssue, CaseOpinion, CaseRow, KindStat, RenderTotals, ReportData, Totals } from "./data";
 
 // Local rather than imported from ./data: this module must load under Node's type stripping, which needs
 // an explicit .ts extension the TypeScript config does not allow, so it keeps to type-only imports.
@@ -67,6 +69,14 @@ blockquote { margin: 4px 0 0; padding: 4px 10px; border-left: 3px solid var(--li
 details { margin: 8px 0; } summary { cursor: pointer; font-weight: 600; } summary:focus-visible { outline: 2px solid var(--accent); }
 ul.plain { margin: 6px 0; padding-left: 18px; }
 .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.facts { margin: 8px 0; font-size: 12px; color: var(--ink-2); } .facts ul { margin: 4px 0 0; padding-left: 18px; } .facts code { word-break: break-all; }
+.fact { display: inline-block; padding: 0 6px; border-radius: 4px; background: var(--neutral-bg); font-size: 12px; margin: 1px 2px 1px 0; } .fact.bad { background: var(--critical-bg); }
+.shots { margin: 10px 0; } .shots h4 { margin: 8px 0 4px; font-size: 12px; color: var(--ink-2); font-weight: 600; }
+.strip { display: flex; gap: 6px; overflow-x: auto; padding-bottom: 4px; }
+.shot { flex: 0 0 auto; width: 112px; text-decoration: none; color: var(--ink-2); font-size: 11px; text-align: center; }
+.shot img { display: block; width: 112px; height: 140px; object-fit: cover; object-position: top; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); }
+.shot.hit img { border: 2px solid var(--critical); } .shot.unsent img { opacity: .55; } .shot .n { display: block; margin-top: 2px; } .shot.hit .n { color: var(--critical); font-weight: 600; }
+a.where { font-size: 11px; margin-left: 4px; white-space: nowrap; }
 @media (max-width: 720px) { th.opt, td.opt { display: none; } }
 `;
 
@@ -140,6 +150,18 @@ function headerTiles(totals: Totals): string {
   ].join("")}</div>`;
 }
 
+/** The capture facts over the corpus; nothing when no case was judged with a capture. */
+function renderTiles(totals: RenderTotals): string {
+  if (!totals.captured) return "";
+  const sub = (cases: number) => `in ${cases} of ${totals.captured} captured case${totals.captured === 1 ? "" : "s"}`;
+  return `<div class="tiles">${[
+    tile("Broken images", fmtInt(totals.brokenImages), sub(totals.brokenCases)),
+    tile("Overflowing elements", fmtInt(totals.overflow), sub(totals.overflowCases)),
+    tile("Raw markup", fmtInt(totals.rawMarkup), sub(totals.rawMarkupCases)),
+    tile("Math errors", fmtInt(totals.mathErrors), sub(totals.mathErrorCases)),
+  ].join("")}</div>`;
+}
+
 function backendTiles(backends: readonly BackendStat[]): string {
   if (!backends.length) return "";
   return `<div class="backends">${backends.map((backend) => `<div class="tile"><div class="label">${esc(backend.backend)} · ${esc(backend.models.join(", ") || "–")}</div><div class="value">${fmtTokens(backend.tokens)} <span class="small">tokens</span> · ${backend.costUsd === undefined ? '<span class="small">cost not reported</span>' : fmtCost(backend.costUsd)}</div><div class="sub">${backend.opinions} opinion${backend.opinions === 1 ? "" : "s"} · decided ${backend.decided} · ${fmtMs(backend.wallMs)} wall</div></div>`).join("")}</div>`;
@@ -199,18 +221,73 @@ function baselineSection(data: ReportData): string {
   return `<h2>Against the baseline</h2><details ${data.regressions.length ? "open" : ""}><summary>Regressed (${data.regressions.length})</summary>${list(data.regressions)}</details><details ${data.improvements.length ? "open" : ""}><summary>Improved (${data.improvements.length})</summary>${list(data.improvements)}</details>${fresh ? `<p class="small">${fresh} case${fresh === 1 ? "" : "s"} not in the baseline yet.</p>` : ""}${errors}`;
 }
 
-const issueItem = (issue: CaseIssue) => `<li><span class="kind ${issue.severity}">${esc(issue.kind)}</span> <strong>${issue.severity}</strong> — ${esc(issue.note)}<blockquote>${esc(issue.evidence)} <span class="${issue.verified ? "verified" : "unverified"}">${issue.verified ? "✓ verbatim" : "⚠ not found verbatim"}</span></blockquote></li>`;
+/** A capture file as a link relative to eval/judge/report.html. */
+const capturePath = (slug: string, file: string) => `../render/out/${encodeURIComponent(slug)}/${file.split("/").map(encodeURIComponent).join("/")}`;
+type Side = "rendered" | "reference";
+const tileFile = (row: CaseRow, side: Side, tile: number) => row.render?.tiles[side][tile - 1];
 
-function opinionCard(opinion: CaseOpinion, final: boolean): string {
-  return `<div class="opinion${final ? " final" : ""}"><h4>${esc(opinion.backend)} <span class="small">${esc(opinion.model)}</span><span class="badge ${verdictClass(opinion.verdict)}">${opinion.verdict}</span>${final ? ` <span class="small">· final</span>` : ""}</h4><div class="small">${fmtTokens(opinion.tokens)} tokens · ${fmtCost(opinion.costUsd)} · ${fmtMs(opinion.wallMs)}</div><p class="muted" style="margin:6px 0">${esc(opinion.summary)}</p>${opinion.issues.length ? `<ul class="issues">${opinion.issues.map(issueItem).join("")}</ul>` : `<p class="small">No issues.</p>`}</div>`;
+/** "rendered tile 3", linked to the full-size tile when the case has a capture. */
+function whereChip(issue: CaseIssue, row: CaseRow | undefined): string {
+  if (!issue.where) return "";
+  const label = `${issue.where.image} tile ${issue.where.tile}`;
+  const file = row ? tileFile(row, issue.where.image, issue.where.tile) : undefined;
+  return file && row ? ` <a class="where" href="${attr(capturePath(row.slug, file))}" target="_blank" rel="noopener">${esc(label)} ↗</a>` : ` <span class="where small">${esc(label)}</span>`;
+}
+
+const issueItem = (issue: CaseIssue, row?: CaseRow) => `<li><span class="kind ${issue.severity}">${esc(issue.kind)}</span> <strong>${issue.severity}</strong> — ${esc(issue.note)}${whereChip(issue, row)}<blockquote>${esc(issue.evidence)} <span class="${issue.verified ? "verified" : "unverified"}">${issue.verified ? "✓ verbatim" : "⚠ not found verbatim"}</span></blockquote></li>`;
+
+/** One side's thumbnails: every captured tile, the ones the judge did not get dimmed, the ones an issue points at marked. */
+function strip(row: CaseRow, side: Side): string {
+  const render = row.render;
+  if (!render || !render.tiles[side].length) return "";
+  const sent = render.sent[side];
+  const shots = render.tiles[side].map((file, index) => {
+    const tile = index + 1;
+    const hits = row.issues.filter((issue) => issue.where?.image === side && issue.where.tile === tile);
+    const title = hits.length ? hits.map((issue) => `${issue.kind} (${issue.severity}): ${issue.note}`).join("\n") : `${side} tile ${tile}${tile > sent ? " (not sent to the judge)" : ""}`;
+    return `<a class="shot${hits.length ? " hit" : ""}${tile > sent ? " unsent" : ""}" href="${attr(capturePath(row.slug, file))}" target="_blank" rel="noopener" title="${attr(title)}"><img loading="lazy" decoding="async" src="${attr(capturePath(row.slug, file))}" alt="${attr(`${side} tile ${tile}`)}"><span class="n">${tile}${hits.length ? ` · ${hits.length} issue${hits.length === 1 ? "" : "s"}` : ""}${tile > sent ? " · not sent" : ""}</span></a>`;
+  }).join("");
+  const truncated = render.truncated[side] ? " · capture stops before the end of the page" : "";
+  return `<h4>${side === "rendered" ? "Rendered (Quire reader)" : "Reference (original, JS off)"} — ${sent} of ${render.tiles[side].length} sent${truncated}</h4><div class="strip">${shots}</div>`;
+}
+
+const FACT_LIMIT = 5;
+/** The measured facts with their samples. */
+function factsBlock(row: CaseRow): string {
+  const render = row.render;
+  if (!render) return "";
+  const { images, overflow, rawMarkup, mathErrors, counts } = render.metrics;
+  const chip = (count: number, label: string) => `<span class="fact${count ? " bad" : ""}">${count} ${esc(label)}</span>`;
+  const samples = [
+    ...images.brokenSrc.slice(0, FACT_LIMIT).map((src) => `broken image <code>${esc(src)}</code>`),
+    ...overflow.samples.slice(0, FACT_LIMIT).map((sample) => `overflow <code>${esc(sample.path)}</code> (${sample.width} px)`),
+    ...rawMarkup.samples.slice(0, FACT_LIMIT).map((sample) => `raw <code>${esc(sample.pattern)}</code> in “${esc(sample.text)}”`),
+    ...render.warnings.map((warning) => `capture warning: ${esc(warning)}`),
+  ];
+  return `<div class="facts">Facts: ${chip(images.broken, `broken image${images.broken === 1 ? "" : "s"} of ${images.total}`)}${chip(overflow.count, "overflow")}${chip(rawMarkup.count, "raw markup")}${chip(mathErrors, "math errors")} <span class="small">${counts.codeBlocks} code · ${counts.tables} tables · ${counts.figures} figures · ${fmtInt(counts.words)} words · reference ${render.failedReferenceRequests} failed request${render.failedReferenceRequests === 1 ? "" : "s"}</span>${samples.length ? `<ul>${samples.map((item) => `<li>${item}</li>`).join("")}</ul>` : ""}</div>`;
+}
+
+const shotsBlock = (row: CaseRow) => (row.render ? `<div class="shots">${strip(row, "rendered")}${strip(row, "reference")}</div>` : "");
+
+/** The table cell: non-zero facts as chips, "–" without a capture. */
+function factsCell(row: CaseRow): string {
+  if (!row.render) return '<span class="small">–</span>';
+  const { images, overflow, rawMarkup, mathErrors } = row.render.metrics;
+  const parts = [[images.broken, "img"], [overflow.count, "overflow"], [rawMarkup.count, "raw"], [mathErrors, "math"]] as const;
+  const bad = parts.filter(([count]) => count > 0);
+  return bad.length ? bad.map(([count, label]) => `<span class="fact bad">${count} ${label}</span>`).join("") : '<span class="small">clean</span>';
+}
+
+function opinionCard(opinion: CaseOpinion, final: boolean, row: CaseRow): string {
+  return `<div class="opinion${final ? " final" : ""}"><h4>${esc(opinion.backend)} <span class="small">${esc(opinion.model)}</span><span class="badge ${verdictClass(opinion.verdict)}">${opinion.verdict}</span>${final ? ` <span class="small">· final</span>` : ""}</h4><div class="small">${fmtTokens(opinion.tokens)} tokens · ${fmtCost(opinion.costUsd)} · ${fmtMs(opinion.wallMs)}${opinion.images ? ` · ${opinion.images} images` : ""}</div><p class="muted" style="margin:6px 0">${esc(opinion.summary)}</p>${opinion.issues.length ? `<ul class="issues">${opinion.issues.map((issue) => issueItem(issue, row)).join("")}</ul>` : `<p class="small">No issues.</p>`}</div>`;
 }
 
 function caseBody(row: CaseRow): string {
   const showOpinions = row.opinions.length >= 2;
-  const opinions = showOpinions ? `<h3 style="margin-top:12px">Opinions${row.disputed ? ' <span class="badge v-minor">disputed</span>' : ""}</h3><div class="opinions">${row.opinions.map((opinion, i) => opinionCard(opinion, opinion.backend === row.decidedBy && row.opinions.findIndex((o) => o.backend === row.decidedBy) === i)).join("")}</div>` : "";
-  return `<tbody class="case" data-verdict="${row.verdict}" data-kinds="${attr(row.kinds.map((k) => k.kind).join(" "))}" data-backend="${row.decidedBy}" data-disputed="${row.disputed ? 1 : 0}" data-delta="${row.delta}" data-text="${attr(`${row.slug} ${row.url}`.toLowerCase())}" data-sortslug="${attr(row.slug)}" data-sortverdict="${VERDICT_ORDER.indexOf(row.verdict)}" data-sortkinds="${row.kinds.length}" data-sortissues="${row.issues.length}" data-sortbackend="${row.decidedBy}" data-sortmajor="${row.issues.filter((i) => i.severity === "major").length}" data-sorttokens="${row.tokens ?? 0}" data-sortdelta="${["regressed", "new", "same", "improved"].indexOf(row.delta)}">
-<tr><td><button class="expand" aria-expanded="false" aria-label="Show details for ${attr(row.slug)}"></button></td><td><code>${esc(row.slug)}</code>${row.url ? ` <a class="small" href="${attr(row.url)}" target="_blank" rel="noopener">↗</a>` : ""}</td><td><span class="badge ${verdictClass(row.verdict)}">${row.verdict}</span>${row.disputed ? ' <span class="badge v-minor" title="backends disagreed">?</span>' : ""}</td><td>${row.kinds.map((k) => `<span class="kind ${k.severity}">${esc(k.kind)}</span>`).join("") || '<span class="small">–</span>'}</td><td class="num">${row.issues.length}</td><td class="opt">${esc(row.decidedBy)}${row.opinions.length >= 2 ? ` <span class="small">(${row.opinions.length})</span>` : ""}</td><td class="opt"><span class="delta ${row.delta}">${row.delta}${row.baselineVerdict && row.delta !== "same" ? ` <span class="small">(${row.baselineVerdict})</span>` : ""}</span></td><td class="num opt">${fmtTokens(row.tokens)}</td></tr>
-<tr class="detail" hidden><td colspan="8"><p class="muted" style="margin:0 0 6px">${esc(row.summary)}</p><div class="small">${esc(row.model)} · rubric ${esc(row.rubricVersion)} · ${esc(row.judgedAt)} · ${fmtMs(row.wallMs)}${row.truncated ? " · input truncated" : ""}${row.url ? ` · <a href="${attr(row.url)}" target="_blank" rel="noopener">${esc(row.url)}</a>` : ""}</div>${row.issues.length ? `<ul class="issues">${row.issues.map(issueItem).join("")}</ul>` : `<p class="small">No issues.</p>`}${opinions}</td></tr>
+  const opinions = showOpinions ? `<h3 style="margin-top:12px">Opinions${row.disputed ? ' <span class="badge v-minor">disputed</span>' : ""}</h3><div class="opinions">${row.opinions.map((opinion, i) => opinionCard(opinion, opinion.backend === row.decidedBy && row.opinions.findIndex((o) => o.backend === row.decidedBy) === i, row)).join("")}</div>` : "";
+  return `<tbody class="case" data-verdict="${row.verdict}" data-kinds="${attr(row.kinds.map((k) => k.kind).join(" "))}" data-backend="${row.decidedBy}" data-disputed="${row.disputed ? 1 : 0}" data-delta="${row.delta}" data-text="${attr(`${row.slug} ${row.url}`.toLowerCase())}" data-sortslug="${attr(row.slug)}" data-sortverdict="${VERDICT_ORDER.indexOf(row.verdict)}" data-sortkinds="${row.kinds.length}" data-sortissues="${row.issues.length}" data-sortbackend="${row.decidedBy}" data-sortmajor="${row.issues.filter((i) => i.severity === "major").length}" data-sorttokens="${row.tokens ?? 0}" data-sortfacts="${row.render ? row.render.metrics.images.broken + row.render.metrics.overflow.count + row.render.metrics.rawMarkup.count + row.render.metrics.mathErrors : -1}" data-sortdelta="${["regressed", "new", "same", "improved"].indexOf(row.delta)}">
+<tr><td><button class="expand" aria-expanded="false" aria-label="Show details for ${attr(row.slug)}"></button></td><td><code>${esc(row.slug)}</code>${row.url ? ` <a class="small" href="${attr(row.url)}" target="_blank" rel="noopener">↗</a>` : ""}</td><td><span class="badge ${verdictClass(row.verdict)}">${row.verdict}</span>${row.disputed ? ' <span class="badge v-minor" title="backends disagreed">?</span>' : ""}</td><td>${row.kinds.map((k) => `<span class="kind ${k.severity}">${esc(k.kind)}</span>`).join("") || '<span class="small">–</span>'}</td><td class="num">${row.issues.length}</td><td class="opt">${factsCell(row)}</td><td class="opt">${esc(row.decidedBy)}${row.opinions.length >= 2 ? ` <span class="small">(${row.opinions.length})</span>` : ""}</td><td class="opt"><span class="delta ${row.delta}">${row.delta}${row.baselineVerdict && row.delta !== "same" ? ` <span class="small">(${row.baselineVerdict})</span>` : ""}</span></td><td class="num opt">${fmtTokens(row.tokens)}</td></tr>
+<tr class="detail" hidden><td colspan="9"><p class="muted" style="margin:0 0 6px">${esc(row.summary)}</p><div class="small">${esc(row.model)} · rubric ${esc(row.rubricVersion)} · ${esc(row.judgedAt)} · ${fmtMs(row.wallMs)}${row.truncated ? " · input truncated" : ""} · ${row.mode} mode${row.url ? ` · <a href="${attr(row.url)}" target="_blank" rel="noopener">${esc(row.url)}</a>` : ""}</div>${factsBlock(row)}${row.issues.length ? `<ul class="issues">${row.issues.map((issue) => issueItem(issue, row)).join("")}</ul>` : `<p class="small">No issues.</p>`}${shotsBlock(row)}${opinions}</td></tr>
 </tbody>`;
 }
 
@@ -230,7 +307,7 @@ function casesSection(data: ReportData): string {
 <button type="button" id="expand-all">Expand all</button><button type="button" id="collapse-all">Collapse all</button>
 <span class="count" id="f-count">${data.cases.length} of ${data.cases.length} cases</span>
 </form>
-<div class="table-wrap"><table id="cases"><thead><tr><th></th>${th("slug", "slug")}${th("verdict", "verdict", true)}${th("kinds", "kinds", true)}${th("issues", "issues", true, "num")}${th("decided by", "backend", false, "opt")}${th("vs baseline", "delta", true, "opt")}${th("tokens", "tokens", true, "num opt")}</tr></thead>
+<div class="table-wrap"><table id="cases"><thead><tr><th></th>${th("slug", "slug")}${th("verdict", "verdict", true)}${th("kinds", "kinds", true)}${th("issues", "issues", true, "num")}${th("render facts", "facts", true, "opt")}${th("decided by", "backend", false, "opt")}${th("vs baseline", "delta", true, "opt")}${th("tokens", "tokens", true, "num opt")}</tr></thead>
 ${data.cases.map(caseBody).join("\n")}
 </table></div>`;
 }
@@ -248,8 +325,9 @@ export function renderHtml(data: ReportData): string {
 <body>
 <main>
 <h1>Extraction quality report</h1>
-<p class="muted">Generated ${esc(data.generatedAt)} from <code>eval/judge/out</code>. Verdicts, issue kinds and evidence quotes are the judge's; quotes come from third-party pages, so this file stays local.</p>
+<p class="muted">Generated ${esc(data.generatedAt)} from <code>eval/judge/out</code>. Verdicts, issue kinds and evidence quotes are the judge's; quotes come from third-party pages, so this file stays local. Screenshots load from <code>eval/render/out</code> next to it.</p>
 ${headerTiles(data.totals)}
+${renderTiles(data.renderTotals)}
 ${backendTiles(data.byBackend)}
 <h2>Overview</h2>
 <div class="charts">${donut(data.totals)}${kindChart(data.byKind)}</div>

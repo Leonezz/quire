@@ -9,6 +9,8 @@ export interface BackendRunInput {
   schema: object;
   /** The call is killed and fails once it runs this long. */
   timeoutMs: number;
+  /** Absolute paths of PNG/JPEG images to attach, in the order the prompt names them (visual mode). */
+  images?: string[];
 }
 
 /** What a backend reports next to its answer; all optional because each CLI tells a different subset. */

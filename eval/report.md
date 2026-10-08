@@ -1,4 +1,4 @@
-# Rendering evaluation — 2026-09-23
+# Rendering evaluation — 2026-10-08
 
 66/66 pass (100%), gate 85%. Reviewed goldens: 64.
 

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderHtml } from "./html";
-import { emptyData, hybridData, legacyData } from "./fixtures";
+import { emptyData, hybridData, legacyData, visualData } from "./fixtures";
 
 const count = (text: string, needle: string) => text.split(needle).length - 1;
 
@@ -61,5 +61,34 @@ describe("renderHtml", () => {
     expect(count(html, '<div class="opinion final"')).toBe(3);
     expect(html).toContain('data-disputed="1"');
     expect(html).toContain('<option value="claude">');
+  });
+
+  it("shows a visual case's tiles as lazy thumbnails linked relatively to eval/render/out, marking the tiles issues point at", () => {
+    const html = renderHtml(visualData());
+    expect(html).toContain('<a class="shot" href="../render/out/alpha-post/rendered-01.png" target="_blank" rel="noopener"');
+    expect(html).toContain('<img loading="lazy" decoding="async" src="../render/out/alpha-post/rendered-01.png" alt="rendered tile 1">');
+    expect(html).toMatch(/<a class="shot hit" href="\.\.\/render\/out\/alpha-post\/rendered-02\.png"[^>]*title="images \(major\): images is wrong"/);
+    expect(html).toContain('<span class="n">2 · 1 issue</span>');
+    expect(html).toMatch(/<a class="shot hit" href="\.\.\/render\/out\/alpha-post\/reference-01\.png"/);
+    expect(html).toContain('<a class="shot unsent" href="../render/out/alpha-post/reference-02.png"');
+    expect(html).toContain("Rendered (Quire reader) — 3 of 3 sent");
+    expect(html).toContain("Reference (original, JS off) — 1 of 2 sent");
+    expect(html).toContain('<a class="where" href="../render/out/alpha-post/rendered-02.png" target="_blank" rel="noopener">rendered tile 2 ↗</a>');
+    // the screener's issue on rendered tile 3 shows in its opinion card
+    expect(html).toContain('<a class="where" href="../render/out/alpha-post/rendered-03.png" target="_blank" rel="noopener">rendered tile 3 ↗</a>');
+    expect(count(html, '<div class="shots">')).toBe(2);
+  });
+
+  it("lists the measured facts with their samples, and totals them in the header", () => {
+    const html = renderHtml(visualData());
+    expect(html).toContain('<span class="fact bad">1 broken image of 3</span>');
+    expect(html).toContain("broken image <code>https://alpha.example/fig2.png</code>");
+    expect(html).toContain("overflow <code>article &gt; pre</code> (1500 px)");
+    expect(html).toContain("raw <code>$$</code> in “where $$x^2$$ grows”");
+    expect(html).toContain('<span class="fact bad">1 img</span><span class="fact bad">1 overflow</span><span class="fact bad">2 raw</span>');
+    expect(html).toContain('<div class="label">Broken images</div><div class="value">1</div><div class="sub">in 1 of 2 captured cases</div>');
+    expect(html).toContain("4 images");
+    expect(renderHtml(legacyData())).not.toContain("Broken images");
+    expect(renderHtml(legacyData())).not.toContain('<div class="shots">');
   });
 });

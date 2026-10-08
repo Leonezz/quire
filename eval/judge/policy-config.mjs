@@ -15,7 +15,7 @@ const DEFAULT_ESCALATE_ON = ["MINOR", "MAJOR"];
 
 /**
  * @typedef {{ backend: "codex" | "claude"; model: string }} BackendSpec
- * @typedef {{ policy?: unknown; screen?: unknown; confirm?: unknown; single?: unknown; escalateOn?: unknown; escalateOnMajorIssue?: unknown; concurrency?: unknown }} JudgeConfigFile
+ * @typedef {{ policy?: unknown; screen?: unknown; confirm?: unknown; single?: unknown; escalateOn?: unknown; escalateOnMajorIssue?: unknown; concurrency?: unknown; mode?: unknown; maxImages?: unknown }} JudgeConfigFile
  * @typedef {{ policy?: string; backend?: string; model?: string; screenModel?: string; confirmModel?: string }} PolicyFlags
  * @typedef {{ policy: "single"; judge: BackendSpec }
  *   | { policy: "screen-then-confirm"; screen: BackendSpec; confirm: BackendSpec; escalateOn: readonly string[]; escalateOnMajorIssue: boolean }
@@ -130,4 +130,32 @@ export function resolveConcurrency(config, flag) {
   const count = Number(value);
   if (!Number.isInteger(count) || count < 1) throw new Error(`concurrency must be a positive integer, got ${JSON.stringify(value)}`);
   return count;
+}
+
+/** Kept in step with visual.ts JUDGE_MODES (policy.test.ts checks). */
+export const MODES = ["visual", "text"];
+const DEFAULT_MAX_IMAGES = 10;
+
+/**
+ * The judge mode: --mode, else config.json "mode", else visual.
+ * @param {JudgeConfigFile} config
+ * @param {string | undefined} flag
+ * @returns {"visual" | "text"}
+ */
+export function resolveMode(config, flag) {
+  const value = flag ?? (isRecord(config) ? config.mode : undefined) ?? "visual";
+  if (typeof value !== "string" || !MODES.includes(value)) throw new Error(`mode must be one of ${MODES.join("|")} (--mode, or config.json "mode"), got ${JSON.stringify(value)}`);
+  return /** @type {"visual" | "text"} */ (value);
+}
+
+/**
+ * Images attached to one visual call: config.json "maxImages", else 10.
+ * @param {JudgeConfigFile} config
+ * @returns {number}
+ */
+export function resolveMaxImages(config) {
+  const value = isRecord(config) ? config.maxImages : undefined;
+  if (value === undefined) return DEFAULT_MAX_IMAGES;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) throw new Error(`config.json maxImages must be a positive integer, got ${JSON.stringify(value)}`);
+  return value;
 }

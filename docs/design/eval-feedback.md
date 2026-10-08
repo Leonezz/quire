@@ -63,6 +63,28 @@
 - `report.html`（`--html`，本地、不入库）：自包含交互页——verdict 环图、按 kind 的堆叠条形图、筛查 vs 确认的混淆矩阵、相对基线的退步/进步、可筛选排序的 case 表，展开看每条 issue 的证据引用与两个后端并排的意见。
 - GitHub issue（`--issue`）：一条带 `quality-report` 标签的跟踪 issue，正文含 Mermaid 饼图与条形图（GitHub 原生渲染）、基线对比、每个 MAJOR case 一个 `<details>`；同一 issue 反复更新并追加"Updated …"评论。`--cases --max-cases N` 另为最严重的 N 个 case 各开一条 `rendering` + `judge` 标签的 issue，按标题去重。`--dry-run` 只打印。
 
+## D. 评估实际渲染效果（2026-10-08）
+
+文本 judge 只看 Markdown（agent 读到的那份），看不到阅读器实际显示的样子：公式渲染失败、图片 404、代码块溢出、表格挤成一团、转义字符露在页面上，这些在 Markdown 里看不出来或看起来"没问题"。所以加一层**渲染采集**，judge 同时看图。
+
+```
+eval export ──▶ preview corpus (reader.document.v2)
+                     │
+        render harness: 渲染器 ?render=<id>  ── 与 ReaderView 同一套正文组件、默认阅读设置、浅色、固定宽度
+                     │  Playwright (Chromium, dpr 1, 1280 宽)
+                     ▼
+eval/render/out/<slug>/  rendered-NN.png  reference-NN.png  rendered.txt  manifest.json（RenderMetrics）
+                     │
+judge（visual 模式）: SOURCE + EXTRACTED 文本 + 渲染截图 + 原页截图 + 量测事实 ──▶ 九维量规
+```
+
+- **渲染**：渲染器加一个只渲染正文的入口 `?render=<id>`，复用 ReaderView 的正文组件（标题、出处、`ReaderDocumentSurface`、默认 Aa 设置），没有侧栏和工具栏；图片、字体就绪后置 `data-render-ready`。截图按 1280×1600 分块，默认最多 8 块。
+- **原页参照**：快照 HTML 注入 `<base href=finalUrl>`，**关掉 JavaScript**（抽取器也从没执行过 JS），网络开着加载 CSS 和图片；参照可能缺样式或图片，量规明说不能据此怪抽取器。默认最多 6 块。
+- **量测事实**（`RenderMetrics`，程序算，不靠模型）：坏图数与地址、超出栏宽的元素、露在页面上的标记（`\<`、`](http`、`$$`、`\frac`、`&lt;`）、公式渲染错误、空标题、重复标题、代码块/表格/图/列表/脚注/标题/字数。judge 把它们当事实，不当意见。
+- **量规 v4**：原七维加两维——**渲染**（阅读器里每个元素显示正确：没有裸标记、坏图、溢出、未渲染公式、乱掉的表格）和**视觉保真**（原页的图、表、代码、公式在阅读器里都在、可读）。任一维 0 分即 MAJOR。视觉问题的位置写成 `{image: rendered|reference, tile: n}`，证据可以是该处可见文字。
+- **两个后端都看图**：Claude Code 用 `--input-format stream-json --output-format stream-json`，消息里带 base64 图片块；Codex 用 `codex exec -i <png>…`。2026-10-08 实测两者都能读图并按 schema 回答。
+- **命令**：`pnpm --filter @read/eval render [slug…] [--force] [--max-tiles N]` 先采集；`judge` 默认 visual 模式，缺采集即报错并给出命令，`--mode text` 回到纯文本。
+
 ## 不做的
 
 - 不做自动上传 / 遥测端点。等有了自己的收集服务再加 `Settings.feedbackEndpoint`，bundle 的 JSON 信封已经定好。

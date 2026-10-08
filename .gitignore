@@ -18,5 +18,6 @@ eval/pdf/out/
 
 # Judge results carry evidence quotes from third-party pages: local only.
 eval/judge/out/
+eval/render/out/
 # The interactive judge report embeds those quotes too.
 eval/judge/report.html

@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { RENDERING_PROBLEM_KINDS } from "../../apps/desktop/src/shared/contracts";
 import { compareToBaseline, describeDelta, updateBaseline, type Baseline } from "./baseline";
 import { cacheKey, isJudged, type JudgedCase, type JudgeResult, type Opinion } from "./cache";
-import { codexBackend, parseResolvedModel, parseTokens, type CodexCall, type CodexRun, type CodexRunner } from "./backends/codex";
+import { codexArgs, codexBackend, parseResolvedModel, parseTokens, type CodexCall, type CodexRun, type CodexRunner } from "./backends/codex";
 import { BackendRunError } from "./backends/types";
 import { askOpinion } from "./judge-case";
 import { extractedMarkdown, truncateInput } from "./inputs";
@@ -153,11 +153,12 @@ describe("renderReport", () => {
     expect(text.indexOf("| layout |")).toBeLessThan(text.indexOf("| missing_content |"));
     const table = text.slice(text.indexOf("## Cases"));
     expect(table.split("\n").filter((line) => /^\| (alpha|beta|gamma|delta) /.test(line))).toHaveLength(4);
-    expect(table).toContain("| beta | MAJOR | missing_content!, layout | beta summary | – | fresh |");
-    expect(table).toContain("| delta | error | – | codex exec exited with 1: boom | – | fresh |");
+    expect(table).toContain("| beta | MAJOR | missing_content!, layout | – | – | – | – | beta summary | – | fresh |");
+    expect(table).toContain("| delta | error | – | – | – | – | – | codex exec exited with 1: boom | – | fresh |");
     expect(text.indexOf("| alpha ")).toBeLessThan(text.indexOf("| beta "));
     expect(text).not.toContain("SECRET-QUOTE");
     expect(text).not.toContain("Opinions:");
+    expect(text).not.toContain("Rendering facts");
   });
 
   it("shows which backend decided each case, marks disputes, and totals opinions, tokens and cost per backend", () => {
@@ -174,11 +175,37 @@ describe("renderReport", () => {
     ];
     const text = renderReport(rows, { date: "2026-09-23", policy: "policy screen-then-confirm · screen claude/haiku · confirm codex/default (on MINOR, MAJOR)", rubricVersion: RUBRIC_VERSION, ranSlugs: 4 });
     expect(text).toContain("Opinions: claude/haiku 3 opinions, 6,000 tokens, $0.0600 · codex/default 2 opinions, 70,000 tokens. Escalated 2 of 3 screened. Disputed 1. 1 result(s) predate the hybrid judge and carry no opinions.");
-    expect(text).toContain("| alpha | PASS | – | alpha summary | claude/haiku | fresh |");
-    expect(text).toContain("| beta | MAJOR | layout | beta summary | codex/default (disputed) | fresh |");
-    expect(text).toContain("| gamma | MINOR | tables | gamma summary | codex/default | cached |");
-    expect(text).toContain("| delta | PASS | – | delta summary | – | previous |");
-    expect(text).toContain("| epsilon | error | – | codex exec exited with 1: boom | – | fresh |");
+    expect(text).toContain("| alpha | PASS | – | – | – | – | – | alpha summary | claude/haiku | fresh |");
+    expect(text).toContain("| beta | MAJOR | layout | – | – | – | – | beta summary | codex/default (disputed) | fresh |");
+    expect(text).toContain("| gamma | MINOR | tables | – | – | – | – | gamma summary | codex/default | cached |");
+    expect(text).toContain("| delta | PASS | – | – | – | – | – | delta summary | – | previous |");
+    expect(text).toContain("| epsilon | error | – | – | – | – | – | codex exec exited with 1: boom | – | fresh |");
+  });
+});
+
+describe("renderReport with render captures", () => {
+  const metrics = (broken: number, overflow: number, raw: number, math: number) => ({
+    images: { total: 4, broken, brokenSrc: Array.from({ length: broken }, (_, i) => `https://x.test/${i}.png`) }, overflow: { count: overflow, samples: [] }, rawMarkup: { count: raw, samples: [] },
+    mathErrors: math, unmarkedLists: 0, emptyCellTables: { count: 0, samples: [] }, emptyHeadings: 0, duplicateTitleHeadings: 0, counts: { codeBlocks: 0, tables: 0, figures: 4, lists: 0, footnotes: 0, headings: 3, words: 900 }, height: 5000,
+  });
+  const render = (m: ReturnType<typeof metrics>) => ({ manifestKey: "mk", tiles: { rendered: ["rendered-01.png"], reference: [] }, sent: { rendered: 1, reference: 0 }, truncated: { rendered: false, reference: false }, metrics: m, warnings: [], failedReferenceRequests: 0 });
+
+  it("adds the fact columns per case and the corpus totals to the header, without image URLs", () => {
+    const rows = [
+      { result: judged("alpha", "MAJOR", ["images"], { mode: "visual", render: render(metrics(2, 1, 0, 0)) }), origin: "fresh" as const },
+      { result: judged("beta", "PASS", [], { mode: "visual", render: render(metrics(0, 0, 3, 1)) }), origin: "fresh" as const },
+      { result: judged("gamma", "PASS"), origin: "previous" as const },
+      { result: { ...failed("delta"), error: "no render capture for delta: run pnpm --filter @read/eval render delta" }, origin: "fresh" as const },
+    ];
+    const text = renderReport(rows, { date: "2026-10-08", policy: "policy single · codex/default", rubricVersion: RUBRIC_VERSION, ranSlugs: 3, mode: "visual" });
+    expect(text).toContain(`Judge: policy single · codex/default; mode visual; rubric ${RUBRIC_VERSION}.`);
+    expect(text).toContain("Rendering facts over 2 captured cases: 2 broken images (1 case) · 1 overflowing elements (1 case) · 3 raw-markup samples (1 case) · 1 math errors (1 case).");
+    expect(text).toContain("| slug | verdict | kinds | broken | overflow | raw | math | summary | decided by | origin |");
+    expect(text).toContain("| alpha | MAJOR | images | 2 | 1 | 0 | 0 | alpha summary | – | fresh |");
+    expect(text).toContain("| beta | PASS | – | 0 | 0 | 3 | 1 | beta summary | – | fresh |");
+    expect(text).toContain("| gamma | PASS | – | – | – | – | – | gamma summary | – | previous |");
+    expect(text).toContain("| delta | error | – | – | – | – | – | no render capture for delta: run pnpm --filter @read/eval render delta | – | fresh |");
+    expect(text).not.toContain("https://x.test/");
   });
 });
 
@@ -201,6 +228,21 @@ describe("codexBackend", () => {
     const output = await backend(async (call) => { calls.push(call); return run({}); }).run({ prompt: "P", schema: ANSWER_SCHEMA, timeoutMs: 1000 });
     expect(calls).toEqual([{ prompt: "P", schema: ANSWER_SCHEMA, model: undefined, bin: "codex", timeoutMs: 1000 }]);
     expect(output).toEqual({ raw: JSON.stringify(goodAnswer), resolvedModel: "gpt-test", tokens: 1234 });
+  });
+
+  it("builds read-only ephemeral exec args; each image gets its own -i right after exec, the prompt marker stays last", () => {
+    const base = { dir: "/tmp/d", schemaPath: "/tmp/d/schema.json", outPath: "/tmp/d/answer.json", model: "gpt-6-luna" };
+    expect(codexArgs({ ...base, images: ["/cap/rendered-01.png", "/cap/reference-01.png"] })).toEqual(["exec", "-i", "/cap/rendered-01.png", "-i", "/cap/reference-01.png", "--skip-git-repo-check", "--ephemeral", "--color", "never", "-s", "read-only", "-C", "/tmp/d", "--output-schema", "/tmp/d/schema.json", "-o", "/tmp/d/answer.json", "-m", "gpt-6-luna", "-"]);
+    expect(codexArgs({ ...base, model: undefined })).toEqual(["exec", "--skip-git-repo-check", "--ephemeral", "--color", "never", "-s", "read-only", "-C", "/tmp/d", "--output-schema", "/tmp/d/schema.json", "-o", "/tmp/d/answer.json", "-"]);
+  });
+
+  it("hands the runner the images only when there are some", async () => {
+    const calls: CodexCall[] = [];
+    const codex = backend(async (call) => { calls.push(call); return run({}); });
+    await codex.run({ prompt: "P", schema: ANSWER_SCHEMA, timeoutMs: 1000, images: ["/a.png"] });
+    await codex.run({ prompt: "P", schema: ANSWER_SCHEMA, timeoutMs: 1000, images: [] });
+    expect(calls[0]?.images).toEqual(["/a.png"]);
+    expect(calls[1]).not.toHaveProperty("images");
   });
 
   it("passes a requested model through and reports it on the backend", async () => {

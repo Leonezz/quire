@@ -5,7 +5,7 @@ import { BackendRunError, type BackendSpec, type JudgeBackend } from "./backends
 import { cacheKey, isJudged, type JudgedIssue } from "./cache";
 import { backendsNeeded, describePolicy, resolveConcurrency, resolvePolicy, VERDICTS as CONFIG_VERDICTS } from "./policy-config.mjs";
 import { judgeCase, parseEffectivePolicy, policyBackends, policyKey, unionIssues, type EffectivePolicy } from "./policy";
-import { RUBRIC_VERSION, VERDICTS } from "./rubric";
+import { RUBRIC_VERSION, TEXT_RUBRIC_VERSION, VERDICTS } from "./rubric";
 
 const CONFIG = { policy: "screen-then-confirm", screen: { backend: "claude", model: "haiku" }, confirm: { backend: "codex", model: "default" }, escalateOn: ["MINOR", "MAJOR"], escalateOnMajorIssue: true, concurrency: 3 };
 const SCREEN: EffectivePolicy = { policy: "screen-then-confirm", screen: { backend: "claude", model: "haiku" }, confirm: { backend: "codex", model: "default" }, escalateOn: ["MINOR", "MAJOR"], escalateOnMajorIssue: true };
@@ -154,7 +154,10 @@ describe("judgeCase under a policy", () => {
     expect(calls).toEqual(["codex/default"]);
     if (!isJudged(result)) throw new Error(result.error);
     expect(result).toMatchObject({ slug: "s", model: "default", resolvedModel: "default-resolved", tokens: 100, verdict: "MINOR", summary: "MINOR says", judgedAt: "2026-09-23T12:00:00.000Z", resolution: { policy: "single", from: "codex", disputed: false } });
-    expect(result.key).toBe(cacheKey(input.source, input.extracted, RUBRIC_VERSION, policyKey(SINGLE)));
+    // Text mode: the key the text judge always wrote, so cached text results stay valid.
+    expect(result.key).toBe(cacheKey(input.source, input.extracted, TEXT_RUBRIC_VERSION, policyKey(SINGLE)));
+    expect(result.rubricVersion).toBe(TEXT_RUBRIC_VERSION);
+    expect(result).not.toHaveProperty("mode");
     expect(result.opinions).toHaveLength(1);
     expect(result.opinions?.[0]).toMatchObject({ backend: "codex", model: "default", verdict: "MINOR", tokens: 100 });
     expect(result.issues[0]).toMatchObject({ kind: "metadata", verified: true });

@@ -1,7 +1,8 @@
 // eval/judge/report.md: counts, what the hybrid judge cost (opinions, tokens, dollars per backend,
-// escalations, disputes), issue kinds ranked (what to fix next), one row per case with the backend
-// that decided it. Only verdicts, kinds and the judge's own summary go in; evidence quotes from
-// third-party pages stay in out/.
+// escalations, disputes), the render capture's measured facts (broken images, overflow, raw markup,
+// math errors) totalled and per case, issue kinds ranked (what to fix next), one row per case with
+// the backend that decided it. Only verdicts, kinds, fact counts and the judge's own summary go in;
+// evidence quotes and image URLs from third-party pages stay in out/.
 import { isJudged, type JudgedCase, type JudgeResult, type Opinion } from "./cache";
 import { PROBLEM_KINDS, VERDICTS } from "./rubric";
 
@@ -14,6 +15,8 @@ export interface ReportOptions {
   policy: string;
   rubricVersion: string;
   ranSlugs: number;
+  /** The run's mode (visual | text); omitted by callers that predate it. */
+  mode?: string;
 }
 
 const SUMMARY_MAX = 140;
@@ -37,10 +40,41 @@ export function decidedBy(result: JudgedCase): string {
   return `${from}/${opinion.model}${result.resolution?.disputed ? " (disputed)" : ""}`;
 }
 
+/** The four fact cells (broken images, overflowing elements, raw markup, math errors); dashes for a case judged without a capture. */
+function factCells(result: JudgeResult): string {
+  const metrics = result.render?.metrics;
+  if (!metrics) return "– | – | – | –";
+  return `${metrics.images.broken} | ${metrics.overflow.count} | ${metrics.rawMarkup.count} | ${metrics.mathErrors}`;
+}
+
 function rowLine({ result, origin }: ReportRow): string {
-  if (!isJudged(result)) return `| ${result.slug} | error | – | ${cell(clip(result.error, SUMMARY_MAX))} | – | ${origin} |`;
+  if (!isJudged(result)) return `| ${result.slug} | error | – | ${factCells(result)} | ${cell(clip(result.error, SUMMARY_MAX))} | – | ${origin} |`;
   const kinds = [...new Set(result.issues.map((issue) => `${issue.kind}${issue.severity === "major" ? "!" : ""}`))].join(", ") || "–";
-  return `| ${result.slug} | ${result.verdict} | ${kinds} | ${cell(clip(result.summary, SUMMARY_MAX))} | ${decidedBy(result)} | ${origin} |`;
+  return `| ${result.slug} | ${result.verdict} | ${kinds} | ${factCells(result)} | ${cell(clip(result.summary, SUMMARY_MAX))} | ${decidedBy(result)} | ${origin} |`;
+}
+
+export interface FactTotals { captured: number; broken: number; brokenCases: number; overflow: number; overflowCases: number; rawMarkup: number; rawMarkupCases: number; mathErrors: number; mathErrorCases: number }
+
+/** The capture facts summed over every result that carries a capture (judged or not). */
+export function factTotals(results: readonly JudgeResult[]): FactTotals {
+  const metrics = results.flatMap((result) => (result.render ? [result.render.metrics] : []));
+  const total = (pick: (m: (typeof metrics)[number]) => number) => metrics.reduce((sum, m) => sum + pick(m), 0);
+  const cases = (pick: (m: (typeof metrics)[number]) => number) => metrics.filter((m) => pick(m) > 0).length;
+  return {
+    captured: metrics.length,
+    broken: total((m) => m.images.broken), brokenCases: cases((m) => m.images.broken),
+    overflow: total((m) => m.overflow.count), overflowCases: cases((m) => m.overflow.count),
+    rawMarkup: total((m) => m.rawMarkup.count), rawMarkupCases: cases((m) => m.rawMarkup.count),
+    mathErrors: total((m) => m.mathErrors), mathErrorCases: cases((m) => m.mathErrors),
+  };
+}
+
+/** The header's rendering-facts sentence; empty when no result carries a capture. */
+export function describeFacts(results: readonly JudgeResult[]): string {
+  const t = factTotals(results);
+  if (!t.captured) return "";
+  const part = (count: number, label: string, inCases: number) => `${count} ${label}${count ? ` (${inCases} case${inCases === 1 ? "" : "s"})` : ""}`;
+  return `Rendering facts over ${t.captured} captured case${t.captured === 1 ? "" : "s"}: ${part(t.broken, "broken images", t.brokenCases)} · ${part(t.overflow, "overflowing elements", t.overflowCases)} · ${part(t.rawMarkup, "raw-markup samples", t.rawMarkupCases)} · ${part(t.mathErrors, "math errors", t.mathErrorCases)}.`;
 }
 
 interface BackendTotals { label: string; opinions: number; tokens: number | undefined; costUsd: number | undefined }
@@ -89,11 +123,13 @@ export function renderReport(rows: readonly ReportRow[], options: ReportOptions)
   const unverified = results.filter(isJudged).reduce((sum, result) => sum + result.issues.filter((issue) => !issue.verified).length, 0);
   const kinds = issueCounts(sorted);
   const opinions = describeOpinions(results);
+  const facts = describeFacts(results);
   return [
     `# Extraction quality judge — ${options.date}`,
     "",
-    `${results.length} cases: ${VERDICTS.map((verdict) => `${count(verdict)} ${verdict}`).join(" · ")} · ${errors} error. This run judged ${options.ranSlugs} (${fresh} fresh, ${cached} cached)${previous ? `; ${previous} rows are from earlier runs` : ""}. Judge: ${options.policy}; rubric ${options.rubricVersion}.${truncated ? ` ${truncated} case(s) had an input cut to fit the prompt.` : ""}${unverified ? ` ${unverified} evidence quote(s) could not be found verbatim in the inputs.` : ""}`,
+    `${results.length} cases: ${VERDICTS.map((verdict) => `${count(verdict)} ${verdict}`).join(" · ")} · ${errors} error. This run judged ${options.ranSlugs} (${fresh} fresh, ${cached} cached)${previous ? `; ${previous} rows are from earlier runs` : ""}. Judge: ${options.policy}${options.mode ? `; mode ${options.mode}` : ""}; rubric ${options.rubricVersion}.${truncated ? ` ${truncated} case(s) had an input cut to fit the prompt.` : ""}${unverified ? ` ${unverified} evidence quote(s) could not be found verbatim in the inputs.` : ""}`,
     ...(opinions ? ["", opinions] : []),
+    ...(facts ? ["", facts] : []),
     "",
     "## Issues by kind",
     "",
@@ -102,10 +138,10 @@ export function renderReport(rows: readonly ReportRow[], options: ReportOptions)
     "",
     "## Cases",
     "",
-    "`kind!` marks a major issue. `decided by` is the backend whose opinion became the verdict; `(disputed)` means the other backend's verdict differed. Evidence quotes live in `eval/judge/out/<slug>.json` (not committed).",
+    "`kind!` marks a major issue. `broken`, `overflow`, `raw` and `math` are the render capture's measured facts (broken images, elements wider than the column, markup shown as text, formulas that failed to render); `–` means the case was judged without a capture. `decided by` is the backend whose opinion became the verdict; `(disputed)` means the other backend's verdict differed. Evidence quotes live in `eval/judge/out/<slug>.json` and screenshots in `eval/render/out/<slug>/` (neither committed).",
     "",
-    "| slug | verdict | kinds | summary | decided by | origin |",
-    "|---|---|---|---|---|---|",
+    "| slug | verdict | kinds | broken | overflow | raw | math | summary | decided by | origin |",
+    "|---|---|---|---:|---:|---:|---:|---|---|---|",
     ...sorted.map(rowLine),
     "",
   ].join("\n");

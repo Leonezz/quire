@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { EVIDENCE_MAX, buildReportData, caseKinds, loadReportData } from "./data";
-import { AT, baseline, corpus, emptyData, failedResult, hybridData, hybridResult, legacyData, legacyResult, legacyResults, opinion } from "./fixtures";
+import { AT, baseline, corpus, emptyData, failedResult, hybridData, hybridResult, legacyData, legacyResult, legacyResults, opinion, visualData } from "./fixtures";
 
 describe("buildReportData (legacy results, no opinions on disk)", () => {
   const data = legacyData();
@@ -137,5 +137,26 @@ describe("loadReportData", () => {
     writeFileSync(join(outDir, "broken.json"), "{not json");
     expect(() => loadReportData({ outDir, baselinePath: join(root, "baseline.json"), corpusPath: join(root, "corpus.json") })).toThrow(/broken\.json is not valid JSON/);
     expect(() => loadReportData({ outDir, baselinePath: join(root, "nope.json"), corpusPath: join(root, "corpus.json") })).toThrow(/nope\.json does not exist/);
+  });
+});
+
+describe("buildReportData (visual results)", () => {
+  const data = visualData();
+
+  it("carries the mode, the capture and each issue's tile; text-mode rows have neither", () => {
+    const alpha = data.cases.find((row) => row.slug === "alpha-post")!;
+    expect(alpha.mode).toBe("visual");
+    expect(alpha.render?.tiles.rendered).toEqual(["rendered-01.png", "rendered-02.png", "rendered-03.png"]);
+    expect(alpha.issues.map((issue) => issue.where)).toEqual([{ image: "rendered", tile: 2 }, { image: "reference", tile: 1 }]);
+    expect(alpha.opinions[0]!.images).toBe(4);
+    const gamma = data.cases.find((row) => row.slug === "gamma-post")!;
+    expect(gamma.mode).toBe("text");
+    expect(gamma.render).toBeUndefined();
+    expect(gamma.issues.every((issue) => !("where" in issue))).toBe(true);
+  });
+
+  it("totals the measured facts over the captured cases only", () => {
+    expect(data.renderTotals).toEqual({ captured: 2, brokenImages: 1, brokenCases: 1, overflow: 1, overflowCases: 1, rawMarkup: 2, rawMarkupCases: 1, mathErrors: 1, mathErrorCases: 1 });
+    expect(legacyData().renderTotals.captured).toBe(0);
   });
 });

@@ -1,8 +1,9 @@
 // The Claude Code backend without the CLI: the argument list, the JSON envelope in both shapes
-// (structured_output and result text), is_error, malformed output, and the login check's parser.
+// (structured_output and result text), is_error, malformed output, the stream-json path images take
+// (stdin message, JSON-lines output), and the login check's parser.
 import { describe, expect, it } from "vitest";
-import { ANSWER_SCHEMA } from "../rubric";
-import { claudeArgs, claudeBackend, ClaudeEnvelopeError, parseClaudeEnvelope, unfence, type ClaudeCall, type ClaudeRun, type ClaudeRunner } from "./claude";
+import { ANSWER_SCHEMA, VISUAL_ANSWER_SCHEMA } from "../rubric";
+import { claudeArgs, claudeBackend, ClaudeEnvelopeError, claudeStreamMessage, imageMediaType, parseClaudeEnvelope, parseClaudeStream, unfence, type ClaudeCall, type ClaudeRun, type ClaudeRunner } from "./claude";
 import { parseAuthStatus } from "./preflight.mjs";
 import { BackendRunError } from "./types";
 
@@ -124,6 +125,73 @@ describe("claudeBackend", () => {
 
   it("lets a runner that cannot start propagate", async () => {
     await expect(backend(async () => { throw new Error("spawn claude ENOENT"); }).run(call)).rejects.toThrow("spawn claude ENOENT");
+  });
+});
+
+/** What stream-json prints (shape seen on 2.1.269): init, the assistant's tool call for the schema, its result, then the result line. */
+const streamLines = (result: Record<string, unknown>) => [
+  { type: "system", subtype: "init", session_id: "s", model: "claude-sonnet-5", tools: [] },
+  { type: "assistant", message: { role: "assistant", content: [{ type: "tool_use", name: "StructuredOutput", input: answer }] }, session_id: "s" },
+  { type: "user", message: { role: "user", content: [{ type: "tool_result", is_error: false, content: "ok" }] }, session_id: "s" },
+  result,
+].map((line) => JSON.stringify(line)).join("\n");
+
+describe("stream-json (images)", () => {
+  it("switches both formats to stream-json with --verbose and keeps every other flag", () => {
+    const args = claudeArgs("claude-sonnet-5", VISUAL_ANSWER_SCHEMA, true);
+    expect(args[args.indexOf("--input-format") + 1]).toBe("stream-json");
+    expect(args[args.indexOf("--output-format") + 1]).toBe("stream-json");
+    expect(args).toContain("--verbose");
+    expect(args).not.toContain("json");
+    for (const flag of ["--no-session-persistence", "--strict-mcp-config", "--disable-slash-commands"]) expect(args).toContain(flag);
+    expect(args[args.indexOf("--json-schema") + 1]).toBe(JSON.stringify(VISUAL_ANSWER_SCHEMA));
+    expect(args[args.indexOf("--tools") + 1]).toBe("");
+    expect(args[args.indexOf("--permission-mode") + 1]).toBe("plan");
+    expect(args[args.indexOf("--max-turns") + 1]).toBe("3");
+    expect(claudeArgs("m", {}, false)).not.toContain("--input-format");
+  });
+
+  it("puts the base64 images first and the prompt last in one user-message line", () => {
+    const line = claudeStreamMessage("Judge this.", [{ mediaType: "image/png", data: "AAA" }, { mediaType: "image/jpeg", data: "BBB" }]);
+    expect(line.endsWith("\n")).toBe(true);
+    expect(line.trim().split("\n")).toHaveLength(1);
+    expect(JSON.parse(line)).toEqual({ type: "user", message: { role: "user", content: [
+      { type: "image", source: { type: "base64", media_type: "image/png", data: "AAA" } },
+      { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "BBB" } },
+      { type: "text", text: "Judge this." },
+    ] } });
+  });
+
+  it("knows the media type by extension and refuses anything else", () => {
+    expect(imageMediaType("/x/rendered-01.png")).toBe("image/png");
+    expect(imageMediaType("/x/a.JPG")).toBe("image/jpeg");
+    expect(() => imageMediaType("/x/a.tiff")).toThrow(/only png, jpg, jpeg, webp, gif/);
+  });
+
+  it("reads the result line among the JSON lines, with cost and tokens", () => {
+    expect(parseClaudeStream(streamLines(structured))).toEqual({ raw: JSON.stringify(answer), answerFrom: "structured_output", costUsd: 0.0012, tokens: 1550, resolvedModel: "claude-haiku-4-5-20251001" });
+    expect(parseClaudeStream(streamLines(textOnly)).answerFrom).toBe("result");
+  });
+
+  it("reports an is_error result line and output with no result line", () => {
+    expect(() => parseClaudeStream(streamLines(loggedOut))).toThrow("claude -p reported an error: Failed to authenticate");
+    const noResult = streamLines(structured).split("\n").slice(0, 3).join("\n");
+    expect(() => parseClaudeStream(noResult)).toThrow(/stream-json\) printed no \{"type":"result"\} line/);
+    expect(() => parseClaudeStream("")).toThrow(ClaudeEnvelopeError);
+  });
+
+  it("the backend hands the runner the images and parses the stream; without images it keeps the json path", async () => {
+    const calls: ClaudeCall[] = [];
+    const claude = claudeBackend({ bin: "claude", model: "claude-sonnet-5", env: {}, runner: async (call) => { calls.push(call); return { stdout: call.images ? streamLines(structured) : JSON.stringify(structured), stderr: "", status: 0, timedOut: false }; } });
+    expect(await claude.run({ prompt: "P", schema: VISUAL_ANSWER_SCHEMA, timeoutMs: 1000, images: ["/a.png", "/b.png"] })).toEqual({ raw: JSON.stringify(answer), costUsd: 0.0012, tokens: 1550, resolvedModel: "claude-haiku-4-5-20251001" });
+    expect(calls[0]).toEqual({ prompt: "P", schema: VISUAL_ANSWER_SCHEMA, model: "claude-sonnet-5", bin: "claude", timeoutMs: 1000, images: ["/a.png", "/b.png"] });
+    await claude.run({ prompt: "P", schema: ANSWER_SCHEMA, timeoutMs: 1000, images: [] });
+    expect(calls[1]).not.toHaveProperty("images");
+  });
+
+  it("a stream run that exits non-zero without a result line fails with stderr", async () => {
+    const claude = claudeBackend({ bin: "claude", model: "m", env: {}, runner: async () => ({ stdout: streamLines(structured).split("\n")[0]!, stderr: "Error: image too large", status: 1, timedOut: false }) });
+    await expect(claude.run({ prompt: "P", schema: {}, timeoutMs: 1000, images: ["/a.png"] })).rejects.toThrow("claude -p exited with 1: Error: image too large");
   });
 });
 

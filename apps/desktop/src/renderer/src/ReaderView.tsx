@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { SplitGroup, SplitPanel, TocRail, useSplitSizes } from "@read/ui";
 import { ColumnSeparator, PAGE_MIN, PANEL_DEFAULT, PANEL_MAX, PANEL_MIN } from "./ContentPane";
 import { ReaderToolbar } from "./ReaderToolbar";
-import { ReaderDocumentSurface, installTextAnnotationHighlights, renderedTextQuoteSelection, resolveTextQuoteRange, textAnnotationHighlightStyles, useDocumentReadingPosition } from "@read/reader";
+import { installTextAnnotationHighlights, renderedTextQuoteSelection, resolveTextQuoteRange, textAnnotationHighlightStyles, useDocumentReadingPosition } from "@read/reader";
 import { ANNOTATION_COLORS, citationFor, useAnnotations } from "./annotations";
 import type { NoteDraft } from "./NotesPanel";
 import { ReaderInspector, type ReaderPanel } from "./ReaderInspector";
@@ -13,9 +13,9 @@ import { agentStore, useAgentRun } from "./agentStore";
 import { SelectionToolbar, type SelectionCapture } from "./SelectionToolbar";
 import type { AgentContext, Annotation } from "../../shared/contracts";
 import { FindBar } from "./FindBar";
-import { prefsStyle, useReadingPrefs } from "./readingPrefs";
+import { useReadingPrefs } from "./readingPrefs";
+import { ReaderArticle } from "./ReaderArticle";
 import { read } from "./api";
-import { headerParts } from "./materialMeta";
 import type { MaterialRecord, MaterialViewContent } from "../../shared/contracts";
 import { mirroredViews, resolveViewAnnotations } from "./mirroredAnnotations";
 import { TextViewBanner } from "./TextViewBanner";
@@ -264,12 +264,10 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
   // A stable resolver: the surface keys its image cache by resolver identity, so a new function per render
   // would re-request every image on each scroll tick (flicker and layout jumps).
   const resolveImage = useCallback((url: string) => read.resolveImage(url), []);
-  const fallback = useMemo(() => (content.markdown ? { content: content.markdown, format: "gfm" as const } : { content: content.plain ?? "", format: "plain" as const }), [content]);
   const host = hostLabel(material);
   const subtitle = [material.origin === "agent" ? "Agent" : host, `${progress}%`, `${content.readingMinutes} min`].join(" · ");
   const viewSwitch = { view, views: views.views, fetching: views.fetching, onSelect: views.select };
   const panelOpen = panel !== null && !prefs.focus;
-  const lineageCount = material.origin === "agent" ? (material.lineage?.length ?? 0) : 0;
 
   return (
     <div className="grid h-full grid-cols-[minmax(0,1fr)] grid-rows-[52px_minmax(0,1fr)]">
@@ -286,29 +284,11 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
             <TocRail aria-label="Contents" entries={outline.map((entry) => ({ id: entry.id, label: entry.label, level: entry.level - 1 }))} activeId={activeHeading} pinned={tocPinned} resting="hidden" onSelect={(id) => document.getElementById(id)?.scrollIntoView({ block: "start", behavior: "smooth" })} />
           </div>
         ) : null}
-        <div ref={viewportRef} className="reader-viewport overflow-auto px-14 pb-[120px] pt-12" style={prefsStyle(prefs)}>
-          <article ref={bodyRef} className="reader-body" style={{ textAlign: prefs.justify ? "justify" : "start" }}>
-            {lineageCount ? <button type="button" className="mb-3 block cursor-default border-0 bg-transparent p-0 text-[13px] font-medium text-accent-text hover:underline" onClick={() => setPanel("info")}>{host} · sources in Info</button> : <p className="mb-3 text-[13px] font-medium text-accent-text">{host}</p>}
-            <h1>{material.title}</h1>
-            <div className="mb-8 flex flex-wrap gap-x-3 text-[12.5px] text-label-2">
-              {headerParts(material.meta).map((part) => <span key={part}>{part}</span>)}
-              <span>{content.readingMinutes} min</span>
-              {material.origin === "agent" ? null : <a href={material.finalUrl} onClick={(event) => { event.preventDefault(); onOpenLink(material.finalUrl); }}>Open original ↗</a>}
-            </div>
-            {content.view === "text" && content.report
-              ? <TextViewBanner report={content.report} onOpenPdf={() => views.select("pdf")} />
-              : <QualityBanner material={material} low={quality.low} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onReport={onReport} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError} />}
-            <ReaderDocumentSurface
-              schema={content.reader?.schema ?? "none"}
-              payload={content.reader?.payload ?? ""}
-              fallback={fallback}
-              onOpenLink={onOpenLink}
-              resolveImageSource={resolveImage}
-              resolveRemoteImageSource={resolveImage}
-              showFallbackNotice={false}
-            />
-          </article>
-        </div>
+        <ReaderArticle material={material} content={content} prefs={prefs} resolveImage={resolveImage} onOpenLink={onOpenLink} viewportRef={viewportRef} bodyRef={bodyRef} onShowSources={() => setPanel("info")}
+          bylineExtra={material.origin === "agent" ? null : <a href={material.finalUrl} onClick={(event) => { event.preventDefault(); onOpenLink(material.finalUrl); }}>Open original ↗</a>}
+          banner={content.view === "text" && content.report
+            ? <TextViewBanner report={content.report} onOpenPdf={() => views.select("pdf")} />
+            : <QualityBanner material={material} low={quality.low} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onReport={onReport} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError} />} />
       </main>
       </SplitPanel>
       {panelOpen ? (

@@ -6,14 +6,16 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { BackendId, JudgeResult, JudgedCase, JudgedIssue, Opinion } from "../cache";
-import type { Severity, Verdict } from "../rubric";
+import type { Severity, TileRef, Verdict } from "../rubric";
+import type { RenderSummary } from "../visual";
 
 export const VERDICT_ORDER: readonly Verdict[] = ["PASS", "MINOR", "MAJOR"];
 export const EVIDENCE_MAX = 200;
 export type Delta = "regressed" | "improved" | "same" | "new";
 
 export interface CaseKind { kind: string; severity: Severity }
-export interface CaseIssue { kind: string; severity: Severity; note: string; evidence: string; verified: boolean }
+/** `where` is the tile a visual issue shows in (null: only in the texts); absent for text-mode results. */
+export interface CaseIssue { kind: string; severity: Severity; note: string; evidence: string; verified: boolean; where?: TileRef | null }
 /** One backend's answer, compact; legacy results (no opinions on disk) get one synthesized from the case itself. */
 export interface CaseOpinion {
   backend: BackendId;
@@ -23,6 +25,8 @@ export interface CaseOpinion {
   summary: string;
   tokens?: number;
   costUsd?: number;
+  /** Images attached to the call (visual mode). */
+  images?: number;
   wallMs: number;
 }
 export interface CaseRow {
@@ -44,6 +48,10 @@ export interface CaseRow {
   truncated: boolean;
   tokens?: number;
   wallMs: number;
+  /** "visual" when judged with the render capture; "text" otherwise (including results older than the visual judge). */
+  mode: "visual" | "text";
+  /** The capture the case was judged on: tile file names under eval/render/out/<slug>/, how many were sent, the measured facts. */
+  render?: RenderSummary;
 }
 export interface ErrorRow { slug: string; url: string; error: string }
 export interface Totals {
@@ -58,6 +66,14 @@ export interface Totals {
   /** Cases that gathered two or more opinions. */
   escalated: number;
   disputed: number;
+}
+/** The render capture's facts summed over the captured cases; `*Cases` counts the cases with at least one. */
+export interface RenderTotals {
+  captured: number;
+  brokenImages: number; brokenCases: number;
+  overflow: number; overflowCases: number;
+  rawMarkup: number; rawMarkupCases: number;
+  mathErrors: number; mathErrorCases: number;
 }
 export interface KindStat { kind: string; cases: number; issues: number; major: number; minor: number }
 export interface BackendStat {
@@ -83,6 +99,7 @@ export interface ReportData {
   generatedAt: string;
   cases: CaseRow[];
   totals: Totals;
+  renderTotals: RenderTotals;
   byKind: KindStat[];
   byBackend: BackendStat[];
   agreement: Agreement;
@@ -105,7 +122,7 @@ const isJudged = (result: JudgeResult): result is JudgedCase => "verdict" in res
 const sum = (values: readonly number[]) => values.reduce((total, value) => total + value, 0);
 const clipEvidence = (text: string) => (text.length <= EVIDENCE_MAX ? text : `${text.slice(0, EVIDENCE_MAX - 1)}…`);
 
-const toIssue = (issue: JudgedIssue): CaseIssue => ({ kind: issue.kind, severity: issue.severity, note: issue.note, evidence: clipEvidence(issue.evidence), verified: issue.verified });
+const toIssue = (issue: JudgedIssue): CaseIssue => ({ kind: issue.kind, severity: issue.severity, note: issue.note, evidence: clipEvidence(issue.evidence), verified: issue.verified, ...(issue.where !== undefined ? { where: issue.where } : {}) });
 
 /** Distinct kinds in first-seen order, each carrying "major" when any of its issues is major. */
 export function caseKinds(issues: readonly CaseIssue[]): CaseKind[] {
@@ -122,6 +139,7 @@ const toOpinion = (opinion: Opinion): CaseOpinion => ({
   issues: opinion.issues.map(toIssue), summary: opinion.summary, wallMs: opinion.wallMs,
   ...(opinion.tokens !== undefined ? { tokens: opinion.tokens } : {}),
   ...(opinion.costUsd !== undefined ? { costUsd: opinion.costUsd } : {}),
+  ...(opinion.images !== undefined ? { images: opinion.images } : {}),
 });
 
 /** The opinions on disk, or the case itself as one Codex opinion when it predates the hybrid judge. */
@@ -152,6 +170,21 @@ function toRow(result: JudgedCase, url: string, baseline: BaselineEntry | undefi
     model: result.resolvedModel ?? result.model, rubricVersion: result.rubricVersion, judgedAt: result.judgedAt, truncated: result.truncated,
     ...(result.tokens !== undefined ? { tokens: result.tokens } : {}),
     wallMs: result.wallMs,
+    mode: result.mode ?? "text",
+    ...(result.render ? { render: result.render } : {}),
+  };
+}
+
+function renderTotalsOf(cases: readonly CaseRow[]): RenderTotals {
+  const metrics = cases.flatMap((row) => (row.render ? [row.render.metrics] : []));
+  const total = (pick: (m: (typeof metrics)[number]) => number) => sum(metrics.map(pick));
+  const withAny = (pick: (m: (typeof metrics)[number]) => number) => metrics.filter((m) => pick(m) > 0).length;
+  return {
+    captured: metrics.length,
+    brokenImages: total((m) => m.images.broken), brokenCases: withAny((m) => m.images.broken),
+    overflow: total((m) => m.overflow.count), overflowCases: withAny((m) => m.overflow.count),
+    rawMarkup: total((m) => m.rawMarkup.count), rawMarkupCases: withAny((m) => m.rawMarkup.count),
+    mathErrors: total((m) => m.mathErrors), mathErrorCases: withAny((m) => m.mathErrors),
   };
 }
 
@@ -211,6 +244,7 @@ export function buildReportData({ results, baseline, corpus, generatedAt }: Buil
       unverified: issues.filter((issue) => !issue.verified).length,
       escalated: cases.filter((row) => row.opinions.length >= 2).length, disputed: cases.filter((row) => row.disputed).length,
     },
+    renderTotals: renderTotalsOf(cases),
     byKind: kindStats(cases),
     byBackend: backendStats(cases),
     agreement: agreementOf(cases),
