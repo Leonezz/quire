@@ -5,7 +5,7 @@
 // it is. Invalid issues of both follow, for the record. Pure.
 import type { Embed, ReferenceImage, RenderedCode, RenderedImage, RenderedTable, RenderMetrics } from "../render/types";
 import type { JudgedIssue } from "./cache";
-import { embedId, hasEmptyCells, type Severity } from "./verdict";
+import { embedId, fixedSeverity, hasEmptyCells, inArticle, type Severity } from "./verdict";
 
 /** Where a merged issue's standing comes from. */
 export const ISSUE_ORIGINS = ["both", "one-sided-fact", "one-sided-downgraded", "one-sided"] as const;
@@ -18,6 +18,8 @@ export interface MergeFacts {
   embeds: readonly Embed[];
   tables: readonly RenderedTable[];
   code: readonly RenderedCode[];
+  /** EXTRACTED as the prompt carries it: an original image or embed supports an issue only when it is in the article. */
+  extracted: string;
   metrics: Pick<RenderMetrics, "images" | "emptyCellTables" | "rawMarkup" | "mathErrors" | "unmarkedLists" | "collapsedCode">;
 }
 
@@ -39,8 +41,8 @@ export function issuesMatch(a: JudgedIssue, b: JudgedIssue): boolean {
 }
 
 /**
- * Whether a measured fact backs an issue on its own: it cites an unmatched original image, a broken
- * reader image, an embed the reader does not show, a table with empty cells or a code block shown as
+ * Whether a measured fact backs an issue on its own: it cites an unmatched original image in the
+ * article, a broken reader image, an embed in the article the reader does not show, a table with empty cells or a code block shown as
  * one line; or it is a rendering image issue while some reader image is broken, a table issue while
  * some table has empty cells, a code/math or layout issue while raw markup, math errors, unmarked
  * lists or collapsed code were measured.
@@ -49,9 +51,9 @@ export function factSupported(issue: JudgedIssue, facts: MergeFacts | undefined)
   if (!facts) return false;
   const refs = issue.refs ?? [];
   const citesFact = refs.some((ref) =>
-    facts.reference.some((image) => image.id === ref && image.matchedBy === null)
+    facts.reference.some((image) => image.id === ref && image.matchedBy === null && inArticle(image.context, facts.extracted) === true)
     || facts.rendered.some((image) => image.id === ref && image.broken)
-    || facts.embeds.some((embed, index) => embedId(index) === ref && !embed.representedInReader)
+    || facts.embeds.some((embed, index) => embedId(index) === ref && !embed.representedInReader && inArticle(embed.context, facts.extracted) === true)
     || facts.tables.some((table) => table.id === ref && hasEmptyCells(table))
     || facts.code.some((block) => block.id === ref && block.collapsed));
   if (citesFact) return true;
@@ -68,6 +70,19 @@ function oneSided(issue: JudgedIssue, facts: MergeFacts | undefined): JudgedIssu
   return { ...issue, severity: "minor", originalSeverity: issue.originalSeverity ?? "major", origin: "one-sided-downgraded" };
 }
 
+/**
+ * The screener issue a confirmer issue pairs with: among the untaken ones it matches, the first of the
+ * same kind and layer, else of the same kind, else the first. One issue can match several by refs
+ * ("all 16 images fail to load" and "the r16 thumbnail is related-post chrome"); the closest pairs.
+ */
+function bestPartner(issue: JudgedIssue, screen: readonly JudgedIssue[], taken: ReadonlySet<number>): number {
+  const candidates = screen.map((candidate, index) => ({ candidate, index })).filter(({ candidate, index }) => !taken.has(index) && issuesMatch(issue, candidate));
+  const pick = candidates.find(({ candidate }) => candidate.kind === issue.kind && candidate.layer === issue.layer)
+    ?? candidates.find(({ candidate }) => candidate.kind === issue.kind)
+    ?? candidates[0];
+  return pick ? pick.index : -1;
+}
+
 /** Keeps the first of issues with the same layer, kind and evidence. */
 function dedupe(issues: readonly JudgedIssue[]): JudgedIssue[] {
   const seen = new Set<string>();
@@ -76,8 +91,9 @@ function dedupe(issues: readonly JudgedIssue[]): JudgedIssue[] {
 
 /**
  * The case's issues from two opinions' (already normalized and validated) issues. Greedy one-to-one
- * matching, the confirmer's issues first: each takes the first screener issue it matches. A pair
- * keeps the confirmer's text, evidence, where and layer at the more severe severity, origin "both". Then
+ * matching, the confirmer's issues first: each takes the closest screener issue it matches (same kind
+ * and layer first). A pair keeps the confirmer's text, evidence, where and layer at the more severe
+ * severity — unless the program fixes it (kept-boundary content minor, metadata by subject) — origin "both". Then
  * the confirmer's unmatched issues, then the screener's, each one-sided; duplicates (same layer,
  * kind and evidence) are kept once. Invalid issues of both come last and never count.
  */
@@ -88,11 +104,11 @@ export function crossConfirm(screen: readonly JudgedIssue[], confirm: readonly J
   const matched: JudgedIssue[] = [];
   const confirmOnly: JudgedIssue[] = [];
   for (const issue of confirmValid) {
-    const partner = screenValid.findIndex((candidate, index) => !taken.has(index) && issuesMatch(issue, candidate));
+    const partner = bestPartner(issue, screenValid, taken);
     if (partner < 0) { confirmOnly.push(issue); continue; }
     taken.add(partner);
     const other = screenValid[partner]!;
-    const severity = moreSevere(issue.severity, other.severity);
+    const severity = fixedSeverity(issue) ?? moreSevere(issue.severity, other.severity);
     const { originalSeverity: _dropped, ...kept } = issue;
     matched.push({ ...kept, severity, origin: "both", ...(issue.originalSeverity && issue.originalSeverity !== severity ? { originalSeverity: issue.originalSeverity } : {}) });
   }

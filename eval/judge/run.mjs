@@ -3,7 +3,9 @@
 // in; the options go to the harness as environment variables.
 //   node run.mjs [slug ...] [--policy single|screen-then-confirm|both] [--backend codex|claude] [--model M]
 //                [--screen-model M] [--confirm-model M] [--force] [--max N] [--update-baseline] [--concurrency N]
-//                [--mode visual|text]
+//                [--mode visual|text] [--rescore]
+// --rescore scores every stored result (or the named ones) again from its stored opinions under the
+// current program rules and capture facts: no model is called, no CLI is needed (docs/design/eval-rubric.md §7).
 // --backend/--model apply to --policy single; --screen-model/--confirm-model to the other two.
 // --mode visual (config.json "mode", the default) needs the render capture of each case
 // (pnpm --filter @read/eval render <slug>); when none of the selected cases has one, nothing runs.
@@ -16,11 +18,11 @@ import { preflightClaude, preflightCodex } from "./backends/preflight.mjs";
 import { captureExists, checkCaptures } from "./captures.mjs";
 import { backendsNeeded, describePolicy, resolveConcurrency, resolveMaxImages, resolveMode, resolvePolicy } from "./policy-config.mjs";
 
-const USAGE = "Usage: judge [slug ...] [--policy single|screen-then-confirm|both] [--backend codex|claude] [--model M] [--screen-model M] [--confirm-model M] [--force] [--max N] [--update-baseline] [--concurrency N] [--mode visual|text]";
+const USAGE = "Usage: judge [slug ...] [--policy single|screen-then-confirm|both] [--backend codex|claude] [--model M] [--screen-model M] [--confirm-model M] [--force] [--max N] [--update-baseline] [--concurrency N] [--mode visual|text] [--rescore]";
 const root = dirname(fileURLToPath(import.meta.url));
 const args = process.argv.slice(2);
 const VALUED = ["--policy", "--backend", "--model", "--screen-model", "--confirm-model", "--max", "--concurrency", "--mode"];
-const KNOWN = new Set([...VALUED, "--force", "--update-baseline"]);
+const KNOWN = new Set([...VALUED, "--force", "--update-baseline", "--rescore"]);
 const flag = (name) => args.includes(name);
 const option = (name) => { const at = args.indexOf(name); return at >= 0 ? args[at + 1] : undefined; };
 const unknown = args.filter((arg) => arg.startsWith("--") && !KNOWN.has(arg));
@@ -64,8 +66,10 @@ if (mode === "visual") {
 
 const bins = { codex: process.env.CODEX_BIN ?? "codex", claude: process.env.CLAUDE_BIN ?? "claude" };
 const PREFLIGHT = { codex: preflightCodex, claude: preflightClaude };
-const checked = [];
-for (const id of new Set(backendsNeeded(effective).map((spec) => spec.backend))) {
+const RESCORE = flag("--rescore");
+if (RESCORE && flag("--force")) { console.error("--rescore calls no model; it cannot be combined with --force."); process.exit(2); }
+const checked = RESCORE ? ["rescore: no model calls"] : [];
+for (const id of RESCORE ? [] : new Set(backendsNeeded(effective).map((spec) => spec.backend))) {
   try { checked.push(PREFLIGHT[id](bins[id])); }
   catch (error) { console.error(error instanceof Error ? error.message : String(error)); process.exit(1); }
 }
@@ -78,6 +82,7 @@ const env = {
   JUDGE_CLAUDE_BIN: bins.claude,
   JUDGE_ONLY: slugs.join(","),
   JUDGE_FORCE: flag("--force") ? "1" : "",
+  JUDGE_RESCORE: RESCORE ? "1" : "",
   JUDGE_UPDATE_BASELINE: flag("--update-baseline") ? "1" : "",
   JUDGE_CONCURRENCY: String(concurrency),
   JUDGE_MODE: mode,

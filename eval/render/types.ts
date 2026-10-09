@@ -58,6 +58,8 @@ export interface ReferenceImage {
   height: number;
   /** The reader image ("r…") judged to be the same picture by URL (file name stem, size suffixes and query stripped), or null. */
   matchedBy: string | null;
+  /** Up to 160 characters of the nearest preceding heading or paragraph (as Embed.context), "" when there is none; an image whose context is not in the article is page chrome. */
+  context: string;
 }
 
 /** Content the original page fills in with JavaScript or a plugin; found in the snapshot HTML, in document order. */

@@ -2,11 +2,11 @@
 // invalid, the cases where an image or embed claim stands, and the per-layer and overall verdicts.
 import { describe, expect, it } from "vitest";
 import type { Embed, ReferenceImage, RenderedCode, RenderedImage, RenderedTable } from "../render/types";
-import { embedId, evidenceOccurs, isBoundaryExternalDrop, extractedKeepsLineBreaks, hasEmptyCells, layerByFacts, layerVerdicts, LARGE_IMAGE_PX, normalizeIssue, overallVerdict, validateIssue, type FactInventory, type Invalidity, type JudgeIssue } from "./verdict";
+import { BOUNDARY_SERVICES, boundaryService, plainText, embedId, evidenceOccurs, inArticle, isBoundaryExternalDrop, extractedKeepsLineBreaks, hasEmptyCells, layerByFacts, layerVerdicts, LARGE_IMAGE_PX, normalizeIssue, overallVerdict, validateIssue, type FactInventory, type Invalidity, type JudgeIssue } from "./verdict";
 
 const TEXTS = ["SOURCE: Figure 3 shows the loss. By Ada.", "EXTRACTED: # Title", "RENDERED: Figure 1: the setup"];
 const reader = (id: string, broken = false): RenderedImage => ({ id, tile: 1, src: `https://x.test/${id}.png`, alt: "", caption: "", broken });
-const original = (id: string, matchedBy: string | null, width = 640, height = 420): ReferenceImage => ({ id, tile: 2, src: `https://x.test/${id}.png`, candidates: [], alt: "", width, height, matchedBy });
+const original = (id: string, matchedBy: string | null, width = 640, height = 420, context = "Training setup"): ReferenceImage => ({ id, tile: 2, src: `https://x.test/${id}.png`, candidates: [], alt: "", width, height, matchedBy, context });
 const embed = (representedInReader: boolean): Embed => ({ kind: "iframe", tag: "iframe", src: "https://www.youtube.com/embed/v", host: "www.youtube.com", context: "Training setup", representedInReader });
 const table = (id: string, cells: number, emptyCells: number): RenderedTable => ({ id, tile: 3, rows: 4, cols: 5, cells, emptyCells, head: "Metric | LCP" });
 const code = (id: string, collapsed: boolean, head: string): RenderedCode => ({ id, tile: 2, lines: collapsed ? 1 : 3, chars: collapsed ? 150 : 40, collapsed, head });
@@ -16,7 +16,7 @@ const facts = (overrides: Partial<FactInventory> = {}): FactInventory => ({
   embeds: [embed(false), embed(true)],
   tables: [table("t1", 20, 13), table("t2", 8, 0), table("t3", 3, 3)],
   code: [code("c1", true, "z = np.maximum(0, np.dot(W, x)) # forward passdW = np.outer(z > 0, x)"), code("c2", false, "import os")],
-  extracted: "# Title\n\n```python\nz = np.maximum(0, np.dot(W, x)) # forward pass\ndW = np.outer(z > 0, x) # backward\n```\n",
+  extracted: "# Title\n\nTraining setup\n\n```python\nz = np.maximum(0, np.dot(W, x)) # forward pass\ndW = np.outer(z > 0, x) # backward\n```\n",
   sent: { rendered: 3, reference: 2 },
   ...overrides,
 });
@@ -196,6 +196,34 @@ describe("tables and code blocks", () => {
   });
 });
 
+describe("the article's head and kept-boundary content (§5.2)", () => {
+  const EXTRACTED = "<!-- extractor metadata -->\ntitle: How is LLaMa.cpp possible?\nbyline: Vicki Boykis\npublishedAt: 2024-02-28T00:00:00.000Z\n<!-- end extractor metadata -->\n\n# How is LLaMa.cpp possible?\n\nThe GGUF format packs a model into one file.\n";
+
+  it("counts an image or embed right after the title, the byline or a short date line as in the article (real contexts)", () => {
+    expect(inArticle("Feb 28 2024", EXTRACTED)).toBe(true); // vickiboykis-gguf o1
+    expect(inArticle("June 5th, 2021 — 11 min read", EXTRACTED)).toBe(true); // kentcdodds-context e1
+    expect(inArticle("2019年9月5日 · 5 min read", EXTRACTED)).toBe(true);
+    expect(inArticle("How is LLaMa.cpp possible?", EXTRACTED)).toBe(true);
+    expect(inArticle("LLaMa.cpp", EXTRACTED)).toBe(true);
+    expect(inArticle("By Vicki Boykis", EXTRACTED)).toBe(true);
+    expect(inArticle("Vicki", EXTRACTED)).toBe(true);
+  });
+
+  it("keeps out what is not the head: a dek or language notice not in EXTRACTED, share chrome, copyright, short lowercase prose", () => {
+    expect(inArticle("GitHub Copilot is evolving to bring chat and voice interfaces, support pull requests, answer questions on docs, and adopt OpenAI’s GPT-4 for a more personalize…", EXTRACTED)).toBe(false); // githubblog-copilotx o8
+    expect(inArticle("This post is also available in 繁體中文 and 简体中文.", EXTRACTED)).toBe(false); // cloudflare-pingora o1
+    expect(inArticle("Copy & share: sive.rs/ff", EXTRACTED)).toBe(false); // sivers-ff e1
+    expect(inArticle("© 2024 Example Inc.", EXTRACTED)).toBe(false);
+    expect(inArticle("you may want this", EXTRACTED)).toBe(false);
+  });
+
+  it("caps a kept-boundary (extra_content) issue at minor, remembering what the model said", () => {
+    expect(normalizeIssue(issue({ kind: "extra_content", layer: "rendering", severity: "major", refs: ["r1"] }), facts())).toMatchObject({ severity: "minor", originalSeverity: "major" });
+    const minor = issue({ kind: "extra_content", severity: "minor", refs: [] });
+    expect(normalizeIssue(minor, facts())).toBe(minor);
+  });
+});
+
 describe("layerVerdicts and overallVerdict", () => {
   const judged = (layer: JudgeIssue["layer"], severity: JudgeIssue["severity"], invalid?: Invalidity) => ({ ...issue({ layer, severity }), ...(invalid ? { invalid } : {}) });
   const bad: Invalidity = { reason: "evidence-not-verbatim", detail: "x" };
@@ -233,5 +261,71 @@ describe("evidence tolerance and the licence-footer rule (rubric 2026-10-10.11)"
     expect(isBoundaryExternalDrop({ kind: "missing_content", evidence: "© 2024 Example Inc. All rights reserved." })).toBe(true);
     expect(isBoundaryExternalDrop({ kind: "extra_content", evidence: "© 2024 Example Inc." })).toBe(false);
     expect(isBoundaryExternalDrop({ kind: "missing_content", evidence: "Key point: Stable metrics aren't necessarily permanent." })).toBe(false);
+  });
+});
+
+describe("the article boundary (§2, §5.2)", () => {
+  const ARTICLE = "# Understanding LSTMs\n\nRecurrent networks loop over their input.\n\nThe repeating module in an LSTM contains four layers, interacting in a very special way.\n";
+  const withContexts = (overrides: Partial<FactInventory> = {}) => facts({
+    extracted: ARTICLE,
+    reference: [original("o1", null, 640, 420, "The repeating module in an LSTM contains four layers, interacting in a very special way."), original("o2", null, 640, 420, "More posts from this blog: Visualizing Representations"), original("o3", null, 640, 420, "")],
+    embeds: [
+      { kind: "iframe", tag: "iframe", src: "https://www.youtube.com/embed/v", host: "www.youtube.com", context: "Recurrent networks loop over their input.", representedInReader: false },
+      { kind: "iframe", tag: "iframe", src: "https://example.substack.com/embed", host: "example.substack.com", context: "Recurrent networks loop over their input.", representedInReader: false },
+      { kind: "iframe", tag: "iframe", src: "https://widgets.wp.com/likes/index.html?ver=1", host: "widgets.wp.com", context: "Share this: Twitter Facebook", representedInReader: false },
+    ],
+    ...overrides,
+  });
+  const claim = (refs: string[], overrides: Partial<JudgeIssue> = {}) => issue({ kind: "images", severity: "major", evidence: "Figure 3 shows the loss", refs, ...overrides });
+
+  it("inArticle: the context, or its last 60 characters, in EXTRACTED's visible text; unknown without a context", () => {
+    expect(inArticle("The repeating module in an LSTM contains four layers, interacting in a very special way.", ARTICLE)).toBe(true);
+    // A context whose start is not article text (cut at 160 characters, or led by a label) still counts by its last 60 characters.
+    expect(inArticle("Posted by colah. The repeating module in an LSTM contains four layers, interacting in a very special way.", ARTICLE)).toBe(true);
+    // EXTRACTED is markdown; the context is visible page text.
+    expect(inArticle("The repeating module in an LSTM contains four layers.", "The repeating module in an LSTM contains **four** layers.")).toBe(true);
+    expect(inArticle("It’s here", "It's here")).toBe(true);
+    // Comparisons in code are not tags: the text between them stays; an autolink keeps its URL.
+    expect(inArticle("The sign of the state tracks whether the signal is high.", "```c\nif (a < b) x = 1;\n```\n\nThe sign of the state tracks whether the signal is high.\n\n```c\nif (c > d) y = 2;\n```")).toBe(true);
+    expect(inArticle("check it out at https://github.com/pytorch-labs/gpt-fast!", "check it out at <https://github.com/pytorch-labs/gpt-fast>!")).toBe(true);
+    expect(plainText("<td>LCP</td> and <a href=\"x\">link</a>")).toBe("LCP and link");
+    // A context the capture cut at 160 characters ends with an ellipsis that is not page text.
+    expect(inArticle("If your weight matrix W is initialized too large, the output of the matrix multiply could have a very large range (e.g. numbers between -400 and 400), which wi…", "If your weight matrix **W** is initialized too large, the output of the matrix multiply could have a very large range (e.g. numbers between -400 and 400), which will make all outputs binary.")).toBe(true);
+    expect(inArticle("More posts from this blog", ARTICLE)).toBe(false);
+    // Nothing precedes it: above the title (a logo, a page header) — out. No context field at all — unknown.
+    expect(inArticle("", ARTICLE)).toBe(false);
+    expect(inArticle(undefined, ARTICLE)).toBeUndefined();
+  });
+
+  it("a missing image claim citing only originals outside the article is outside-boundary; one in the article stands", () => {
+    expect(validateIssue(claim(["o2"]), TEXTS, withContexts())).toMatchObject({ reason: "outside-boundary", detail: expect.stringContaining("o2 is not in the article") });
+    expect(validateIssue(claim(["o1"]), TEXTS, withContexts())).toBeUndefined();
+    expect(validateIssue(claim(["o1", "o2"]), TEXTS, withContexts())).toBeUndefined();
+    // o3 has an empty context: nothing precedes it, so it is above the title (a logo) — out.
+    expect(validateIssue(claim(["o3"]), TEXTS, withContexts())).toMatchObject({ reason: "outside-boundary" });
+    // Any missing-claim kind, at any severity; not a kept-chrome (extra_content) issue.
+    expect(validateIssue(claim(["o2"], { kind: "missing_content", severity: "minor" }), TEXTS, withContexts())).toMatchObject({ reason: "outside-boundary" });
+    expect(validateIssue(claim(["o2"], { kind: "extra_content", severity: "minor" }), TEXTS, withContexts())).toBeUndefined();
+  });
+
+  it("an embed claim citing a subscribe/comment/like/share service is outside-boundary; one citing an in-article video stands", () => {
+    expect(validateIssue(claim(["e2"], { kind: "missing_content" }), TEXTS, withContexts())).toMatchObject({ reason: "outside-boundary", detail: expect.stringContaining("e2 is a Substack subscribe embed;") });
+    expect(validateIssue(claim(["e3"], { kind: "other" }), TEXTS, withContexts())).toMatchObject({ reason: "outside-boundary", detail: expect.stringContaining("WordPress.com / Jetpack") });
+    expect(validateIssue(claim(["e1"], { kind: "missing_content" }), TEXTS, withContexts())).toBeUndefined();
+  });
+
+  it("knows the documented services by their src", () => {
+    const service = (src: string) => boundaryService({ src, host: new URL(src).host });
+    for (const src of ["https://newsletter.languagemodels.co/embed", "https://buttondown.email/x", "https://app.convertkit.com/forms/1", "https://x.us1.list-manage.com/subscribe", "https://embeds.beehiiv.com/abc", "https://www.getrevue.co/profile/x", "https://example.com/#/portal/signup", "https://disqus.com/embed/comments", "https://utteranc.es/client.js", "https://giscus.app/client.js", "https://commento.io/js", "https://www.facebook.com/plugins/like.php", "https://platform.twitter.com/widgets/follow_button.html", "https://s7.addthis.com/js", "https://platform-api.sharethis.com/js", "https://www.googletagmanager.com/ns.html", "https://ad.doubleclick.net/x"]) expect(service(src), src).toBeDefined();
+    for (const src of ["https://www.youtube.com/embed/v", "https://codepen.io/x/embed/y", "https://newsletter.example.com/p/a-post", "https://twitter.com/a/status/1", "https://observablehq.com/embed/x"]) expect(service(src), src).toBeUndefined();
+    expect(BOUNDARY_SERVICES.length).toBeGreaterThan(10);
+  });
+
+  it("a missing-content claim quoting a citation / BibTeX block is outside-boundary, like a licence footer", () => {
+    const texts = ["Cited as:\nWeng, Lilian. (Jun 2023). LLM-powered Autonomous Agents.", "@article{weng2023agent,\n  title = \"LLM-powered Autonomous Agents\"", "Please cite this work as", "BibTeX citation"];
+    for (const evidence of ["Cited as:", "@article{weng2023agent,", "Please cite this work as", "BibTeX citation"]) {
+      expect(validateIssue(issue({ kind: "missing_content", evidence, refs: [] }), texts, facts())).toMatchObject({ reason: "outside-boundary", detail: expect.stringContaining("BibTeX") });
+    }
+    expect(validateIssue(issue({ kind: "missing_content", evidence: "Weng, Lilian. (Jun 2023)", refs: [] }), texts, facts())).toBeUndefined();
   });
 });

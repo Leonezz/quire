@@ -32,8 +32,8 @@ const readerImages = (): RenderedImage[] => [
   { id: "r2", tile: 3, src: "https://x.test/b.png", alt: "", caption: "", broken: true },
 ];
 const originalImages = (): ReferenceImage[] => [
-  { id: "o1", tile: 1, src: "https://x.test/a.png", candidates: [], alt: "A diagram", width: 640, height: 420, matchedBy: "r1" },
-  { id: "o2", tile: 4, src: "https://x.test/c.png", candidates: ["https://x.test/c@2x.png"], alt: "Loss curve", width: 800, height: 500, matchedBy: null },
+  { id: "o1", tile: 1, src: "https://x.test/a.png", candidates: [], alt: "A diagram", width: 640, height: 420, matchedBy: "r1", context: "Body text." },
+  { id: "o2", tile: 4, src: "https://x.test/c.png", candidates: ["https://x.test/c@2x.png"], alt: "Loss curve", width: 800, height: 500, matchedBy: null, context: "Body text." },
 ];
 const embeds = (): Embed[] => [
   { kind: "iframe", tag: "iframe", src: "https://www.youtube.com/embed/v", host: "www.youtube.com", context: "Training setup and the results we got from it", representedInReader: false },
@@ -159,6 +159,8 @@ describe("buildVisualPrompt (rubric v6)", () => {
     expect(text).toContain("| Must keep (missing it is an issue) | Must drop (keeping it is a minor issue; dropping it is never an issue) |");
     expect(text).toContain("| Body content that needs JavaScript to show — interactive examples, embedded videos or tweets, dynamic charts: the reader must show the thing itself, or at least a link to it or a placeholder for it | Copyright, licence and trademark footers |");
     expect(text).toContain("| Callouts, notes, admonitions, key points | Author bio cards, avatar cards |");
+    expect(text).toContain('| | "Cite this article" / BibTeX blocks a site template adds to every post |');
+    expect(text).toContain("| | Embeds of subscribe, comment, like and share services (newsletter forms, Disqus, like widgets) |");
     expect(text).toContain("| metadata (the extractor) | Title, author, publication date |");
     expect(text).toContain("The overall verdict is the worst of the three.");
     expect(text).toContain("Measured facts: the FACTS below");

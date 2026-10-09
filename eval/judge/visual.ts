@@ -81,6 +81,7 @@ function readManifest(renderOut: string, slug: string): RenderManifest {
   // Rubric v6 checks image and embed claims against these inventories; a capture without them is stale, not empty.
   if (!Array.isArray(rendered.images) || !Array.isArray(reference.images) || !Array.isArray(parsed.embeds)) throw bad("no image/embed inventories (rendered.images, reference.images, embeds): the capture predates them, re-capture it");
   if (!Array.isArray(rendered.tables) || !Array.isArray(rendered.code) || typeof rendered.metrics.collapsedCode !== "number") throw bad("no table/code inventories (rendered.tables, rendered.code, metrics.collapsedCode): the capture predates them, re-capture it");
+  if (!reference.images.every((image: unknown) => isRecord(image) && typeof image.context === "string")) throw bad("original images carry no context (reference.images[].context): the capture predates the in-article test, re-capture it");
   if (!isStringList(parsed.warnings)) throw bad("warnings is not a list");
   const { viewport } = parsed;
   if (!isRecord(viewport) || typeof viewport.width !== "number" || typeof viewport.height !== "number") throw bad("viewport missing");

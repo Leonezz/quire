@@ -12,8 +12,9 @@ const metrics = (overrides: Partial<MergeFacts["metrics"]> = {}): MergeFacts["me
 } satisfies Pick<RenderMetrics, "images" | "emptyCellTables" | "rawMarkup" | "mathErrors" | "unmarkedLists" | "collapsedCode">);
 const facts = (overrides: Partial<MergeFacts> = {}): MergeFacts => ({
   rendered: [{ id: "r1", tile: 1, src: "a", alt: "", caption: "", broken: false }, { id: "r2", tile: 2, src: "b", alt: "", caption: "", broken: true }],
-  reference: [{ id: "o1", tile: 1, src: "a", candidates: [], alt: "", width: 600, height: 400, matchedBy: "r1" }, { id: "o2", tile: 2, src: "c", candidates: [], alt: "", width: 600, height: 400, matchedBy: null }],
-  embeds: [{ kind: "iframe", tag: "iframe", src: "v", host: "youtube.com", context: "c", representedInReader: false }, { kind: "tweet", tag: "blockquote", src: "t", host: "twitter.com", context: "c", representedInReader: true }],
+  reference: [{ id: "o1", tile: 1, src: "a", candidates: [], alt: "", width: 600, height: 400, matchedBy: "r1", context: "The setup" }, { id: "o2", tile: 2, src: "c", candidates: [], alt: "", width: 600, height: 400, matchedBy: null, context: "The loss curve below shows it." }],
+  embeds: [{ kind: "iframe", tag: "iframe", src: "v", host: "youtube.com", context: "Training setup", representedInReader: false }, { kind: "tweet", tag: "blockquote", src: "t", host: "twitter.com", context: "As announced", representedInReader: true }],
+  extracted: "# Title\n\nThe setup\n\nThe loss curve below shows it.\n\nTraining setup\n\nAs announced",
   tables: [{ id: "t1", tile: 4, rows: 5, cols: 4, cells: 20, emptyCells: 13, head: "h" }, { id: "t2", tile: 5, rows: 2, cols: 2, cells: 4, emptyCells: 0, head: "h" }],
   code: [{ id: "c1", tile: 2, lines: 1, chars: 212, collapsed: true, head: "def f(x): return" }, { id: "c2", tile: 3, lines: 4, chars: 60, collapsed: false, head: "import os" }],
   metrics: metrics(),
@@ -69,6 +70,17 @@ describe("factSupported", () => {
     expect(factSupported(issue({ layer: "rendering", kind: "code_or_math" }), facts({ metrics: metrics({ collapsedCode: 3 }) }))).toBe(true);
     expect(factSupported(issue({ kind: "layout" }), facts({ metrics: metrics({ collapsedCode: 1 }) }))).toBe(true);
     expect(factSupported(issue({ kind: "tables" }), facts({ metrics: metrics({ collapsedCode: 1 }) }))).toBe(false);
+  });
+
+  it("an unmatched original image or unshown embed supports an issue only in the article (unknown context: no support)", () => {
+    const outside = facts({ extracted: "# Title\n\nThe setup" });
+    expect(factSupported(issue({ kind: "images", refs: ["o2"] }), outside)).toBe(false);
+    expect(factSupported(issue({ refs: ["e1"] }), outside)).toBe(false);
+    const unknown = facts({ reference: facts().reference.map((image) => ({ ...image, context: "" })), embeds: facts().embeds.map((embed) => ({ ...embed, context: "" })) });
+    expect(factSupported(issue({ kind: "images", refs: ["o2"] }), unknown)).toBe(false);
+    expect(factSupported(issue({ refs: ["e1"] }), unknown)).toBe(false);
+    // In the article, as in the default facts: supported.
+    expect(factSupported(issue({ kind: "images", refs: ["o2"] }), facts())).toBe(true);
   });
 
   it("a rendering image issue while some reader image is broken, but not a content one", () => {
@@ -141,6 +153,17 @@ describe("crossConfirm", () => {
     const confirm = [issue({ evidence: "c1", severity: "minor" }), issue({ evidence: "c2", severity: "minor" }), issue({ evidence: "c3", severity: "minor" })];
     // c1 takes s1 (major wins), c2 takes s2, c3 is left alone.
     expect(summary(crossConfirm(screen, confirm, undefined))).toEqual(["content/missing_content/major/both:c1", "content/missing_content/minor/both:c2", "content/missing_content/minor/one-sided:c3"]);
+  });
+
+  it("pairs the closest issue when several match by refs, and never lifts a capped kept-boundary issue to major", () => {
+    const allBroken = issue({ layer: "rendering", kind: "images", severity: "major", refs: ["r1", "r2"], evidence: "all images" });
+    const keptThumbnail = issue({ layer: "rendering", kind: "extra_content", severity: "minor", refs: ["r2"], evidence: "thumbnail s" });
+    const confirmThumbnail = issue({ layer: "rendering", kind: "extra_content", severity: "minor", refs: ["r2"], evidence: "thumbnail c" });
+    expect(summary(crossConfirm([allBroken, keptThumbnail], [confirmThumbnail], facts()))).toEqual(["rendering/extra_content/minor/both:thumbnail c", "rendering/images/major/one-sided-fact:all images"]);
+    // Even paired with a major issue of another kind, kept-boundary content stays minor; an author issue too.
+    expect(summary(crossConfirm([allBroken], [confirmThumbnail], facts()))).toEqual(["rendering/extra_content/minor/both:thumbnail c"]);
+    const author = issue({ layer: "metadata", kind: "metadata", subject: "author", severity: "minor", refs: ["r1"], evidence: "by" });
+    expect(summary(crossConfirm([allBroken], [author], facts()))).toEqual(["metadata/metadata/minor/both:by"]);
   });
 
   it("dedupes one-sided issues with the same layer, kind and evidence", () => {

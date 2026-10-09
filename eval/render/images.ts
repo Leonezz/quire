@@ -226,6 +226,8 @@ export interface ReferenceImageFact {
   height: number;
   declaredWidth: number;
   declaredHeight: number;
+  /** The nearest preceding heading or paragraph text (reference-facts precedingContext), clipped in the page to a few hundred characters. */
+  context: string;
   /** Page y of the image's top, and the 1-based reference tile holding it (tiles.ts tileAt) or null. */
   top: number;
   tile: number | null;
@@ -277,7 +279,7 @@ export function buildReferenceImages(facts: readonly ReferenceImageFact[], base:
     return [listed[index - 1], listed[index + 1]].some((neighbour) => neighbour !== undefined && neighbour.candidates.length > 0 && sameBox(entry.fact, neighbour.fact));
   };
   return listed.filter((_, index) => !placeholder(index)).map(({ fact, candidates }) => ({
-    tile: fact.tile, src: absolute(fact.src, base) ?? shortenDataUri(fact.src), candidates, alt: clip(fact.alt, CAPTION_CHARS), width: Math.round(fact.width), height: Math.round(fact.height),
+    tile: fact.tile, src: absolute(fact.src, base) ?? shortenDataUri(fact.src), candidates, alt: clip(fact.alt, CAPTION_CHARS), width: Math.round(fact.width), height: Math.round(fact.height), context: clip(fact.context, CAPTION_CHARS),
   }));
 }
 
@@ -285,5 +287,5 @@ export function buildReferenceImages(facts: readonly ReferenceImageFact[], base:
 export function linkImages(reference: readonly Omit<ReferenceImage, "id" | "matchedBy">[], rendered: readonly RenderedImage[]): ReferenceImage[] {
   const withIds = reference.map((image, index) => ({ id: `o${index + 1}`, ...image }));
   const matches = matchImages(withIds, rendered);
-  return withIds.map((image) => ({ id: image.id, tile: image.tile, src: image.src, candidates: image.candidates, alt: image.alt, width: image.width, height: image.height, matchedBy: matches.get(image.id) ?? null }));
+  return withIds.map((image) => ({ id: image.id, tile: image.tile, src: image.src, candidates: image.candidates, alt: image.alt, width: image.width, height: image.height, matchedBy: matches.get(image.id) ?? null, context: image.context }));
 }

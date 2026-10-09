@@ -17,6 +17,8 @@ import { originCounts } from "./merge";
 import { extractedMarkdown, truncateInput } from "./inputs";
 import { describePolicy, resolveMaxImages, resolveMode, resolvePolicy } from "./policy-config.mjs";
 import { caseKey, judgeCase, parseEffectivePolicy, type EffectivePolicy } from "./policy";
+import { inputsChanged, rescoreBlocker, rescoreCase } from "./rescore";
+import { SCORING_VERSION } from "./verdict";
 import { decidedBy, renderReport, type ReportRow } from "./report";
 import { rubricVersionFor, type PromptInput } from "./rubric";
 import { loadCapture, MissingCaptureError, type JudgeMode } from "./visual";
@@ -29,6 +31,8 @@ const ONLY = new Set((process.env.JUDGE_ONLY ?? "").split(",").filter(Boolean));
 const FORCE = process.env.JUDGE_FORCE === "1";
 const MAX = Number(process.env.JUDGE_MAX ?? 0);
 const UPDATE_BASELINE = process.env.JUDGE_UPDATE_BASELINE === "1";
+/** --rescore: score every stored result again from its opinions under the current program rules; no model is called. */
+const RESCORE = process.env.JUDGE_RESCORE === "1";
 const BINS = { codex: process.env.JUDGE_CODEX_BIN || "codex", claude: process.env.JUDGE_CLAUDE_BIN || "claude" } as const;
 /** One backend call may take this long before it counts as failed. */
 const TIMEOUT_MS = Number(process.env.JUDGE_TIMEOUT_MS ?? 15 * 60_000);
@@ -52,23 +56,46 @@ function readBaseline(): Baseline {
 /** A case that could not be judged before any call: reported in this run, never written over the cached result. */
 const notJudged = (slug: string, error: string): FailedCase => ({ key: "", slug, model: "–", rubricVersion: rubricVersionFor(MODE), truncated: false, wallMs: 0, judgedAt: new Date().toISOString(), mode: MODE, error });
 
-async function evaluate(snapshot: Snapshot): Promise<ReportRow> {
+/** A stored result scored again under the current rules, after checking it was judged on exactly these inputs, this capture and this policy (its key, under the prompt version it was judged with). */
+function rescoreStored(input: PromptInput, previous: JudgeResult | undefined): { row?: ReportRow; problem?: string } {
+  if (!previous) return { problem: "no stored result to rescore; judge it first" };
+  if (!isJudged(previous)) return { row: { result: previous, origin: "previous" }, problem: `the stored result is a failed case (${previous.error.split("\n")[0]}); re-judge it` };
+  const blocker = rescoreBlocker(previous);
+  if (blocker) return { row: { result: previous, origin: "previous" }, problem: `cannot rescore: ${blocker}` };
+  const changed = inputsChanged(previous, input, POLICY, MAX_IMAGES);
+  if (changed) return { row: { result: previous, origin: "previous" }, problem: `cannot rescore: ${changed}` };
+  const result = rescoreCase(previous, input, MAX_IMAGES, () => new Date(), POLICY);
+  writeResult(OUT, result);
+  // A screener-only case that no longer passes would have been escalated: it keeps the screener's verdict (§6, one opinion) until it is re-judged.
+  if (POLICY.policy === "screen-then-confirm" && result.opinions?.length === 1 && POLICY.escalateOn.includes(result.verdict)) process.stdout.write(`${input.slug}: rescored to ${result.verdict} on the screener's opinion alone; a normal run would now ask the confirmer (re-judge it with --force to get one)\n`);
+  return { row: { result, origin: "rescored" } };
+}
+
+async function evaluate(snapshot: Snapshot): Promise<{ row: ReportRow; problem?: string }> {
+  const outcome = await evaluateCase(snapshot);
+  return "row" in outcome && outcome.row ? { row: outcome.row, ...(outcome.problem ? { problem: outcome.problem } : {}) } : { row: { result: notJudged(snapshot.slug, outcome.problem ?? "not judged"), origin: "fresh" }, ...(outcome.problem ? { problem: outcome.problem } : {}) };
+}
+
+async function evaluateCase(snapshot: Snapshot): Promise<{ row?: ReportRow; problem?: string }> {
   const source = truncateInput(captureTextOf(new TextDecoder().decode(snapshot.bytes)));
   const extracted = truncateInput(extractedMarkdown(normalizeSnapshot(snapshot)));
   let input: PromptInput = { slug: snapshot.slug, url: snapshot.finalUrl, source: source.text, extracted: extracted.text, truncated: { source: source.truncated, extracted: extracted.truncated } };
   if (MODE === "visual") {
     try { input = { ...input, visual: loadCapture(RENDER_OUT, snapshot.slug) }; }
     catch (error) {
-      if (error instanceof MissingCaptureError) return { result: notJudged(snapshot.slug, error.message), origin: "fresh" };
+      if (error instanceof MissingCaptureError) return { row: { result: notJudged(snapshot.slug, error.message), origin: "fresh" }, problem: error.message };
       throw error;
     }
   }
+  if (RESCORE) return rescoreStored(input, readPrevious(OUT, snapshot.slug));
   const key = caseKey(input, POLICY, MAX_IMAGES);
   const cached = FORCE ? undefined : readCached(OUT, snapshot.slug, key);
-  if (cached) return { result: cached, origin: "cached" };
+  // A cached result scored under older program rules is rescored, never re-judged: the models' answers still hold.
+  if (cached && cached.scoringVersion !== SCORING_VERSION && !rescoreBlocker(cached)) return rescoreStored(input, cached);
+  if (cached) return { row: { result: cached, origin: "cached" } };
   const result = await judgeCase(input, { policy: POLICY, backend: backendFor, timeoutMs: TIMEOUT_MS, maxImages: MAX_IMAGES });
   writeResult(OUT, result);
-  return { result, origin: "fresh" };
+  return { row: { result, origin: "fresh" } };
 }
 
 const layersText = (result: JudgedCase) => (result.layers ? ` (content ${result.layers.content} · metadata ${result.layers.metadata}${result.layers.rendering ? ` · rendering ${result.layers.rendering}` : ""})` : "");
@@ -96,10 +123,11 @@ describe.concurrent("judge", () => {
   });
 
   it.each(cases.map((snapshot) => [snapshot.slug, snapshot] as const))("%s", async (_slug, snapshot) => {
-    const row = await evaluate(snapshot);
+    const { row, problem } = await evaluate(snapshot);
     rows.push(row);
     const { result } = row;
-    process.stdout.write(`${snapshot.slug.padEnd(30)} ${row.origin.padEnd(6)} ${describeResult(result)}${row.origin === "fresh" ? ` · ${describeCost(result)}` : ""}\n`);
+    process.stdout.write(`${snapshot.slug.padEnd(30)} ${row.origin.padEnd(8)} ${problem ? `NOT RESCORED: ${problem}` : describeResult(result)}${row.origin === "fresh" ? ` · ${describeCost(result)}` : ""}\n`);
+    expect(problem, problem ?? "").toBeUndefined();
     expect(isJudged(result), isJudged(result) ? "" : result.error).toBe(true);
   });
 });

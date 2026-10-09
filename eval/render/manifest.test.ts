@@ -16,8 +16,8 @@ const metrics: RenderMetrics = {
 const viewport = { width: 1280, height: 1600, deviceScaleFactor: 1 };
 const renderedImages: RenderedImage[] = [{ id: "r1", tile: 1, src: "https://e.com/a.png", alt: "", caption: "", broken: false }];
 const referenceImages: ReferenceImage[] = [
-  { id: "o1", tile: 1, src: "https://e.com/a.png", candidates: ["https://e.com/a.png"], alt: "", width: 700, height: 300, matchedBy: "r1" },
-  { id: "o2", tile: 2, src: "https://e.com/b.png", candidates: ["https://e.com/b.png"], alt: "", width: 700, height: 300, matchedBy: null },
+  { id: "o1", tile: 1, src: "https://e.com/a.png", candidates: ["https://e.com/a.png"], alt: "", width: 700, height: 300, matchedBy: "r1", context: "Intro" },
+  { id: "o2", tile: 2, src: "https://e.com/b.png", candidates: ["https://e.com/b.png"], alt: "", width: 700, height: 300, matchedBy: null, context: "Related posts" },
 ];
 const tables: RenderedTable[] = [{ id: "t1", tile: 1, rows: 3, cols: 2, cells: 4, emptyCells: 0, head: "a | b" }];
 const code: RenderedCode[] = [{ id: "c1", tile: 1, lines: 1, chars: 130, collapsed: true, head: "x".repeat(80) }];

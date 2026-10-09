@@ -10,7 +10,7 @@ import { buildManifest } from "./manifest.ts";
 import { buildMetrics, buildRenderedCode, buildRenderedTables } from "./metrics.ts";
 import { collectPageFacts } from "./page-facts.ts";
 import { injectBase } from "./reference.ts";
-import { collectReferenceImages } from "./reference-facts.ts";
+import { referenceFactsScript } from "./reference-facts.ts";
 import { TILE_PATTERN, planTiles, tileAt, tileName } from "./tiles.ts";
 
 export const TILE_HEIGHT = 1600;
@@ -199,7 +199,7 @@ async function captureReference(input, snapshotHtml, warnings) {
     const height = await page.evaluate(() => Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight ?? 0));
     const plan = planTiles(0, height, TILE_HEIGHT, input.maxReferenceTiles);
     // Before the tiles: shooting scrolls the page, and the facts are in page coordinates either way.
-    const facts = await page.evaluate(collectReferenceImages);
+    const facts = await page.evaluate(referenceFactsScript());
     const images = buildReferenceImages(facts.images.map((image) => ({ ...image, tile: tileAt(image.top, plan.tiles) })), facts.base);
     const tiles = await shoot(page, plan.tiles, "reference", input.outDir, 0, input.width, false, warnings);
     return { tiles, height: Math.round(height), truncated: plan.truncated, failedRequests, images };

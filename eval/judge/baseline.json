@@ -1,386 +1,747 @@
 {
   "acoup-gondor1": {
-    "verdict": "PASS",
+    "verdict": "MAJOR",
     "kinds": [
-      "layout"
-    ]
+      "layout",
+      "missing_content"
+    ],
+    "layers": {
+      "content": "MAJOR",
+      "metadata": "PASS",
+      "rendering": "MINOR"
+    }
   },
   "acx-sleeper": {
-    "verdict": "PASS",
-    "kinds": []
+    "verdict": "MINOR",
+    "kinds": [
+      "missing_content"
+    ],
+    "layers": {
+      "content": "MINOR",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
   },
   "anthropic-mapping": {
-    "verdict": "PASS",
-    "kinds": []
+    "verdict": "MAJOR",
+    "kinds": [
+      "images",
+      "metadata",
+      "missing_content"
+    ],
+    "layers": {
+      "content": "MAJOR",
+      "metadata": "MINOR",
+      "rendering": "PASS"
+    }
   },
   "arxiv-2609-24983": {
-    "verdict": "PASS",
+    "verdict": "MINOR",
     "kinds": [
-      "metadata"
-    ]
+      "metadata",
+      "tables"
+    ],
+    "layers": {
+      "content": "MINOR",
+      "metadata": "MINOR",
+      "rendering": "PASS"
+    }
   },
   "brendangregg-cpu": {
     "verdict": "PASS",
-    "kinds": [
-      "code_or_math"
-    ]
+    "kinds": [],
+    "layers": {
+      "content": "PASS",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
   },
   "ciechanowski-gps": {
-    "verdict": "PASS",
+    "verdict": "MAJOR",
     "kinds": [
-      "code_or_math",
       "metadata",
       "tables"
-    ]
+    ],
+    "layers": {
+      "content": "MAJOR",
+      "metadata": "MINOR",
+      "rendering": "PASS"
+    }
   },
   "cloudflare-pingora": {
-    "verdict": "PASS",
-    "kinds": []
+    "verdict": "MAJOR",
+    "kinds": [
+      "images"
+    ],
+    "layers": {
+      "content": "MAJOR",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
   },
   "codinghorror-nocode": {
     "verdict": "PASS",
-    "kinds": [
-      "extra_content"
-    ]
+    "kinds": [],
+    "layers": {
+      "content": "PASS",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
   },
   "colah-lstm": {
-    "verdict": "PASS",
+    "verdict": "MINOR",
     "kinds": [
-      "layout"
-    ]
+      "layout",
+      "metadata"
+    ],
+    "layers": {
+      "content": "MINOR",
+      "metadata": "MINOR",
+      "rendering": "PASS"
+    }
   },
   "csstricks-flexbox": {
-    "verdict": "PASS",
+    "verdict": "MAJOR",
     "kinds": [
-      "missing_content"
-    ]
+      "missing_content",
+      "other"
+    ],
+    "layers": {
+      "content": "MAJOR",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
   },
   "danluu-files": {
     "verdict": "PASS",
-    "kinds": [
-      "layout"
-    ]
+    "kinds": [],
+    "layers": {
+      "content": "PASS",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
   },
   "distill-featurevis": {
     "verdict": "MAJOR",
     "kinds": [
       "images",
+      "layout",
       "missing_content"
-    ]
+    ],
+    "layers": {
+      "content": "MAJOR",
+      "metadata": "PASS",
+      "rendering": "MINOR"
+    }
   },
   "eugeneyan-llm-patterns": {
-    "verdict": "PASS",
+    "verdict": "MAJOR",
     "kinds": [
-      "code_or_math"
-    ]
+      "code_or_math",
+      "extra_content"
+    ],
+    "layers": {
+      "content": "MINOR",
+      "metadata": "PASS",
+      "rendering": "MAJOR"
+    }
   },
   "fasterthanlime-golang": {
     "verdict": "MAJOR",
     "kinds": [
+      "extra_content",
       "images",
-      "layout"
-    ]
+      "layout",
+      "missing_content"
+    ],
+    "layers": {
+      "content": "MINOR",
+      "metadata": "PASS",
+      "rendering": "MAJOR"
+    }
   },
   "githubblog-copilotx": {
     "verdict": "MINOR",
     "kinds": [
-      "images"
-    ]
+      "extra_content",
+      "missing_content"
+    ],
+    "layers": {
+      "content": "MINOR",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
   },
   "godev-pipelines": {
     "verdict": "PASS",
-    "kinds": []
+    "kinds": [],
+    "layers": {
+      "content": "PASS",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
   },
   "gradient-icl": {
     "verdict": "PASS",
-    "kinds": []
+    "kinds": [],
+    "layers": {
+      "content": "PASS",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
   },
   "gwern-scaling": {
     "verdict": "MINOR",
     "kinds": [
-      "layout"
-    ]
+      "layout",
+      "missing_content"
+    ],
+    "layers": {
+      "content": "MINOR",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
   },
   "hamel-evals": {
     "verdict": "PASS",
-    "kinds": []
+    "kinds": [],
+    "layers": {
+      "content": "PASS",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
   },
   "harvard-annotated-transformer": {
-    "verdict": "PASS",
-    "kinds": [
-      "layout",
-      "missing_content"
-    ]
-  },
-  "hf-rlhf": {
     "verdict": "MAJOR",
     "kinds": [
       "code_or_math",
       "images",
+      "metadata"
+    ],
+    "layers": {
+      "content": "MAJOR",
+      "metadata": "MINOR",
+      "rendering": "MAJOR"
+    }
+  },
+  "hf-rlhf": {
+    "verdict": "MAJOR",
+    "kinds": [
       "missing_content"
-    ]
+    ],
+    "layers": {
+      "content": "MAJOR",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
   },
   "hillelwayne-engineers": {
-    "verdict": "PASS",
-    "kinds": [
-      "layout"
-    ]
-  },
-  "huyenchip-llm-eng": {
-    "verdict": "PASS",
-    "kinds": [
-      "missing_content"
-    ]
-  },
-  "interconnects-o1": {
-    "verdict": "PASS",
-    "kinds": [
-      "missing_content"
-    ]
-  },
-  "jalammar-transformer": {
-    "verdict": "PASS",
-    "kinds": [
-      "missing_content"
-    ]
-  },
-  "jaykmody-gpt": {
-    "verdict": "PASS",
-    "kinds": []
-  },
-  "joelonsoftware-test": {
-    "verdict": "PASS",
-    "kinds": [
-      "layout"
-    ]
-  },
-  "joshwcomeau-rerender": {
     "verdict": "MINOR",
     "kinds": [
       "layout",
       "metadata"
-    ]
+    ],
+    "layers": {
+      "content": "PASS",
+      "metadata": "MINOR",
+      "rendering": "MINOR"
+    }
   },
-  "jvns-firecracker": {
+  "huyenchip-llm-eng": {
     "verdict": "PASS",
+    "kinds": [],
+    "layers": {
+      "content": "PASS",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
+  },
+  "interconnects-o1": {
+    "verdict": "MAJOR",
     "kinds": [
+      "images",
+      "layout",
+      "other"
+    ],
+    "layers": {
+      "content": "MAJOR",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
+  },
+  "jalammar-transformer": {
+    "verdict": "MAJOR",
+    "kinds": [
+      "missing_content"
+    ],
+    "layers": {
+      "content": "MAJOR",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
+  },
+  "jaykmody-gpt": {
+    "verdict": "MAJOR",
+    "kinds": [
+      "images",
+      "metadata",
+      "missing_content",
+      "tables"
+    ],
+    "layers": {
+      "content": "MAJOR",
+      "metadata": "MINOR",
+      "rendering": "MINOR"
+    }
+  },
+  "joelonsoftware-test": {
+    "verdict": "PASS",
+    "kinds": [],
+    "layers": {
+      "content": "PASS",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
+  },
+  "joshwcomeau-rerender": {
+    "verdict": "MAJOR",
+    "kinds": [
+      "layout",
       "metadata",
       "missing_content"
-    ]
+    ],
+    "layers": {
+      "content": "MAJOR",
+      "metadata": "MINOR",
+      "rendering": "MINOR"
+    }
+  },
+  "jvns-firecracker": {
+    "verdict": "MAJOR",
+    "kinds": [
+      "extra_content",
+      "missing_content"
+    ],
+    "layers": {
+      "content": "MAJOR",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
   },
   "jxnl-rag": {
     "verdict": "PASS",
-    "kinds": []
+    "kinds": [],
+    "layers": {
+      "content": "PASS",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
   },
   "karpathy-recipe": {
     "verdict": "PASS",
-    "kinds": []
+    "kinds": [],
+    "layers": {
+      "content": "PASS",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
   },
   "karpathy-rnn": {
     "verdict": "MINOR",
     "kinds": [
-      "code_or_math",
-      "layout",
-      "metadata"
-    ]
+      "metadata",
+      "missing_content"
+    ],
+    "layers": {
+      "content": "MINOR",
+      "metadata": "MINOR",
+      "rendering": "PASS"
+    }
   },
   "karpathy-software2": {
     "verdict": "MAJOR",
     "kinds": [
       "images",
-      "layout"
-    ]
+      "layout",
+      "metadata",
+      "missing_content"
+    ],
+    "layers": {
+      "content": "MAJOR",
+      "metadata": "MINOR",
+      "rendering": "PASS"
+    }
   },
   "kentcdodds-context": {
-    "verdict": "MINOR",
+    "verdict": "MAJOR",
     "kinds": [
-      "images",
-      "metadata"
-    ]
+      "metadata",
+      "missing_content"
+    ],
+    "layers": {
+      "content": "MAJOR",
+      "metadata": "MINOR",
+      "rendering": "PASS"
+    }
   },
   "latentspace-ai-engineer": {
-    "verdict": "PASS",
+    "verdict": "MINOR",
     "kinds": [
-      "layout"
-    ]
+      "layout",
+      "missing_content"
+    ],
+    "layers": {
+      "content": "MINOR",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
   },
   "lesswrong-lethalities": {
     "verdict": "MINOR",
     "kinds": [
       "metadata"
-    ]
+    ],
+    "layers": {
+      "content": "PASS",
+      "metadata": "MINOR",
+      "rendering": "PASS"
+    }
   },
   "lilian-agent": {
-    "verdict": "PASS",
+    "verdict": "MINOR",
     "kinds": [
-      "missing_content",
-      "other"
-    ]
+      "missing_content"
+    ],
+    "layers": {
+      "content": "MINOR",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
   },
   "lilian-attention": {
     "verdict": "PASS",
-    "kinds": []
+    "kinds": [],
+    "layers": {
+      "content": "PASS",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
   },
   "matklad-architecture": {
-    "verdict": "PASS",
-    "kinds": []
+    "verdict": "MAJOR",
+    "kinds": [
+      "missing_content"
+    ],
+    "layers": {
+      "content": "MAJOR",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
   },
   "medium-backprop": {
     "verdict": "MAJOR",
     "kinds": [
       "code_or_math",
       "images"
-    ]
+    ],
+    "layers": {
+      "content": "MAJOR",
+      "metadata": "PASS",
+      "rendering": "MAJOR"
+    }
   },
   "mitchellh-large": {
-    "verdict": "PASS",
-    "kinds": []
+    "verdict": "MINOR",
+    "kinds": [
+      "metadata"
+    ],
+    "layers": {
+      "content": "PASS",
+      "metadata": "MINOR",
+      "rendering": "PASS"
+    }
   },
   "mtlynch-google": {
-    "verdict": "PASS",
+    "verdict": "MAJOR",
     "kinds": [
       "images"
-    ]
+    ],
+    "layers": {
+      "content": "MAJOR",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
   },
   "nullprogram-sm": {
-    "verdict": "PASS",
-    "kinds": []
+    "verdict": "MINOR",
+    "kinds": [
+      "metadata"
+    ],
+    "layers": {
+      "content": "PASS",
+      "metadata": "MINOR",
+      "rendering": "PASS"
+    }
   },
   "oneusefulthing-centaurs": {
-    "verdict": "PASS",
+    "verdict": "MINOR",
     "kinds": [
-      "layout"
-    ]
+      "missing_content"
+    ],
+    "layers": {
+      "content": "MINOR",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
   },
   "openai-4o": {
     "verdict": "MAJOR",
     "kinds": [
-      "images",
-      "layout",
       "metadata",
-      "tables"
-    ]
+      "missing_content"
+    ],
+    "layers": {
+      "content": "MAJOR",
+      "metadata": "MINOR",
+      "rendering": "PASS"
+    }
   },
   "openai-4o-zh": {
     "verdict": "MAJOR",
     "kinds": [
-      "images",
-      "layout",
       "metadata",
-      "tables"
-    ]
+      "missing_content"
+    ],
+    "layers": {
+      "content": "MAJOR",
+      "metadata": "MINOR",
+      "rendering": "PASS"
+    }
   },
   "overreacted-useeffect": {
     "verdict": "PASS",
-    "kinds": []
+    "kinds": [],
+    "layers": {
+      "content": "PASS",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
   },
   "paulgraham-greatwork": {
-    "verdict": "PASS",
-    "kinds": []
-  },
-  "pragmaticengineer-product": {
-    "verdict": "PASS",
-    "kinds": [
-      "extra_content"
-    ]
-  },
-  "pytorch-genai2": {
     "verdict": "MINOR",
     "kinds": [
+      "metadata"
+    ],
+    "layers": {
+      "content": "PASS",
+      "metadata": "MINOR",
+      "rendering": "PASS"
+    }
+  },
+  "pragmaticengineer-product": {
+    "verdict": "MINOR",
+    "kinds": [
+      "extra_content",
+      "images"
+    ],
+    "layers": {
+      "content": "MINOR",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
+  },
+  "pytorch-genai2": {
+    "verdict": "MAJOR",
+    "kinds": [
       "images",
-      "metadata",
-      "other"
-    ]
+      "metadata"
+    ],
+    "layers": {
+      "content": "PASS",
+      "metadata": "MINOR",
+      "rendering": "MAJOR"
+    }
   },
   "quanta-understand": {
-    "verdict": "PASS",
+    "verdict": "MAJOR",
     "kinds": [
-      "images"
-    ]
+      "images",
+      "missing_content"
+    ],
+    "layers": {
+      "content": "MAJOR",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
   },
   "raschka-selfattention": {
     "verdict": "PASS",
-    "kinds": []
+    "kinds": [],
+    "layers": {
+      "content": "PASS",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
   },
   "raschka-understanding-llms": {
-    "verdict": "PASS",
+    "verdict": "MINOR",
     "kinds": [
-      "layout"
-    ]
+      "layout",
+      "missing_content"
+    ],
+    "layers": {
+      "content": "MINOR",
+      "metadata": "PASS",
+      "rendering": "MINOR"
+    }
   },
   "regehr-ub": {
-    "verdict": "MAJOR",
+    "verdict": "MINOR",
     "kinds": [
       "code_or_math",
       "layout",
       "metadata",
       "missing_content"
-    ]
+    ],
+    "layers": {
+      "content": "MINOR",
+      "metadata": "MINOR",
+      "rendering": "MINOR"
+    }
   },
   "ruanyifeng-curl": {
     "verdict": "PASS",
-    "kinds": []
+    "kinds": [],
+    "layers": {
+      "content": "PASS",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
   },
   "ruanyifeng-weekly": {
     "verdict": "PASS",
-    "kinds": []
+    "kinds": [],
+    "layers": {
+      "content": "PASS",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
   },
   "ruder-optim": {
-    "verdict": "PASS",
+    "verdict": "MAJOR",
     "kinds": [
+      "code_or_math",
+      "extra_content",
       "images",
+      "layout",
       "missing_content"
-    ]
+    ],
+    "layers": {
+      "content": "MAJOR",
+      "metadata": "PASS",
+      "rendering": "MINOR"
+    }
   },
   "rustblog-1.0": {
     "verdict": "PASS",
-    "kinds": []
+    "kinds": [],
+    "layers": {
+      "content": "PASS",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
   },
   "samaltman-ia": {
     "verdict": "PASS",
-    "kinds": []
+    "kinds": [],
+    "layers": {
+      "content": "PASS",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
   },
   "simonw-llms-2024": {
-    "verdict": "PASS",
+    "verdict": "MAJOR",
     "kinds": [
-      "images"
-    ]
+      "images",
+      "missing_content"
+    ],
+    "layers": {
+      "content": "MAJOR",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
   },
   "simonw-wordcamp": {
-    "verdict": "PASS",
+    "verdict": "MAJOR",
     "kinds": [
-      "missing_content"
-    ]
+      "images"
+    ],
+    "layers": {
+      "content": "MAJOR",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
   },
   "sivers-ff": {
-    "verdict": "PASS",
-    "kinds": []
+    "verdict": "MINOR",
+    "kinds": [
+      "metadata"
+    ],
+    "layers": {
+      "content": "PASS",
+      "metadata": "MINOR",
+      "rendering": "PASS"
+    }
   },
   "stratechery-endbeginning": {
     "verdict": "PASS",
-    "kinds": []
+    "kinds": [],
+    "layers": {
+      "content": "PASS",
+      "metadata": "PASS",
+      "rendering": "PASS"
+    }
   },
   "vickiboykis-gguf": {
-    "verdict": "PASS",
+    "verdict": "MAJOR",
     "kinds": [
-      "layout",
+      "extra_content",
+      "images",
+      "metadata",
       "missing_content"
-    ]
+    ],
+    "layers": {
+      "content": "MAJOR",
+      "metadata": "MINOR",
+      "rendering": "PASS"
+    }
   },
   "waitbutwhy-ai": {
-    "verdict": "PASS",
+    "verdict": "MINOR",
     "kinds": [
-      "extra_content"
-    ]
+      "extra_content",
+      "layout",
+      "missing_content"
+    ],
+    "layers": {
+      "content": "MINOR",
+      "metadata": "PASS",
+      "rendering": "MINOR"
+    }
   },
   "webdev-vitals": {
     "verdict": "MAJOR",
     "kinds": [
-      "images",
-      "layout",
+      "extra_content",
       "metadata",
       "missing_content",
       "tables"
-    ]
+    ],
+    "layers": {
+      "content": "MAJOR",
+      "metadata": "MINOR",
+      "rendering": "PASS"
+    }
   }
 }

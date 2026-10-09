@@ -124,7 +124,7 @@ describe("shortenDataUri", () => {
   });
 });
 
-const fact = (over: Partial<ReferenceImageFact>): ReferenceImageFact => ({ src: "", lazy: [], srcsets: [], alt: "", width: 0, height: 0, declaredWidth: 0, declaredHeight: 0, top: 0, tile: 1, ...over });
+const fact = (over: Partial<ReferenceImageFact>): ReferenceImageFact => ({ src: "", lazy: [], srcsets: [], alt: "", width: 0, height: 0, declaredWidth: 0, declaredHeight: 0, context: "", top: 0, tile: 1, ...over });
 
 describe("buildReferenceImages", () => {
   it("lists images 48 px or more on one side, or unsized with such a declared size", () => {
@@ -146,7 +146,13 @@ describe("buildReferenceImages", () => {
     expect(images).toHaveLength(2);
     expect(images[0]?.src).toBe("data:image/gif;base64,…(28 chars)");
     expect(images[0]?.candidates).toEqual(["https://miro.medium.com/max/700/1*abc.png", "https://miro.medium.com/v2/resize:fit:640/1*abc.png", "https://miro.medium.com/v2/resize:fit:1400/1*abc.png"]);
-    expect(images[1]).toMatchObject({ src: "https://miro.medium.com/max/1400/1*def.png", tile: 3, width: 700, height: 193 });
+    expect(images[1]).toMatchObject({ src: "https://miro.medium.com/max/1400/1*def.png", tile: 3, width: 700, height: 193, context: "" });
+  });
+
+  it("clips the context to 160 characters and carries it to the linked image", () => {
+    const [image] = linkImages(buildReferenceImages([fact({ src: "https://e.com/a.png", width: 600, height: 400, context: "word ".repeat(80) })], "https://e.com/"), []);
+    expect(image?.context).toHaveLength(160);
+    expect(image?.context.endsWith("…")).toBe(true);
   });
 });
 

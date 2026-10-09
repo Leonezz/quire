@@ -32,6 +32,8 @@ export const ARTICLE_BOUNDARY = [
   "| Footnotes | Share, subscribe, newsletter, ads |",
   "| Callouts, notes, admonitions, key points | Author bio cards, avatar cards |",
   "| Body content that needs JavaScript to show — interactive examples, embedded videos or tweets, dynamic charts: the reader must show the thing itself, or at least a link to it or a placeholder for it | Copyright, licence and trademark footers |",
+  "| | \"Cite this article\" / BibTeX blocks a site template adds to every post |",
+  "| | Embeds of subscribe, comment, like and share services (newsletter forms, Disqus, like widgets) |",
 ];
 
 export const THREE_LAYERS = [

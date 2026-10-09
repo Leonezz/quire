@@ -10,7 +10,8 @@ import { PROBLEM_KINDS, VERDICTS } from "./rubric";
 import { INVALID_REASONS, LAYERS, type Layer, type Verdict } from "./verdict";
 
 /** Where a row came from: judged in this run, served from the cache in this run, or left by an earlier run. */
-export type RowOrigin = "fresh" | "cached" | "previous";
+/** "rescored": a stored result scored again under the current program rules without a model call (--rescore, or a cached result with an older scoring version). */
+export type RowOrigin = "fresh" | "cached" | "rescored" | "previous";
 export interface ReportRow { result: JudgeResult; origin: RowOrigin }
 export interface ReportOptions {
   date: string;
@@ -157,6 +158,7 @@ export function renderReport(rows: readonly ReportRow[], options: ReportOptions)
   const errors = results.filter((result) => !isJudged(result)).length;
   const fresh = sorted.filter((row) => row.origin === "fresh").length;
   const cached = sorted.filter((row) => row.origin === "cached").length;
+  const rescored = sorted.filter((row) => row.origin === "rescored").length;
   const previous = sorted.filter((row) => row.origin === "previous").length;
   const truncated = results.filter((result) => result.truncated).length;
   const unverified = results.filter(isJudged).reduce((sum, result) => sum + result.issues.filter((issue) => !issue.verified).length, 0);
@@ -170,7 +172,7 @@ export function renderReport(rows: readonly ReportRow[], options: ReportOptions)
   return [
     `# Extraction quality judge — ${options.date}`,
     "",
-    `${results.length} cases: ${VERDICTS.map((verdict) => `${count(verdict)} ${verdict}`).join(" · ")} · ${errors} error. This run judged ${options.ranSlugs} (${fresh} fresh, ${cached} cached)${previous ? `; ${previous} rows are from earlier runs` : ""}. Judge: ${options.policy}${options.mode ? `; mode ${options.mode}` : ""}; rubric ${options.rubricVersion}.${truncated ? ` ${truncated} case(s) had an input cut to fit the prompt.` : ""}${unverified ? ` ${unverified} evidence quote(s) could not be found verbatim in the inputs.` : ""}`,
+    `${results.length} cases: ${VERDICTS.map((verdict) => `${count(verdict)} ${verdict}`).join(" · ")} · ${errors} error. This run judged ${options.ranSlugs} (${fresh} fresh, ${cached} cached${rescored ? `, ${rescored} rescored without a model call` : ""})${previous ? `; ${previous} rows are from earlier runs` : ""}. Judge: ${options.policy}${options.mode ? `; mode ${options.mode}` : ""}; rubric ${options.rubricVersion}.${truncated ? ` ${truncated} case(s) had an input cut to fit the prompt.` : ""}${unverified ? ` ${unverified} evidence quote(s) could not be found verbatim in the inputs.` : ""}`,
     ...(layerLine ? ["", `Per layer: ${layerLine}.`] : []),
     ...(origins ? ["", origins] : []),
     ...(invalid ? ["", invalid] : []),

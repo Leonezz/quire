@@ -26,6 +26,22 @@ const errorText = (error: unknown) => (error instanceof Error ? error.message : 
 
 interface Call { prompt: string; schema: object; images: string[]; mode: "text" | "visual"; texts: string[]; facts: FactInventory | undefined }
 
+/** What an opinion's issues are checked against: the texts their quotes must occur in, and (visual mode) the capture's facts. */
+export interface ScoringContext { mode: "text" | "visual"; texts: string[]; facts: FactInventory | undefined }
+
+/** The scoring context of a case: the same texts and facts a judge call checks its answer against. */
+export function scoringContextOf(input: PromptInput, maxImages: number): ScoringContext {
+  const { mode, texts, facts } = callFor(input, maxImages);
+  return { mode, texts, facts };
+}
+
+/** An opinion's reported issues judged (normalized, validated) and its verdicts computed; pure, so a stored opinion can be scored again. */
+export function scoreIssues(reported: readonly JudgeIssue[], context: ScoringContext): Pick<Opinion, "issues" | "layers" | "verdict"> {
+  const issues = reported.map((issue) => judgeIssue(issue, context.texts, context.facts));
+  const layers = layerVerdicts(issues, context.mode === "visual");
+  return { issues, layers, verdict: overallVerdict(layers) };
+}
+
 /** What one backend call carries: the text rubric's prompt, or (with a capture) the visual one with its tiles and the facts its issues are checked against. */
 function callFor(input: PromptInput, maxImages: number): Call {
   if (!input.visual) return { prompt: buildPrompt(input), schema: ANSWER_SCHEMA, images: [], mode: "text", texts: [input.source, input.extracted], facts: undefined };
@@ -44,7 +60,7 @@ export function judgeIssue(reported: JudgeIssue, texts: readonly string[], facts
 /** The facts cross-confirmation leans on (visual mode); undefined in text mode. */
 export function mergeFactsOf(input: PromptInput): MergeFacts | undefined {
   if (!input.visual) return undefined;
-  return { rendered: input.visual.images.rendered, reference: input.visual.images.reference, embeds: input.visual.embeds, tables: input.visual.tables, code: input.visual.code, metrics: input.visual.metrics };
+  return { rendered: input.visual.images.rendered, reference: input.visual.images.reference, embeds: input.visual.embeds, tables: input.visual.tables, code: input.visual.code, extracted: input.extracted, metrics: input.visual.metrics };
 }
 
 /** Asks one backend for its opinion on a case; in visual mode with at most maxImages tiles attached. */
@@ -63,9 +79,8 @@ export async function askOpinion(backend: JudgeBackend, input: PromptInput, time
   const { raw, ...meta } = output;
   try {
     const answer = parseAnswer(raw, call.mode);
-    const issues = answer.issues.map((issue) => judgeIssue(issue, call.texts, call.facts));
-    const layers = layerVerdicts(issues, call.mode === "visual");
-    return { ok: true, opinion: { ...base, ...meta, ...(call.images.length ? { images: call.images.length } : {}), verdict: overallVerdict(layers), layers, issues, summary: answer.summary, wallMs: Date.now() - started } };
+    const scored = scoreIssues(answer.issues, call);
+    return { ok: true, opinion: { ...base, ...meta, ...(call.images.length ? { images: call.images.length } : {}), ...scored, summary: answer.summary, wallMs: Date.now() - started } };
   } catch (error) {
     if (error instanceof AnswerFormatError) return fail(error.message, meta, raw);
     throw error;

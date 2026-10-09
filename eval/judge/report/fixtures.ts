@@ -77,7 +77,7 @@ export const renderSummary = (metrics: RenderMetrics = renderMetrics(), extra: P
 export const inventories = (): Pick<RenderSummary, "images" | "embeds"> => ({
   images: {
     rendered: [{ id: "r1", tile: 1, src: "https://alpha.example/fig1.png", alt: "Figure 1", caption: "The setup", broken: false }, { id: "r2", tile: 2, src: "https://alpha.example/fig2.png", alt: "", caption: "Figure 2: the loss curve", broken: true }],
-    reference: [{ id: "o1", tile: 1, src: "https://alpha.example/fig1.png", candidates: [], alt: "Figure 1", width: 640, height: 420, matchedBy: "r1" }, { id: "o2", tile: 2, src: "https://alpha.example/fig3.png", candidates: [], alt: "Figure 3", width: 800, height: 500, matchedBy: null }],
+    reference: [{ id: "o1", tile: 1, src: "https://alpha.example/fig1.png", candidates: [], alt: "Figure 1", width: 640, height: 420, matchedBy: "r1", context: "" }, { id: "o2", tile: 2, src: "https://alpha.example/fig3.png", candidates: [], alt: "Figure 3", width: 800, height: 500, matchedBy: null, context: "" }],
   },
   embeds: [{ kind: "iframe", tag: "iframe", src: "https://www.youtube.com/embed/x", host: "www.youtube.com", context: "Training setup and the demo video", representedInReader: false }],
 });

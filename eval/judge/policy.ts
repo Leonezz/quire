@@ -25,7 +25,7 @@ import { describeSpec, type BackendSpec, type JudgeBackend } from "./backends/ty
 import { askOpinion, mergeFactsOf, type OpinionFailure } from "./judge-case";
 import { crossConfirm } from "./merge";
 import { RUBRIC_VERSION, TEXT_RUBRIC_VERSION, VERDICTS, type PromptInput, type Verdict } from "./rubric";
-import { layerVerdicts, overallVerdict, type LayerVerdicts } from "./verdict";
+import { layerVerdicts, overallVerdict, SCORING_VERSION, type LayerVerdicts } from "./verdict";
 import { DEFAULT_MAX_IMAGES, planImages, renderSummary, visualKeyPart } from "./visual";
 
 export type PolicyId = Resolution["policy"];
@@ -97,12 +97,12 @@ export interface JudgeCaseOptions {
  * policy), so its results stay cached. Visual mode: the visual rubric version, the policy, and the
  * mode, the capture's key and the tile files attached.
  */
-export function caseKey(input: PromptInput, policy: EffectivePolicy, maxImages = DEFAULT_MAX_IMAGES): string {
-  if (!input.visual) return cacheKey(input.source, input.extracted, TEXT_RUBRIC_VERSION, policyKey(policy));
-  return cacheKey(input.source, input.extracted, RUBRIC_VERSION, `${policyKey(policy)} ${visualKeyPart(input.visual, planImages(input.visual, maxImages))}`);
+export function caseKey(input: PromptInput, policy: EffectivePolicy, maxImages = DEFAULT_MAX_IMAGES, rubricVersion?: string): string {
+  if (!input.visual) return cacheKey(input.source, input.extracted, rubricVersion ?? TEXT_RUBRIC_VERSION, policyKey(policy));
+  return cacheKey(input.source, input.extracted, rubricVersion ?? RUBRIC_VERSION, `${policyKey(policy)} ${visualKeyPart(input.visual, planImages(input.visual, maxImages))}`);
 }
 
-interface Resolved { opinions: Opinion[]; final: Opinion; issues: JudgedIssue[]; layers: LayerVerdicts; verdict: Verdict; resolution: Resolution }
+export interface Resolved { opinions: Opinion[]; final: Opinion; issues: JudgedIssue[]; layers: LayerVerdicts; verdict: Verdict; resolution: Resolution }
 type Outcome = { ok: true; resolved: Resolved } | { ok: false; failure: OpinionFailure; error: string; opinions: Opinion[] };
 
 const failed = (failure: OpinionFailure, error: string, opinions: Opinion[] = []): Outcome => ({ ok: false, failure, error, opinions });
@@ -119,6 +119,13 @@ function merged(input: PromptInput, screen: Opinion, confirm: Opinion, policy: P
   const issues = crossConfirm(screen.issues, confirm.issues, mergeFactsOf(input));
   const layers = layerVerdicts(issues, input.visual !== undefined);
   return { ok: true, resolved: { opinions: [screen, confirm], final: confirm, issues, layers, verdict: overallVerdict(layers), resolution: { policy, from: "merged", disputed: screen.verdict !== confirm.verdict } } };
+}
+
+/** The case's issues and verdicts from the opinions gathered: one decides alone; two are cross-confirmed (screen first). Pure: --rescore calls it on stored opinions. */
+export function resolveOpinions(input: PromptInput, opinions: readonly Opinion[], policy: PolicyId): Resolved {
+  if (opinions.length === 1) return (decided(opinions[0]!, policy) as Extract<Outcome, { ok: true }>).resolved;
+  if (opinions.length === 2) return (merged(input, opinions[0]!, opinions[1]!, policy) as Extract<Outcome, { ok: true }>).resolved;
+  throw new Error(`a case has one or two opinions, not ${opinions.length}`);
 }
 
 async function judgeUnderPolicy(input: PromptInput, { policy, backend, timeoutMs, maxImages = DEFAULT_MAX_IMAGES }: JudgeCaseOptions): Promise<Outcome> {
@@ -171,6 +178,7 @@ export async function judgeCase(input: PromptInput, options: JudgeCaseOptions): 
   }
   const { opinions, final, issues, layers, verdict, resolution } = outcome.resolved;
   const tokens = sumTokens(opinions);
-  const result: JudgedCase = { ...base, model: final.model, ...(final.resolvedModel ? { resolvedModel: final.resolvedModel } : {}), ...(tokens !== undefined ? { tokens } : {}), ...stamp(), verdict, layers, issues, summary: final.summary, opinions, resolution };
+  const stamped = stamp();
+  const result: JudgedCase = { ...base, model: final.model, ...(final.resolvedModel ? { resolvedModel: final.resolvedModel } : {}), ...(tokens !== undefined ? { tokens } : {}), ...stamped, scoringVersion: SCORING_VERSION, scoredAt: stamped.judgedAt, verdict, layers, issues, summary: final.summary, opinions, resolution };
   return result;
 }

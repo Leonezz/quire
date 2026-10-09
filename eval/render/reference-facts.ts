@@ -11,7 +11,32 @@ export interface ReferenceFacts {
   images: Omit<ReferenceImageFact, "tile">[];
 }
 
-export function collectReferenceImages(): ReferenceFacts {
+/**
+ * The nearest heading or paragraph before all[index] in document order (not one containing it), as
+ * flattened text clipped to maxChars, "" when there is none. Candidates inside nav/header/footer/aside
+ * are passed over while a candidate outside them exists further back. Self-contained: it runs in the
+ * page, handed to collectReferenceImages (see referenceFactsScript).
+ */
+export function precedingContext(all: readonly Element[], index: number, maxChars: number): string {
+  const target = all[index];
+  if (!target) return "";
+  let fallback = "";
+  for (let at = index - 1; at >= 0; at -= 1) {
+    const candidate = all[at] as Element;
+    if (!/^(?:H[1-6]|P)$/i.test(candidate.tagName) || candidate.contains(target)) continue;
+    const text = (candidate.textContent ?? "").replace(/\s+/g, " ").trim().slice(0, maxChars);
+    if (!text) continue;
+    if (candidate.closest("nav, header, footer, aside") === null) return text;
+    if (!fallback) fallback = text;
+  }
+  return fallback;
+}
+
+/** Collects the facts in the page; contextOf is precedingContext, passed in because the page has no imports. */
+export function collectReferenceImages(contextOf: typeof precedingContext): ReferenceFacts {
+  const CONTEXT_CHARS = 400;
+  const all = Array.from(document.body?.querySelectorAll("*") ?? []);
+  const position = new Map(all.map((element, index) => [element, index]));
   const LAZY = ["data-src", "data-original", "data-lazy-src"];
   const declared = (value: string | null) => (value && /^\s*\d+(?:\.\d+)?(?:px)?\s*$/.test(value) ? Number.parseFloat(value) : 0);
   const images = Array.from(document.images, (image) => {
@@ -27,7 +52,11 @@ export function collectReferenceImages(): ReferenceFacts {
       width: rect.width, height: rect.height,
       declaredWidth: declared(image.getAttribute("width")), declaredHeight: declared(image.getAttribute("height")),
       top: rect.top + window.scrollY,
+      context: position.has(image) ? contextOf(all, position.get(image) as number, CONTEXT_CHARS) : "",
     };
   });
   return { base: document.baseURI, images };
 }
+
+/** The page.evaluate source that runs collectReferenceImages with precedingContext (functions cannot be passed as arguments). */
+export const referenceFactsScript = (): string => `(${collectReferenceImages.toString()})(${precedingContext.toString()})`;

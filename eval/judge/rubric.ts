@@ -17,7 +17,7 @@ export { LAYERS, SEVERITIES, SUBJECTS, TILE_IMAGES, VERDICTS, evidenceOccurs } f
 export type { JudgeIssue, Layer, Severity, SentTiles, Subject, TileImage, TileRef, Verdict } from "./verdict";
 
 /** The visual rubric (standard v6 with the 2026-10-10 metadata subject and cross-confirmation), the default mode's. */
-export const RUBRIC_VERSION = "2026-10-10.11";
+export const RUBRIC_VERSION = "2026-10-10.12";
 /** The text rubric: prompt and schema unchanged since 2026-09-23.3; bumped when v6 moved its verdict to the program, and again for cross-confirmation of two opinions. */
 export const TEXT_RUBRIC_VERSION = "2026-10-10.11-text";
 export const rubricVersionFor = (mode: "visual" | "text"): string => (mode === "visual" ? RUBRIC_VERSION : TEXT_RUBRIC_VERSION);
