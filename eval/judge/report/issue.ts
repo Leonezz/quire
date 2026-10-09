@@ -3,6 +3,8 @@
 // case, on the shape of .github/ISSUE_TEMPLATE/rendering.yml. Pure; publish.mjs sends them with gh.
 // A visual case lists its measured rendering facts and each issue's tile in text; the screenshots
 // themselves stay local (gh cannot upload images), named by their path under eval/render/out/.
+// Each case shows its three layer verdicts and only its valid issues; the ones the program discarded
+// are counted, never listed (they live in eval/judge/out/<slug>.json and report.html).
 import type { CaseIssue, CaseRow, ReportData, VerdictChange } from "./data";
 
 /** GitHub rejects bodies over 65,536 characters; the case list is cut before that with a note. */
@@ -15,6 +17,16 @@ export interface RenderedIssue { title: string; body: string }
 export interface CaseIssueRendered extends RenderedIssue { labels: string[] }
 
 const VERDICTS = ["PASS", "MINOR", "MAJOR"] as const;
+const LAYERS = ["content", "metadata", "rendering"] as const;
+const validIssues = (row: CaseRow) => row.issues.filter((issue) => !issue.invalid);
+const invalidCount = (row: CaseRow) => row.issues.length - validIssues(row).length;
+/** "content MAJOR · metadata PASS · rendering MINOR"; empty for a result from before rubric v6. */
+export function layerLine(row: CaseRow): string {
+  const layers = row.layers;
+  if (!layers) return "";
+  return LAYERS.map((layer) => `${layer} ${layers[layer] ?? "not judged"}`).join(" · ");
+}
+const invalidNote = (row: CaseRow) => { const n = invalidCount(row); return n ? `${n} issue${n === 1 ? "" : "s"} the program discarded as invalid ${n === 1 ? "is" : "are"} not listed.` : ""; };
 const md = (text: string) => text.replace(/\|/g, "\\|").replace(/\r?\n/g, " ").trim();
 /** Text inside a quoted Mermaid label: quotes and colons would end the label or the statement. */
 const mermaidLabel = (text: string) => text.replace(/["':]/g, " ").replace(/\s+/g, " ").trim();
@@ -38,9 +50,12 @@ function summaryTable(data: ReportData): string[] {
     `| Cases judged | ${totals.cases} |`,
     ...VERDICTS.map((verdict) => `| ${verdict} | ${totals[verdict]}${percent(totals[verdict])} |`),
     `| Not judged (errors) | ${totals.errors} |`,
+    ...LAYERS.filter((layer) => totals.layers[layer].judged > 0).map((layer) => `| ${layer} layer | ${VERDICTS.map((verdict) => `${totals.layers[layer][verdict]} ${verdict}`).join(" · ")} |`),
     `| Issues | ${totals.issues} (${totals.majorIssues} major) |`,
+    `| Invalid issues (discarded) | ${totals.invalid}${totals.invalid ? ` (${Object.entries(totals.invalidByReason).map(([reason, n]) => `${reason} ${n}`).join(", ")})` : ""} |`,
     `| Evidence quotes not found verbatim | ${totals.unverified} |`,
     ...(totals.escalated ? [`| Escalated to a second opinion | ${totals.escalated} |`, `| Disputed verdicts | ${totals.disputed} |`] : []),
+    ...(totals.origins.both + totals.origins["one-sided-fact"] + totals.origins["one-sided-downgraded"] + totals.origins["one-sided"] ? [`| Cross-confirmed issues | ${totals.origins.both} both · ${totals.origins["one-sided-fact"]} one-sided, fact-supported · ${totals.origins["one-sided-downgraded"]} downgraded · ${totals.origins["one-sided"]} one-sided minor |`] : []),
     ...renderRows(data),
   ];
 }
@@ -81,7 +96,8 @@ function kindChart(data: ReportData): string[] {
   ];
 }
 
-const changeList = (title: string, changes: readonly VerdictChange[]) => (changes.length ? [`**${title} (${changes.length})**`, "", ...changes.map((change) => `- \`${change.slug}\` ${change.from} → ${change.to}`), ""] : [`**${title}:** none.`, ""]);
+const layerMoves = (change: VerdictChange) => (change.layers.length ? ` (${change.layers.map((moved) => `${moved.layer} ${moved.from} → ${moved.to}`).join(", ")})` : "");
+const changeList = (title: string, changes: readonly VerdictChange[]) => (changes.length ? [`**${title} (${changes.length})**`, "", ...changes.map((change) => `- \`${change.slug}\` ${change.from} → ${change.to}${layerMoves(change)}`), ""] : [`**${title}:** none.`, ""]);
 
 function backendLines(data: ReportData): string[] {
   const { agreement } = data;
@@ -101,7 +117,11 @@ function backendLines(data: ReportData): string[] {
 }
 
 const whereText = (issue: CaseIssue) => (issue.where ? ` — ${issue.where.image} tile ${issue.where.tile}` : "");
-const issueLines = (issue: CaseIssue) => [`- **${issue.kind}** (${issue.severity}${issue.verified ? "" : ", quote not found verbatim"}) — ${md(issue.note)}${whereText(issue)}`, ...(issue.evidence.trim() ? [`  ${quote(issue.evidence)}`] : [])];
+const refsText = (issue: CaseIssue) => (issue.refs?.length ? ` [${issue.refs.join(", ")}]` : "");
+const ORIGIN_TEXT: Record<string, string> = { both: "both judges", "one-sided-fact": "one judge, kept major by a measured fact", "one-sided-downgraded": "one judge, downgraded from major", "one-sided": "one judge" };
+/** Who reported a cross-confirmed issue; nothing on single-opinion cases. */
+export const originText = (issue: CaseIssue) => (issue.origin ? ` · ${ORIGIN_TEXT[issue.origin] ?? issue.origin}` : "");
+const issueLines = (issue: CaseIssue) => [`- **${issue.kind}** (${issue.layer ? `${issue.layer}, ` : ""}${issue.severity}${issue.verified ? "" : ", quote not found verbatim"}) — ${md(issue.note)}${whereText(issue)}${refsText(issue)}${originText(issue)}`, ...(issue.evidence.trim() ? [`  ${quote(issue.evidence)}`] : [])];
 
 const FACT_SAMPLES = 3;
 function sideText(row: CaseRow, side: "rendered" | "reference"): string {
@@ -130,7 +150,9 @@ function caseDetails(row: CaseRow): string {
     `<details><summary><code>${row.slug}</code> — ${kindList(row)}</summary>`,
     "",
     ...(row.url ? [`Source: ${row.url}`, ""] : []),
-    ...row.issues.flatMap(issueLines),
+    ...(row.layers ? [`Layers: ${layerLine(row)}`, ""] : []),
+    ...validIssues(row).flatMap(issueLines),
+    ...(invalidCount(row) ? ["", `_${invalidNote(row)}_`] : []),
     "",
     ...(row.render ? [...factLines(row), ""] : []),
     `_${md(row.summary)}_`,
@@ -149,7 +171,7 @@ function topCases(rows: readonly CaseRow[], budget: number): string[] {
 
 /** The MAJOR cases, the ones with the most major issues first; the order the tracking issue lists them and the publisher files them. */
 export function majorCases(data: ReportData): CaseRow[] {
-  const majorCount = (row: CaseRow) => row.issues.filter((issue) => issue.severity === "major").length;
+  const majorCount = (row: CaseRow) => validIssues(row).filter((issue) => issue.severity === "major").length;
   return data.cases.filter((row) => row.verdict === "MAJOR").sort((a, b) => majorCount(b) - majorCount(a) || a.slug.localeCompare(b.slug));
 }
 
@@ -194,9 +216,10 @@ export function renderReportIssue(data: ReportData, { repo, runLabel }: IssueOpt
   return { title, body };
 }
 
-/** The kind the issue is filed under: the first major issue's kind, else the first kind reported. */
+/** The kind the issue is filed under: the first valid major issue's kind, else the first valid kind reported. */
 export function topKind(row: CaseRow): string {
-  return row.issues.find((issue) => issue.severity === "major")?.kind ?? row.issues[0]?.kind ?? "other";
+  const valid = validIssues(row);
+  return valid.find((issue) => issue.severity === "major")?.kind ?? valid[0]?.kind ?? "other";
 }
 
 export function renderCaseIssue(row: CaseRow, { repo }: { repo: string }): CaseIssueRendered {
@@ -217,15 +240,17 @@ export function renderCaseIssue(row: CaseRow, { repo }: { repo: string }): CaseI
     "### What went wrong",
     "",
     `Verdict **${row.verdict}**${row.baselineVerdict ? ` (baseline ${row.baselineVerdict}, ${row.delta})` : ""}; kinds: ${kindList(row)}.`,
+    ...(row.layers ? ["", `Layers: ${layerLine(row)}.`] : []),
     "",
-    ...(row.issues.length ? row.issues.flatMap(issueLines) : ["No issues listed."]),
+    ...(validIssues(row).length ? validIssues(row).flatMap(issueLines) : ["No issues listed."]),
+    ...(invalidCount(row) ? ["", `${invalidNote(row)} They are in \`eval/judge/out/${row.slug}.json\` with their reasons.`] : []),
     "",
     ...(row.render ? [...factLines(row), ""] : []),
     "### Details",
     "",
     md(row.summary),
     "",
-    ...(row.disputed ? [`The backends disagreed on the verdict: ${row.opinions.map((opinion) => `${opinion.backend} said ${opinion.verdict}`).join(", ")}; the final follows ${row.decidedBy}.`, ""] : []),
+    ...(row.disputed ? [`The backends disagreed on the verdict: ${row.opinions.map((opinion) => `${opinion.backend} said ${opinion.verdict}`).join(", ")}; ${row.decidedBy === "merged" ? "the final verdict comes from their cross-confirmed issues" : `the final follows ${row.decidedBy}`}.`, ""] : []),
     "### Judge line",
     "",
     "```",

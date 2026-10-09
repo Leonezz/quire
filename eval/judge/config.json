@@ -1,5 +1,5 @@
 {
-  "$comment": "Default judge policy: a screener (Claude Sonnet 5 through Claude Code; use full model ids, the `haiku`/`sonnet` aliases resolve on their own) judges every case; a case the screener does not PASS, or PASSes while listing a major issue, is confirmed by Codex on GPT-6-Luna. Override per run with --policy / --backend / --model / --screen-model / --confirm-model. Mode: \"visual\" (default) judges the texts plus the render capture (eval/render/out/<slug>/, made by `pnpm --filter @read/eval render`), at most maxImages tiles per call; \"text\" (--mode text) judges SOURCE and EXTRACTED only.",
+  "$comment": "Default judge policy: a screener (Claude Sonnet 5 through Claude Code; use full model ids, the `haiku`/`sonnet` aliases resolve on their own) judges every case; a case whose computed verdict is in escalateOn (not PASS) gets a second opinion from Codex on GPT-6-Luna, and the two are cross-confirmed (an issue both report counts once; a major issue only one reports counts as major only when a measured fact supports it). Verdicts follow the evaluation standard v6 (docs/design/eval-rubric.md): the model lists issues per layer (content, metadata, rendering), the program drops the invalid ones and computes the per-layer and overall verdicts, so any valid major issue means MAJOR. Override per run with --policy / --backend / --model / --screen-model / --confirm-model. Mode: \"visual\" (default) judges the texts plus the render capture (eval/render/out/<slug>/, made by `pnpm --filter @read/eval render`), at most maxImages tiles per call; \"text\" (--mode text) judges SOURCE and EXTRACTED only (content and metadata layers).",
   "policy": "screen-then-confirm",
   "screen": {
     "backend": "claude",
@@ -14,7 +14,6 @@
     "MAJOR"
   ],
   "concurrency": 3,
-  "escalateOnMajorIssue": true,
   "mode": "visual",
   "maxImages": 10
 }

@@ -7,20 +7,30 @@ import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { BackendId, JudgeResult, JudgedCase, JudgedIssue, Opinion } from "../cache";
 import type { Severity, TileRef, Verdict } from "../rubric";
+import type { IssueOrigin } from "../merge";
+import type { Invalidity, Layer, LayerVerdicts, Subject } from "../verdict";
 import type { RenderSummary } from "../visual";
 
 export const VERDICT_ORDER: readonly Verdict[] = ["PASS", "MINOR", "MAJOR"];
+/** Local, not imported from ../verdict: this module keeps to type-only imports (see the header). */
+export const LAYER_ORDER: readonly Layer[] = ["content", "metadata", "rendering"];
 export const EVIDENCE_MAX = 200;
 export type Delta = "regressed" | "improved" | "same" | "new";
 
 export interface CaseKind { kind: string; severity: Severity }
-/** `where` is the tile a visual issue shows in (null: only in the texts); absent for text-mode results. */
-export interface CaseIssue { kind: string; severity: Severity; note: string; evidence: string; verified: boolean; where?: TileRef | null }
+/**
+ * `where` is the tile a visual issue shows in (null: only in the texts) and `refs` the image/embed ids
+ * it is about, both absent for text-mode results; `layer` is absent before rubric v6; `invalid` says
+ * why the program discarded the issue (it never counts).
+ */
+export interface CaseIssue { kind: string; severity: Severity; note: string; evidence: string; verified: boolean; layer?: Layer; where?: TileRef | null; refs?: string[]; invalid?: Invalidity; subject?: Subject | null; origin?: IssueOrigin; originalSeverity?: Severity }
+export const isValidIssue = (issue: CaseIssue) => !issue.invalid;
 /** One backend's answer, compact; legacy results (no opinions on disk) get one synthesized from the case itself. */
 export interface CaseOpinion {
   backend: BackendId;
   model: string;
   verdict: Verdict;
+  layers?: LayerVerdicts;
   issues: CaseIssue[];
   summary: string;
   tokens?: number;
@@ -33,14 +43,18 @@ export interface CaseRow {
   slug: string;
   url: string;
   verdict: Verdict;
-  /** Distinct kinds, each with the worst severity reported for it. */
+  /** The per-layer verdicts; absent on results judged before rubric v6. */
+  layers?: LayerVerdicts;
+  /** Distinct kinds of the valid issues, each with the worst severity reported for it. */
   kinds: CaseKind[];
   summary: string;
   issues: CaseIssue[];
-  decidedBy: BackendId;
+  /** The backend whose opinion decided, or "merged" when two opinions were cross-confirmed. */
+  decidedBy: BackendId | "merged";
   disputed: boolean;
   opinions: CaseOpinion[];
   baselineVerdict?: Verdict;
+  baselineLayers?: LayerVerdicts;
   delta: Delta;
   model: string;
   rubricVersion: string;
@@ -54,15 +68,24 @@ export interface CaseRow {
   render?: RenderSummary;
 }
 export interface ErrorRow { slug: string; url: string; error: string }
+/** Per layer, the cases judged on it (older results and text-mode rendering are not) and their verdicts. */
+export type LayerTotals = Record<Layer, Record<Verdict, number> & { judged: number }>;
 export interface Totals {
   cases: number;
   PASS: number;
   MINOR: number;
   MAJOR: number;
   errors: number;
+  /** Valid issues (the ones that count) and how many of them are major. */
   issues: number;
   majorIssues: number;
   unverified: number;
+  /** Issues the program discarded, in all and by reason. */
+  invalid: number;
+  invalidByReason: Record<string, number>;
+  /** The counted issues of cross-confirmed cases, by origin. */
+  origins: Record<IssueOrigin, number>;
+  layers: LayerTotals;
   /** Cases that gathered two or more opinions. */
   escalated: number;
   disputed: number;
@@ -76,6 +99,7 @@ export interface RenderTotals {
   mathErrors: number; mathErrorCases: number;
 }
 export interface KindStat { kind: string; cases: number; issues: number; major: number; minor: number }
+export interface LayerKindStat extends KindStat { layer: Layer }
 export interface BackendStat {
   backend: BackendId;
   models: string[];
@@ -94,13 +118,17 @@ export interface Agreement {
   /** matrix[screen verdict][confirm verdict] = cases; screen is the first opinion asked, confirm the last. */
   matrix: Record<Verdict, Record<Verdict, number>>;
 }
-export interface VerdictChange { slug: string; from: Verdict; to: Verdict }
+export interface LayerChange { layer: Layer; from: Verdict; to: Verdict }
+/** `layers` lists the layers that moved (empty when the baseline entry predates layers). */
+export interface VerdictChange { slug: string; from: Verdict; to: Verdict; layers: LayerChange[] }
 export interface ReportData {
   generatedAt: string;
   cases: CaseRow[];
   totals: Totals;
   renderTotals: RenderTotals;
+  /** Valid issues by kind, and by layer × kind (issues with a layer only). */
   byKind: KindStat[];
+  byLayerKind: LayerKindStat[];
   byBackend: BackendStat[];
   agreement: Agreement;
   regressions: VerdictChange[];
@@ -108,7 +136,7 @@ export interface ReportData {
   errors: ErrorRow[];
 }
 
-export interface BaselineEntry { verdict: Verdict; kinds: string[] }
+export interface BaselineEntry { verdict: Verdict; kinds: string[]; layers?: LayerVerdicts }
 export interface CorpusEntry { slug: string; url: string }
 export interface BuildInput {
   results: readonly JudgeResult[];
@@ -122,7 +150,16 @@ const isJudged = (result: JudgeResult): result is JudgedCase => "verdict" in res
 const sum = (values: readonly number[]) => values.reduce((total, value) => total + value, 0);
 const clipEvidence = (text: string) => (text.length <= EVIDENCE_MAX ? text : `${text.slice(0, EVIDENCE_MAX - 1)}…`);
 
-const toIssue = (issue: JudgedIssue): CaseIssue => ({ kind: issue.kind, severity: issue.severity, note: issue.note, evidence: clipEvidence(issue.evidence), verified: issue.verified, ...(issue.where !== undefined ? { where: issue.where } : {}) });
+const toIssue = (issue: JudgedIssue): CaseIssue => ({
+  kind: issue.kind, severity: issue.severity, note: issue.note, evidence: clipEvidence(issue.evidence), verified: issue.verified,
+  ...(issue.layer !== undefined ? { layer: issue.layer } : {}),
+  ...(issue.where !== undefined ? { where: issue.where } : {}),
+  ...(issue.refs !== undefined ? { refs: issue.refs } : {}),
+  ...(issue.invalid ? { invalid: issue.invalid } : {}),
+  ...(issue.subject !== undefined ? { subject: issue.subject } : {}),
+  ...(issue.origin ? { origin: issue.origin } : {}),
+  ...(issue.originalSeverity ? { originalSeverity: issue.originalSeverity } : {}),
+});
 
 /** Distinct kinds in first-seen order, each carrying "major" when any of its issues is major. */
 export function caseKinds(issues: readonly CaseIssue[]): CaseKind[] {
@@ -136,6 +173,7 @@ export function caseKinds(issues: readonly CaseIssue[]): CaseKind[] {
 
 const toOpinion = (opinion: Opinion): CaseOpinion => ({
   backend: opinion.backend, model: opinion.resolvedModel ?? opinion.model, verdict: opinion.verdict,
+  ...(opinion.layers ? { layers: opinion.layers } : {}),
   issues: opinion.issues.map(toIssue), summary: opinion.summary, wallMs: opinion.wallMs,
   ...(opinion.tokens !== undefined ? { tokens: opinion.tokens } : {}),
   ...(opinion.costUsd !== undefined ? { costUsd: opinion.costUsd } : {}),
@@ -147,15 +185,28 @@ function opinionsOf(result: JudgedCase): CaseOpinion[] {
   if (result.opinions?.length) return result.opinions.map(toOpinion);
   return [{
     backend: "codex", model: result.resolvedModel ?? result.model, verdict: result.verdict,
+    ...(result.layers ? { layers: result.layers } : {}),
     issues: result.issues.map(toIssue), summary: result.summary, wallMs: result.wallMs,
     ...(result.tokens !== undefined ? { tokens: result.tokens } : {}),
   }];
 }
 
-function deltaOf(verdict: Verdict, baseline: BaselineEntry | undefined): Delta {
+/** The layers that moved; a layer either side did not judge is skipped (as eval/judge/baseline.ts does). */
+function layerChanges(from: LayerVerdicts | undefined, to: LayerVerdicts | undefined): LayerChange[] {
+  if (!from || !to) return [];
+  return LAYER_ORDER.flatMap((layer) => {
+    const before = from[layer];
+    const after = to[layer];
+    return before && after && before !== after ? [{ layer, from: before, to: after }] : [];
+  });
+}
+
+/** Regressed when the overall verdict or any layer got worse; improved when nothing got worse and something got better. */
+function deltaOf(verdict: Verdict, layers: LayerVerdicts | undefined, baseline: BaselineEntry | undefined): Delta {
   if (!baseline) return "new";
-  if (RANK[verdict] > RANK[baseline.verdict]) return "regressed";
-  if (RANK[verdict] < RANK[baseline.verdict]) return "improved";
+  const moved = layerChanges(baseline.layers, layers);
+  if (RANK[verdict] > RANK[baseline.verdict] || moved.some((change) => RANK[change.to] > RANK[change.from])) return "regressed";
+  if (RANK[verdict] < RANK[baseline.verdict] || moved.length) return "improved";
   return "same";
 }
 
@@ -163,10 +214,12 @@ function toRow(result: JudgedCase, url: string, baseline: BaselineEntry | undefi
   const issues = result.issues.map(toIssue);
   const opinions = opinionsOf(result);
   return {
-    slug: result.slug, url, verdict: result.verdict, kinds: caseKinds(issues), summary: result.summary, issues,
+    slug: result.slug, url, verdict: result.verdict, ...(result.layers ? { layers: result.layers } : {}),
+    kinds: caseKinds(issues.filter(isValidIssue)), summary: result.summary, issues,
     decidedBy: result.resolution?.from ?? "codex", disputed: result.resolution?.disputed ?? false, opinions,
     ...(baseline ? { baselineVerdict: baseline.verdict } : {}),
-    delta: deltaOf(result.verdict, baseline),
+    ...(baseline?.layers ? { baselineLayers: baseline.layers } : {}),
+    delta: deltaOf(result.verdict, result.layers, baseline),
     model: result.resolvedModel ?? result.model, rubricVersion: result.rubricVersion, judgedAt: result.judgedAt, truncated: result.truncated,
     ...(result.tokens !== undefined ? { tokens: result.tokens } : {}),
     wallMs: result.wallMs,
@@ -188,13 +241,33 @@ function renderTotalsOf(cases: readonly CaseRow[]): RenderTotals {
   };
 }
 
+const byRank = (a: KindStat, b: KindStat) => b.cases - a.cases || b.major - a.major || b.issues - a.issues || a.kind.localeCompare(b.kind);
+
+/** One stat over the valid issues `matches` picks. */
+function statOf(cases: readonly CaseRow[], kind: string, matches: (issue: CaseIssue) => boolean): KindStat {
+  const issues = cases.flatMap((row) => row.issues.filter(matches));
+  const major = issues.filter((issue) => issue.severity === "major").length;
+  return { kind, cases: cases.filter((row) => row.issues.some(matches)).length, issues: issues.length, major, minor: issues.length - major };
+}
+
 function kindStats(cases: readonly CaseRow[]): KindStat[] {
-  const kinds = [...new Set(cases.flatMap((row) => row.issues.map((issue) => issue.kind)))];
-  return kinds.map((kind) => {
-    const issues = cases.flatMap((row) => row.issues.filter((issue) => issue.kind === kind));
-    const major = issues.filter((issue) => issue.severity === "major").length;
-    return { kind, cases: cases.filter((row) => row.issues.some((issue) => issue.kind === kind)).length, issues: issues.length, major, minor: issues.length - major };
-  }).sort((a, b) => b.cases - a.cases || b.major - a.major || b.issues - a.issues || a.kind.localeCompare(b.kind));
+  const valid = cases.flatMap((row) => row.issues.filter(isValidIssue));
+  return [...new Set(valid.map((issue) => issue.kind))].map((kind) => statOf(cases, kind, (issue) => isValidIssue(issue) && issue.kind === kind)).sort(byRank);
+}
+
+function layerKindStats(cases: readonly CaseRow[]): LayerKindStat[] {
+  const valid = cases.flatMap((row) => row.issues.filter(isValidIssue));
+  return LAYER_ORDER.flatMap((layer) => [...new Set(valid.filter((issue) => issue.layer === layer).map((issue) => issue.kind))]
+    .map((kind) => ({ layer, ...statOf(cases, kind, (issue) => isValidIssue(issue) && issue.layer === layer && issue.kind === kind) }))
+    .sort(byRank));
+}
+
+function layerTotalsOf(cases: readonly CaseRow[]): LayerTotals {
+  return Object.fromEntries(LAYER_ORDER.map((layer) => {
+    const verdicts = cases.map((row) => row.layers?.[layer]).filter((verdict): verdict is Verdict => typeof verdict === "string");
+    const count = (verdict: Verdict) => verdicts.filter((candidate) => candidate === verdict).length;
+    return [layer, { judged: verdicts.length, PASS: count("PASS"), MINOR: count("MINOR"), MAJOR: count("MAJOR") }];
+  })) as LayerTotals;
 }
 
 function backendStats(cases: readonly CaseRow[]): BackendStat[] {
@@ -233,19 +306,26 @@ export function buildReportData({ results, baseline, corpus, generatedAt }: Buil
   const cases = sorted.filter(isJudged).map((result) => toRow(result, urls.get(result.slug) ?? "", baseline[result.slug]));
   const errors = sorted.filter((result): result is Exclude<JudgeResult, JudgedCase> => !isJudged(result)).map((result) => ({ slug: result.slug, url: urls.get(result.slug) ?? "", error: result.error }));
   const count = (verdict: Verdict) => cases.filter((row) => row.verdict === verdict).length;
-  const issues = cases.flatMap((row) => row.issues);
-  const change = (delta: Delta) => cases.filter((row) => row.delta === delta).map((row) => ({ slug: row.slug, from: row.baselineVerdict!, to: row.verdict }));
+  const all = cases.flatMap((row) => row.issues);
+  const issues = all.filter(isValidIssue);
+  const invalid = all.flatMap((issue) => (issue.invalid ? [issue.invalid.reason] : []));
+  const count2 = (origin: IssueOrigin) => issues.filter((issue) => issue.origin === origin).length;
+  const invalidByReason = invalid.reduce<Record<string, number>>((counts, reason) => ({ ...counts, [reason]: (counts[reason] ?? 0) + 1 }), {});
+  const change = (delta: Delta) => cases.filter((row) => row.delta === delta).map((row) => ({ slug: row.slug, from: row.baselineVerdict!, to: row.verdict, layers: layerChanges(row.baselineLayers, row.layers) }));
   return {
     generatedAt: generatedAt ?? new Date().toISOString(),
     cases,
     totals: {
       cases: cases.length, PASS: count("PASS"), MINOR: count("MINOR"), MAJOR: count("MAJOR"), errors: errors.length,
       issues: issues.length, majorIssues: issues.filter((issue) => issue.severity === "major").length,
-      unverified: issues.filter((issue) => !issue.verified).length,
+      unverified: all.filter((issue) => !issue.verified).length,
+      invalid: invalid.length, invalidByReason, layers: layerTotalsOf(cases),
+      origins: { both: count2("both"), "one-sided-fact": count2("one-sided-fact"), "one-sided-downgraded": count2("one-sided-downgraded"), "one-sided": count2("one-sided") },
       escalated: cases.filter((row) => row.opinions.length >= 2).length, disputed: cases.filter((row) => row.disputed).length,
     },
     renderTotals: renderTotalsOf(cases),
     byKind: kindStats(cases),
+    byLayerKind: layerKindStats(cases),
     byBackend: backendStats(cases),
     agreement: agreementOf(cases),
     regressions: change("regressed"),

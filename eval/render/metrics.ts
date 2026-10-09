@@ -1,6 +1,6 @@
 // RenderMetrics from the raw page facts: what is broken, overflowing or left unrendered, measured by
 // program so the judge can treat it as fact. Pure: the browser side (./page-facts) only collects.
-import type { RenderMetrics } from "./types";
+import type { RenderedCode, RenderedTable, RenderMetrics } from "./types";
 import type { HeadingFact, OverflowCandidate, PageFacts } from "./page-facts";
 
 const SAMPLE_CHARS = 120;
@@ -123,7 +123,7 @@ const usableSrc = (src: string) => Boolean(src) && !src.startsWith("blob:") && !
  * placeholder without src when not, so the sources come from the proxy's failed fetches first, then
  * from broken <img> elements with a real src; any still unnamed are listed by their alt text.
  */
-export function brokenImageSources(images: PageFacts["images"], failedSources: readonly string[]): string[] {
+export function brokenImageSources(images: readonly Pick<PageFacts["images"][number], "src" | "broken" | "label">[], failedSources: readonly string[]): string[] {
   const broken = images.filter((image) => image.broken);
   const named = [...new Set([...failedSources, ...broken.map((image) => image.src).filter(usableSrc)])];
   const unnamed = broken.filter((image) => !usableSrc(image.src)).slice(0, Math.max(0, broken.length - named.length));
@@ -136,9 +136,40 @@ export function countUnmarkedLists(lists: PageFacts["lists"]): number {
 }
 
 /** Tables with at least 4 body cells of which a quarter or more are empty; at most 5 samples. */
-export function emptyCellTables(tables: PageFacts["tables"]): RenderMetrics["emptyCellTables"] {
+export function emptyCellTables(tables: readonly Pick<PageFacts["tables"][number], "empty" | "cells">[]): RenderMetrics["emptyCellTables"] {
   const flagged = tables.flatMap((table, index) => (table.cells >= 4 && table.empty / table.cells >= 0.25 ? [{ table: index + 1, empty: table.empty, cells: table.cells }] : []));
   return { count: flagged.length, samples: flagged.slice(0, 5) };
+}
+
+const HEAD_CHARS = 80;
+/** A code block shown as one line this long is almost always several lines run together. */
+export const COLLAPSED_CODE_CHARS = 100;
+
+/** Lines of a block's visible text; trailing empty lines (the newline that ends the last line) do not count. */
+export function codeLines(text: string): number {
+  const lines = text.split("\n");
+  while (lines.length > 0 && lines.at(-1)?.trim() === "") lines.pop();
+  return lines.length;
+}
+
+export function isCollapsedCode(text: string): boolean {
+  return codeLines(text) === 1 && text.length >= COLLAPSED_CODE_CHARS;
+}
+
+export function countCollapsedCode(code: readonly { text: string }[]): number {
+  return code.filter((block) => isCollapsedCode(block.text)).length;
+}
+
+/** The first 80 characters, verbatim (a table's head is whitespace-flattened before it gets here). */
+export const headOf = (text: string) => text.slice(0, HEAD_CHARS);
+
+/** The tables' inventory; cells and emptyCells are the facts emptyCellTables reads, so its `table` n is t<n>. */
+export function buildRenderedTables(tables: readonly (Omit<PageFacts["tables"][number], "top"> & { tile: number | null })[]): RenderedTable[] {
+  return tables.map((table, index) => ({ id: `t${index + 1}`, tile: table.tile, rows: table.rows, cols: table.cols, cells: table.cells, emptyCells: table.empty, head: headOf(table.head) }));
+}
+
+export function buildRenderedCode(code: readonly { text: string; tile: number | null }[]): RenderedCode[] {
+  return code.map((block, index) => ({ id: `c${index + 1}`, tile: block.tile, lines: codeLines(block.text), chars: block.text.length, collapsed: isCollapsedCode(block.text), head: headOf(block.text) }));
 }
 
 /** RenderMetrics for one page; failedImageSources are the image fetches the capture answered with an error. */
@@ -150,6 +181,7 @@ export function buildMetrics(facts: PageFacts, title: string, failedImageSources
     overflow: classifyOverflow(facts.overflow),
     rawMarkup: scanRawMarkup(facts.prose),
     mathErrors: countMathErrors(facts),
+    collapsedCode: countCollapsedCode(facts.code),
     unmarkedLists: countUnmarkedLists(facts.lists),
     emptyCellTables: emptyCellTables(facts.tables),
     emptyHeadings: headings.empty,

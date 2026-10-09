@@ -115,6 +115,9 @@ importers:
       '@types/node':
         specifier: ^22
         version: 22.20.3
+      linkedom:
+        specifier: 0.18.13
+        version: 0.18.13
       playwright:
         specifier: 1.63.0
         version: 1.63.0

@@ -38,8 +38,15 @@ export interface PageFacts {
   text: string;
   /** Visible prose text, grouped by block, without code, math or hidden nodes. */
   prose: string[];
-  /** Every <img> and reader image placeholder; a placeholder (`data-reader-image` unresolved/loading) is broken and has no src. */
-  images: { src: string; broken: boolean; label: string }[];
+  /**
+   * Every <img> and reader image placeholder in document order; a placeholder (`data-reader-image`
+   * unresolved/loading) is broken and has no src. `original` is the URL before the capture's proxy (the
+   * blob: → source map the capture's init script keeps, or a real src), "" when unknown; `top` is page y.
+   */
+  images: { src: string; broken: boolean; label: string; original: string; alt: string; caption: string; top: number }[];
+  /** Absolute hrefs of the article's links and srcs of its media (video, audio, iframe, source, embed, object), for matching embeds. */
+  links: string[];
+  media: string[];
   overflow: OverflowCandidate[];
   /** Reader math elements: their status and whether they hold an error node. */
   math: { status: string; error: boolean }[];
@@ -50,7 +57,9 @@ export interface PageFacts {
   /** Every list with items: whether its items draw a marker (list-item display and a list style or image). */
   lists: { marked: boolean; items: number }[];
   /** Every table: its body cells (td) and how many hold no text and no image/icon. */
-  tables: { empty: number; cells: number }[];
+  tables: { empty: number; cells: number; rows: number; cols: number; head: string; top: number }[];
+  /** Every top-level <pre> (as counts.codeBlocks selects them), in document order: its visible text and page y. */
+  code: { text: string; top: number }[];
 }
 
 export interface FactSelectors {
@@ -63,7 +72,7 @@ export interface FactSelectors {
 export function collectPageFacts(selectors: FactSelectors): PageFacts {
   const empty: PageFacts = {
     found: false, box: { left: 0, top: 0, width: 0, height: 0 }, documentScrolls: true, documentHeight: 0, text: "", prose: [],
-    images: [], overflow: [], math: [], strayMathErrors: 0, headings: [], counts: { codeBlocks: 0, tables: 0, figures: 0, lists: 0, footnotes: 0 }, lists: [], tables: [],
+    images: [], links: [], media: [], overflow: [], math: [], strayMathErrors: 0, headings: [], counts: { codeBlocks: 0, tables: 0, figures: 0, lists: 0, footnotes: 0 }, lists: [], tables: [], code: [],
   };
   const root = document.querySelector<HTMLElement>(selectors.root);
   if (!root) return empty;
@@ -122,11 +131,23 @@ export function collectPageFacts(selectors: FactSelectors): PageFacts {
   }
   const prose = Array.from(blocks.values(), (parts) => parts.join("").replace(/\s+/g, " ").trim()).filter(Boolean);
 
+  // Filled by the capture's init script (capture.mjs): blob: URL → the src the harness asked the proxy for.
+  const blobSources = (window as unknown as { __renderImageSources?: Map<string, string> }).__renderImageSources;
+  const realSrc = (src: string) => (src && !src.startsWith("blob:") ? src : "");
   const images = Array.from(article.querySelectorAll("img, [data-reader-image]:not(img)"), (element) => {
-    if (element instanceof HTMLImageElement) return { src: element.currentSrc || element.src || element.getAttribute("src") || "", broken: !element.complete || element.naturalWidth === 0, label: element.alt || element.title || "" };
-    const label = element.getAttribute("title") || element.querySelector("[role='img']")?.getAttribute("aria-label") || "";
-    return { src: "", broken: true, label };
+    const caption = (element.closest("figure")?.querySelector("figcaption") as HTMLElement | null)?.innerText ?? "";
+    const top = element.getBoundingClientRect().top + window.scrollY;
+    if (element instanceof HTMLImageElement) {
+      const src = element.currentSrc || element.src || element.getAttribute("src") || "";
+      return { src, broken: !element.complete || element.naturalWidth === 0, label: element.alt || element.title || "", original: blobSources?.get(src) ?? realSrc(src), alt: element.alt, caption, top };
+    }
+    const alt = element.querySelector("[role='img']")?.getAttribute("aria-label") || "";
+    const label = element.getAttribute("title") || alt;
+    return { src: "", broken: true, label, original: "", alt, caption, top };
   });
+  const links = Array.from(article.querySelectorAll<HTMLAnchorElement>("a[href]"), (link) => link.href).filter(Boolean);
+  const media = Array.from(article.querySelectorAll("video, audio, iframe, source, embed, object"), (element) => element.getAttribute("src") || element.getAttribute("data") || "")
+    .flatMap((src) => { try { return src ? [new URL(src, document.baseURI).href] : []; } catch { return []; } }); // an unparsable src names nothing to match
   const errorSelector = ".katex-error, merror, .temml-error";
   const mathElements = Array.from(article.querySelectorAll("[data-reader-math]"));
   const math = mathElements.map((element) => ({ status: element.getAttribute("data-reader-math-status") ?? "", error: element.querySelector(errorSelector) !== null }));
@@ -146,12 +167,16 @@ export function collectPageFacts(selectors: FactSelectors): PageFacts {
   const tables = Array.from(article.querySelectorAll("table"), (table) => {
     const cells = Array.from(table.querySelectorAll("td"));
     const empty = cells.filter((cell) => (cell.textContent ?? "").trim() === "" && cell.querySelector("img, svg, picture, input, [role='img'], [data-reader-image]") === null).length;
-    return { empty, cells: cells.length };
+    const rows = Array.from(table.querySelectorAll("tr"));
+    const cols = rows.reduce((most, row) => Math.max(most, row.querySelectorAll(":scope > td, :scope > th").length), 0);
+    const head = rows[0] ? Array.from(rows[0].querySelectorAll(":scope > td, :scope > th"), (cell) => (cell as HTMLElement).innerText.replace(/\s+/g, " ").trim()).join(" | ") : "";
+    return { empty, cells: cells.length, rows: rows.length, cols, head, top: table.getBoundingClientRect().top + window.scrollY };
   });
+  const code = Array.from(article.querySelectorAll<HTMLElement>("pre:not(pre pre)"), (pre) => ({ text: pre.innerText, top: pre.getBoundingClientRect().top + window.scrollY }));
   return {
     found: true, box, documentScrolls: scroller.scrollHeight >= box.top + box.height - 1, documentHeight: scroller.scrollHeight,
-    text: article.innerText, prose, images, overflow, math, strayMathErrors, headings,
+    text: article.innerText, prose, images, links, media, overflow, math, strayMathErrors, headings,
     counts: { codeBlocks: count("pre:not(pre pre)"), tables: count("table"), figures: count("figure"), lists: count("ul, ol:not(.reader-footnotes > ol)"), footnotes: count("[data-reader-footnote-definition]") },
-    lists, tables,
+    lists, tables, code,
   };
 }

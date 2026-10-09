@@ -18,6 +18,18 @@ export function planTiles(top: number, height: number, tileHeight: number, maxTi
   return { tiles, truncated: needed > count };
 }
 
+/**
+ * The 1-based tile whose band [y, y + height) holds page y; null beyond the captured tiles. A y a pixel or
+ * two above the first tile (sub-pixel layout against the floored tile start) counts as the first tile.
+ */
+export function tileAt(y: number, tiles: readonly Tile[]): number | null {
+  const first = tiles[0];
+  if (!first || !Number.isFinite(y)) return null;
+  const at = y < first.y && first.y - y <= 2 ? first.y : y;
+  const tile = tiles.find((t) => at >= t.y && at < t.y + t.height);
+  return tile ? tile.index + 1 : null;
+}
+
 /** `rendered-01.png`, `reference-12.png`: 1-based, two digits minimum so they sort. */
 export function tileName(side: "rendered" | "reference", index: number): string {
   return `${side}-${String(index + 1).padStart(2, "0")}.png`;

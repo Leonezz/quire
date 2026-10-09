@@ -3,14 +3,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { EVIDENCE_MAX, buildReportData, caseKinds, loadReportData } from "./data";
-import { AT, baseline, corpus, emptyData, failedResult, hybridData, hybridResult, legacyData, legacyResult, legacyResults, opinion, visualData } from "./fixtures";
+import { AT, baseline, corpus, emptyData, failedResult, hybridData, hybridResult, legacyData, legacyResult, legacyResults, opinion, v6Data, visualData } from "./fixtures";
 
 describe("buildReportData (legacy results, no opinions on disk)", () => {
   const data = legacyData();
 
   it("counts verdicts, errors and issues", () => {
     expect(data.generatedAt).toBe(AT);
-    expect(data.totals).toEqual({ cases: 5, PASS: 2, MINOR: 1, MAJOR: 2, errors: 1, issues: 6, majorIssues: 3, unverified: 1, escalated: 0, disputed: 0 });
+    const noLayers = { judged: 0, PASS: 0, MINOR: 0, MAJOR: 0 };
+    expect(data.totals).toEqual({ cases: 5, PASS: 2, MINOR: 1, MAJOR: 2, errors: 1, issues: 6, majorIssues: 3, unverified: 1, invalid: 0, invalidByReason: {}, layers: { content: noLayers, metadata: noLayers, rendering: noLayers }, origins: { both: 0, "one-sided-fact": 0, "one-sided-downgraded": 0, "one-sided": 0 }, escalated: 0, disputed: 0 });
     expect(data.errors).toEqual([{ slug: "zeta-post", url: "https://zeta.example/zeta-post", error: "codex exec exited with 1: boom" }]);
     expect(data.cases.map((row) => row.slug)).toEqual(["alpha-post", "beta-post", "delta-post", "epsilon-post", "gamma-post"]);
   });
@@ -48,8 +49,8 @@ describe("buildReportData (legacy results, no opinions on disk)", () => {
   it("compares every case to the baseline", () => {
     const deltas = Object.fromEntries(data.cases.map((row) => [row.slug, [row.delta, row.baselineVerdict]]));
     expect(deltas).toEqual({ "alpha-post": ["same", "PASS"], "beta-post": ["improved", "MAJOR"], "delta-post": ["regressed", "MINOR"], "epsilon-post": ["new", undefined], "gamma-post": ["regressed", "PASS"] });
-    expect(data.regressions).toEqual([{ slug: "delta-post", from: "MINOR", to: "MAJOR" }, { slug: "gamma-post", from: "PASS", to: "MAJOR" }]);
-    expect(data.improvements).toEqual([{ slug: "beta-post", from: "MAJOR", to: "MINOR" }]);
+    expect(data.regressions).toEqual([{ slug: "delta-post", from: "MINOR", to: "MAJOR", layers: [] }, { slug: "gamma-post", from: "PASS", to: "MAJOR", layers: [] }]);
+    expect(data.improvements).toEqual([{ slug: "beta-post", from: "MAJOR", to: "MINOR", layers: [] }]);
   });
 
   it("leaves the url empty for a result the corpus does not know", () => {
@@ -158,5 +159,35 @@ describe("buildReportData (visual results)", () => {
   it("totals the measured facts over the captured cases only", () => {
     expect(data.renderTotals).toEqual({ captured: 2, brokenImages: 1, brokenCases: 1, overflow: 1, overflowCases: 1, rawMarkup: 2, rawMarkupCases: 1, mathErrors: 1, mathErrorCases: 1 });
     expect(legacyData().renderTotals.captured).toBe(0);
+  });
+});
+
+describe("buildReportData (rubric v6: layers and invalid issues)", () => {
+  const data = v6Data();
+  const alpha = data.cases.find((row) => row.slug === "alpha-post")!;
+
+  it("carries each case's and opinion's layer verdicts, and keeps invalid issues with their reason", () => {
+    expect(alpha.layers).toEqual({ content: "PASS", metadata: "MINOR", rendering: "MAJOR" });
+    expect(alpha.opinions.map((o) => o.layers)).toEqual([{ content: "PASS", metadata: "PASS", rendering: "MAJOR" }, { content: "PASS", metadata: "MINOR", rendering: "MAJOR" }]);
+    expect(alpha.issues.map((issue) => [issue.layer, issue.kind, issue.refs, issue.invalid?.reason])).toEqual([["rendering", "images", ["r2"], undefined], ["metadata", "metadata", [], undefined], ["content", "images", ["o1"], "contradicts-image-facts"]]);
+    expect(alpha.kinds).toEqual([{ kind: "images", severity: "major" }, { kind: "metadata", severity: "minor" }]);
+    expect(alpha.render?.images?.reference.map((image) => [image.id, image.matchedBy])).toEqual([["o1", "r1"], ["o2", null]]);
+    expect(alpha.render?.embeds).toHaveLength(1);
+  });
+
+  it("totals the layers and the invalid issues by reason, and counts only valid issues", () => {
+    expect(data.totals.layers).toEqual({ content: { judged: 2, PASS: 2, MINOR: 0, MAJOR: 0 }, metadata: { judged: 2, PASS: 1, MINOR: 1, MAJOR: 0 }, rendering: { judged: 2, PASS: 1, MINOR: 0, MAJOR: 1 } });
+    expect(data.totals).toMatchObject({ issues: 2, majorIssues: 1, invalid: 2, invalidByReason: { "contradicts-image-facts": 1, "evidence-not-verbatim": 1 }, unverified: 1 });
+    expect(data.byKind.map((k) => [k.kind, k.issues])).toEqual([["images", 1], ["metadata", 1]]);
+    expect(data.byLayerKind).toEqual([
+      { layer: "metadata", kind: "metadata", cases: 1, issues: 1, major: 0, minor: 1 },
+      { layer: "rendering", kind: "images", cases: 1, issues: 1, major: 1, minor: 0 },
+    ]);
+  });
+
+  it("regresses a case whose overall verdict held but one layer got worse, and leaves a layer-less baseline entry on the overall verdict", () => {
+    expect(alpha.delta).toBe("regressed");
+    expect(data.regressions).toEqual([{ slug: "alpha-post", from: "MAJOR", to: "MAJOR", layers: [{ layer: "metadata", from: "PASS", to: "MINOR" }] }]);
+    expect(data.cases.find((row) => row.slug === "beta-post")!.delta).toBe("same");
   });
 });

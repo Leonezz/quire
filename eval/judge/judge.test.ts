@@ -1,6 +1,8 @@
-// Unit tests for the judge's pure parts: cache key, answer parsing, baseline comparison, report, the
-// Codex backend with an injected runner, and that the kind vocabulary is the app's. The policy flow
-// is in policy.test.ts, the Claude backend in backends/claude.test.ts. No CLI is spawned here.
+// Unit tests for the judge's pure parts: cache key, answer parsing (text mode), baseline comparison
+// (overall and per layer), report.md, the Codex backend with an injected runner, and that the kind
+// vocabulary is the app's. The policy flow is in policy.test.ts, the visual rubric v6 (prompt,
+// schema, validation, verdicts) in visual.test.ts and verdict.test.ts, the Claude backend in
+// backends/claude.test.ts. No CLI is spawned here.
 import { describe, expect, it } from "vitest";
 import { RENDERING_PROBLEM_KINDS } from "../../apps/desktop/src/shared/contracts";
 import { compareToBaseline, describeDelta, updateBaseline, type Baseline } from "./baseline";
@@ -10,11 +12,13 @@ import { BackendRunError } from "./backends/types";
 import { askOpinion } from "./judge-case";
 import { extractedMarkdown, truncateInput } from "./inputs";
 import { renderReport } from "./report";
-import { ANSWER_SCHEMA, AnswerFormatError, EVIDENCE_MAX_CHARS, PROBLEM_KINDS, RUBRIC_VERSION, buildPrompt, evidenceOccurs, parseAnswer } from "./rubric";
+import { createHash } from "node:crypto";
+import { ANSWER_SCHEMA, AnswerFormatError, EVIDENCE_MAX_CHARS, PROBLEM_KINDS, RUBRIC_VERSION, TEXT_RUBRIC_VERSION, buildPrompt, evidenceOccurs, parseAnswer } from "./rubric";
+import type { LayerVerdicts } from "./verdict";
 
 const judged = (slug: string, verdict: JudgedCase["verdict"], kinds: string[] = [], extra: Partial<JudgedCase> = {}): JudgedCase => ({
   key: `k-${slug}`, slug, model: "default", rubricVersion: RUBRIC_VERSION, truncated: false, verdict,
-  issues: kinds.map((kind) => ({ kind: kind as JudgedCase["issues"][number]["kind"], severity: "minor", evidence: "q", note: "n", verified: true })),
+  issues: kinds.map((kind) => ({ layer: "content", kind: kind as JudgedCase["issues"][number]["kind"], severity: "minor", evidence: "q", note: "n", verified: true })),
   summary: `${slug} summary`, wallMs: 10, judgedAt: "2026-09-23T00:00:00.000Z", ...extra,
 });
 const failed = (slug: string): JudgeResult => ({ key: `k-${slug}`, slug, model: "default", rubricVersion: RUBRIC_VERSION, truncated: false, error: "codex exec exited with 1: boom", wallMs: 5, judgedAt: "2026-09-23T00:00:00.000Z" });
@@ -26,6 +30,16 @@ describe("kind vocabulary", () => {
     expect(ANSWER_SCHEMA.properties.issues.items.properties.kind.enum).toEqual([...RENDERING_PROBLEM_KINDS]);
     const prompt = buildPrompt({ slug: "s", url: "https://x.test/", source: "", extracted: "", truncated: { source: false, extracted: false } });
     for (const kind of RENDERING_PROBLEM_KINDS) expect(prompt).toContain(`- ${kind}:`);
+  });
+});
+
+describe("the text rubric", () => {
+  it("keeps its prompt byte for byte (only its version moved, because v6 computes the verdict from the issues)", () => {
+    const prompt = buildPrompt({ slug: "s", url: "https://x.test/p", source: "SRC body", extracted: "EXT body", truncated: { source: true, extracted: false } });
+    // The sha256 of this prompt as rubric 2026-09-23.3 built it.
+    expect(createHash("sha256").update(prompt).digest("hex")).toBe("4322daf448a5b0a7eb2f8763d5b6404e520f439291f960e154da71b56da74000");
+    expect(TEXT_RUBRIC_VERSION).not.toBe("2026-09-23.3");
+    expect(ANSWER_SCHEMA.required).toEqual(["verdict", "issues", "summary"]);
   });
 });
 
@@ -44,10 +58,13 @@ describe("cacheKey", () => {
 });
 
 describe("parseAnswer", () => {
-  it("accepts a well-formed answer and clips over-long evidence", () => {
-    const answer = parseAnswer(JSON.stringify({ ...goodAnswer, issues: [{ ...goodAnswer.issues[0], evidence: "x".repeat(EVIDENCE_MAX_CHARS + 50) }] }));
-    expect(answer.verdict).toBe("MINOR");
+  it("accepts a well-formed text answer, drops its verdict, puts each issue in a layer by kind and clips over-long evidence", () => {
+    const answer = parseAnswer(JSON.stringify({ ...goodAnswer, issues: [{ ...goodAnswer.issues[0], evidence: "x".repeat(EVIDENCE_MAX_CHARS + 50) }, { kind: "tables", severity: "major", evidence: "e", note: "n" }] }));
+    expect(answer).not.toHaveProperty("verdict");
+    expect(answer.issues.map((issue) => issue.layer)).toEqual(["metadata", "content"]);
     expect(answer.issues[0]?.evidence).toHaveLength(EVIDENCE_MAX_CHARS);
+    expect(answer.issues[0]).not.toHaveProperty("where");
+    expect(answer.issues[0]).not.toHaveProperty("refs");
     expect(parseAnswer(JSON.stringify({ verdict: "PASS", issues: [], summary: "Clean." })).issues).toEqual([]);
   });
 
@@ -55,6 +72,7 @@ describe("parseAnswer", () => {
     ["not JSON", "verdict: PASS"],
     ["an array", "[]"],
     ["an unknown verdict", JSON.stringify({ ...goodAnswer, verdict: "FAIL" })],
+    ["no verdict (the text schema still requires it)", JSON.stringify({ issues: [], summary: "s" })],
     ["an unknown kind", JSON.stringify({ ...goodAnswer, issues: [{ ...goodAnswer.issues[0], kind: "typo" }] })],
     ["an unknown severity", JSON.stringify({ ...goodAnswer, issues: [{ ...goodAnswer.issues[0], severity: "critical" }] })],
     ["a missing note", JSON.stringify({ ...goodAnswer, issues: [{ kind: "other", severity: "minor", evidence: "e" }] })],
@@ -109,8 +127,8 @@ describe("baseline", () => {
 
   it("classifies worse, better, unchanged, new and errored", () => {
     const delta = compareToBaseline(baseline, [judged("a", "MINOR", ["layout"]), judged("b", "MAJOR"), judged("c", "PASS"), judged("d", "PASS"), judged("e", "MAJOR"), failed("f")]);
-    expect(delta.worse).toEqual([{ slug: "a", from: "PASS", to: "MINOR" }, { slug: "b", from: "MINOR", to: "MAJOR" }]);
-    expect(delta.better).toEqual([{ slug: "c", from: "MAJOR", to: "PASS" }]);
+    expect(delta.worse).toEqual([{ slug: "a", from: "PASS", to: "MINOR", layers: [] }, { slug: "b", from: "MINOR", to: "MAJOR", layers: [] }]);
+    expect(delta.better).toEqual([{ slug: "c", from: "MAJOR", to: "PASS", layers: [] }]);
     expect(delta.unchanged).toEqual(["d"]);
     expect(delta.added).toEqual(["e"]);
     expect(delta.errored).toEqual(["f"]);
@@ -133,6 +151,43 @@ describe("baseline", () => {
     expect(next.z).toEqual({ verdict: "MINOR", kinds: ["layout", "tables"] });
     expect(baseline.c.verdict).toBe("MAJOR");
   });
+
+  const layers = (content: LayerVerdicts["content"], metadata: LayerVerdicts["metadata"], rendering: LayerVerdicts["rendering"]): LayerVerdicts => ({ content, metadata, rendering });
+
+  it("compares per layer: any layer worse is worse, even when the overall verdict stays or another layer improves", () => {
+    const layered: Baseline = {
+      same: { verdict: "MAJOR", kinds: [], layers: layers("PASS", "PASS", "MAJOR") },
+      shifted: { verdict: "MAJOR", kinds: [], layers: layers("PASS", "PASS", "MAJOR") },
+      traded: { verdict: "MINOR", kinds: [], layers: layers("MINOR", "PASS", "PASS") },
+      fixed: { verdict: "MINOR", kinds: [], layers: layers("PASS", "MINOR", "PASS") },
+      textMode: { verdict: "PASS", kinds: [], layers: layers("PASS", "PASS", "MAJOR") },
+      legacy: { verdict: "MINOR", kinds: ["layout"] },
+    };
+    const delta = compareToBaseline(layered, [
+      judged("same", "MAJOR", [], { layers: layers("PASS", "PASS", "MAJOR") }),
+      judged("shifted", "MAJOR", [], { layers: layers("MAJOR", "PASS", "MINOR") }),
+      judged("traded", "MINOR", [], { layers: layers("PASS", "PASS", "MINOR") }),
+      judged("fixed", "PASS", [], { layers: layers("PASS", "PASS", "PASS") }),
+      judged("textMode", "PASS", [], { layers: layers("PASS", "PASS", null) }),
+      judged("legacy", "MINOR", [], { layers: layers("MINOR", "PASS", "MAJOR") }),
+    ]);
+    expect(delta.worse).toEqual([
+      { slug: "shifted", from: "MAJOR", to: "MAJOR", layers: [{ layer: "content", from: "PASS", to: "MAJOR" }, { layer: "rendering", from: "MAJOR", to: "MINOR" }] },
+      { slug: "traded", from: "MINOR", to: "MINOR", layers: [{ layer: "content", from: "MINOR", to: "PASS" }, { layer: "rendering", from: "PASS", to: "MINOR" }] },
+    ]);
+    expect(delta.better).toEqual([{ slug: "fixed", from: "MINOR", to: "PASS", layers: [{ layer: "metadata", from: "MINOR", to: "PASS" }] }]);
+    // A layer one side did not judge (rendering in text mode) and an entry without layers compare on what both have.
+    expect(delta.unchanged).toEqual(["same", "textMode", "legacy"]);
+    expect(describeDelta(delta).join("\n")).toContain("WORSE than baseline (2): shifted MAJOR→MAJOR (content PASS→MAJOR, rendering MAJOR→MINOR), traded MINOR→MINOR (content MINOR→PASS, rendering PASS→MINOR)");
+  });
+
+  it("updateBaseline stores the layers and only the valid issues' kinds", () => {
+    const result = judged("v", "MINOR", [], { layers: layers("MINOR", "PASS", "PASS"), issues: [
+      { layer: "content", kind: "layout", severity: "minor", evidence: "q", note: "n", verified: true },
+      { layer: "rendering", kind: "images", severity: "major", evidence: "q", note: "n", verified: true, refs: ["o1"], invalid: { reason: "contradicts-image-facts", detail: "o1 is in the reader as r1, not broken" } },
+    ] });
+    expect(updateBaseline({}, [result]).v).toEqual({ verdict: "MINOR", kinds: ["layout"], layers: layers("MINOR", "PASS", "PASS") });
+  });
 });
 
 describe("renderReport", () => {
@@ -140,7 +195,7 @@ describe("renderReport", () => {
 
   it("counts verdicts and errors, ranks kinds, lists one row per case, and keeps evidence out", () => {
     const rows = [
-      { result: judged("beta", "MAJOR", ["missing_content", "layout"], { issues: [{ kind: "missing_content", severity: "major", evidence: "SECRET-QUOTE", note: "n", verified: true }, { kind: "layout", severity: "minor", evidence: "q", note: "n", verified: false }] }), origin: "fresh" as const },
+      { result: judged("beta", "MAJOR", ["missing_content", "layout"], { issues: [{ layer: "content", kind: "missing_content", severity: "major", evidence: "SECRET-QUOTE", note: "n", verified: true }, { layer: "content", kind: "layout", severity: "minor", evidence: "q", note: "n", verified: false }] }), origin: "fresh" as const },
       { result: judged("alpha", "PASS"), origin: "cached" as const },
       { result: judged("gamma", "MINOR", ["layout"]), origin: "previous" as const },
       { result: failed("delta"), origin: "fresh" as const },
@@ -148,13 +203,14 @@ describe("renderReport", () => {
     const text = renderReport(rows, { date: "2026-09-23", policy: "policy single · codex/default", rubricVersion: RUBRIC_VERSION, ranSlugs: 3 });
     expect(text).toContain("4 cases: 1 PASS · 1 MINOR · 1 MAJOR · 1 error. This run judged 3 (2 fresh, 1 cached); 1 rows are from earlier runs. Judge: policy single · codex/default; rubric");
     expect(text).toContain("1 evidence quote(s) could not be found verbatim");
-    expect(text).toContain("| layout | 2 | 2 | 0 |");
-    expect(text).toContain("| missing_content | 1 | 1 | 1 |");
-    expect(text.indexOf("| layout |")).toBeLessThan(text.indexOf("| missing_content |"));
+    expect(text).toContain("| content | layout | 2 | 2 | 0 |");
+    expect(text).toContain("| content | missing_content | 1 | 1 | 1 |");
+    expect(text.indexOf("| content | layout |")).toBeLessThan(text.indexOf("| content | missing_content |"));
     const table = text.slice(text.indexOf("## Cases"));
     expect(table.split("\n").filter((line) => /^\| (alpha|beta|gamma|delta) /.test(line))).toHaveLength(4);
-    expect(table).toContain("| beta | MAJOR | missing_content!, layout | – | – | – | – | beta summary | – | fresh |");
-    expect(table).toContain("| delta | error | – | – | – | – | – | codex exec exited with 1: boom | – | fresh |");
+    expect(table).toContain("| slug | verdict | content | metadata | rendering | kinds | broken | overflow | raw | math | summary | decided by | origin |");
+    expect(table).toContain("| beta | MAJOR | – | – | – | missing_content!, layout | – | – | – | – | beta summary | – | fresh |");
+    expect(table).toContain("| delta | error | – | – | – | – | – | – | – | – | codex exec exited with 1: boom | – | fresh |");
     expect(text.indexOf("| alpha ")).toBeLessThan(text.indexOf("| beta "));
     expect(text).not.toContain("SECRET-QUOTE");
     expect(text).not.toContain("Opinions:");
@@ -175,18 +231,18 @@ describe("renderReport", () => {
     ];
     const text = renderReport(rows, { date: "2026-09-23", policy: "policy screen-then-confirm · screen claude/haiku · confirm codex/default (on MINOR, MAJOR)", rubricVersion: RUBRIC_VERSION, ranSlugs: 4 });
     expect(text).toContain("Opinions: claude/haiku 3 opinions, 6,000 tokens, $0.0600 · codex/default 2 opinions, 70,000 tokens. Escalated 2 of 3 screened. Disputed 1. 1 result(s) predate the hybrid judge and carry no opinions.");
-    expect(text).toContain("| alpha | PASS | – | – | – | – | – | alpha summary | claude/haiku | fresh |");
-    expect(text).toContain("| beta | MAJOR | layout | – | – | – | – | beta summary | codex/default (disputed) | fresh |");
-    expect(text).toContain("| gamma | MINOR | tables | – | – | – | – | gamma summary | codex/default | cached |");
-    expect(text).toContain("| delta | PASS | – | – | – | – | – | delta summary | – | previous |");
-    expect(text).toContain("| epsilon | error | – | – | – | – | – | codex exec exited with 1: boom | – | fresh |");
+    expect(text).toContain("| alpha | PASS | – | – | – | – | – | – | – | – | alpha summary | claude/haiku | fresh |");
+    expect(text).toContain("| beta | MAJOR | – | – | – | layout | – | – | – | – | beta summary | codex/default (disputed) | fresh |");
+    expect(text).toContain("| gamma | MINOR | – | – | – | tables | – | – | – | – | gamma summary | codex/default | cached |");
+    expect(text).toContain("| delta | PASS | – | – | – | – | – | – | – | – | delta summary | – | previous |");
+    expect(text).toContain("| epsilon | error | – | – | – | – | – | – | – | – | codex exec exited with 1: boom | – | fresh |");
   });
 });
 
 describe("renderReport with render captures", () => {
   const metrics = (broken: number, overflow: number, raw: number, math: number) => ({
     images: { total: 4, broken, brokenSrc: Array.from({ length: broken }, (_, i) => `https://x.test/${i}.png`) }, overflow: { count: overflow, samples: [] }, rawMarkup: { count: raw, samples: [] },
-    mathErrors: math, unmarkedLists: 0, emptyCellTables: { count: 0, samples: [] }, emptyHeadings: 0, duplicateTitleHeadings: 0, counts: { codeBlocks: 0, tables: 0, figures: 4, lists: 0, footnotes: 0, headings: 3, words: 900 }, height: 5000,
+    mathErrors: math, unmarkedLists: 0, collapsedCode: 0, emptyCellTables: { count: 0, samples: [] }, emptyHeadings: 0, duplicateTitleHeadings: 0, counts: { codeBlocks: 0, tables: 0, figures: 4, lists: 0, footnotes: 0, headings: 3, words: 900 }, height: 5000,
   });
   const render = (m: ReturnType<typeof metrics>) => ({ manifestKey: "mk", tiles: { rendered: ["rendered-01.png"], reference: [] }, sent: { rendered: 1, reference: 0 }, truncated: { rendered: false, reference: false }, metrics: m, warnings: [], failedReferenceRequests: 0 });
 
@@ -200,12 +256,63 @@ describe("renderReport with render captures", () => {
     const text = renderReport(rows, { date: "2026-10-08", policy: "policy single · codex/default", rubricVersion: RUBRIC_VERSION, ranSlugs: 3, mode: "visual" });
     expect(text).toContain(`Judge: policy single · codex/default; mode visual; rubric ${RUBRIC_VERSION}.`);
     expect(text).toContain("Rendering facts over 2 captured cases: 2 broken images (1 case) · 1 overflowing elements (1 case) · 3 raw-markup samples (1 case) · 1 math errors (1 case).");
-    expect(text).toContain("| slug | verdict | kinds | broken | overflow | raw | math | summary | decided by | origin |");
-    expect(text).toContain("| alpha | MAJOR | images | 2 | 1 | 0 | 0 | alpha summary | – | fresh |");
-    expect(text).toContain("| beta | PASS | – | 0 | 0 | 3 | 1 | beta summary | – | fresh |");
-    expect(text).toContain("| gamma | PASS | – | – | – | – | – | gamma summary | – | previous |");
-    expect(text).toContain("| delta | error | – | – | – | – | – | no render capture for delta: run pnpm --filter @read/eval render delta | – | fresh |");
+    expect(text).toContain("| slug | verdict | content | metadata | rendering | kinds | broken | overflow | raw | math | summary | decided by | origin |");
+    expect(text).toContain("| alpha | MAJOR | – | – | – | images | 2 | 1 | 0 | 0 | alpha summary | – | fresh |");
+    expect(text).toContain("| beta | PASS | – | – | – | – | 0 | 0 | 3 | 1 | beta summary | – | fresh |");
+    expect(text).toContain("| gamma | PASS | – | – | – | – | – | – | – | – | gamma summary | – | previous |");
+    expect(text).toContain("| delta | error | – | – | – | – | – | – | – | – | no render capture for delta: run pnpm --filter @read/eval render delta | – | fresh |");
     expect(text).not.toContain("https://x.test/");
+  });
+});
+
+describe("renderReport with rubric v6 layers", () => {
+  const v6 = (slug: string, layers: LayerVerdicts, issues: JudgedCase["issues"]) => judged(slug, layers.rendering === "MAJOR" || layers.content === "MAJOR" ? "MAJOR" : "MINOR", [], { layers, issues, mode: "visual" });
+  const rows = [
+    { result: v6("alpha", { content: "PASS", metadata: "MINOR", rendering: "MAJOR" }, [
+      { layer: "rendering", kind: "code_or_math", severity: "major", evidence: "SECRET-1", note: "n", verified: true, where: null, refs: [] },
+      { layer: "metadata", kind: "metadata", severity: "minor", evidence: "SECRET-2", note: "n", verified: true, where: null, refs: [] },
+      { layer: "content", kind: "images", severity: "major", evidence: "SECRET-3", note: "n", verified: true, where: null, refs: ["o1"], invalid: { reason: "contradicts-image-facts", detail: "o1 is in the reader as r1, not broken" } },
+    ]), origin: "fresh" as const },
+    { result: v6("beta", { content: "MAJOR", metadata: "PASS", rendering: "PASS" }, [
+      { layer: "content", kind: "missing_content", severity: "major", evidence: "SECRET-4", note: "n", verified: true, where: null, refs: ["e1"] },
+      { layer: "rendering", kind: "layout", severity: "minor", evidence: "SECRET-5", note: "n", verified: false, where: null, refs: [], invalid: { reason: "evidence-not-verbatim", detail: "x" } },
+    ]), origin: "fresh" as const },
+    { result: judged("gamma", "PASS"), origin: "previous" as const },
+  ];
+  const text = renderReport(rows, { date: "2026-10-09", policy: "policy single · codex/default", rubricVersion: RUBRIC_VERSION, ranSlugs: 2, mode: "visual" });
+
+  it("totals each layer, counts the invalid issues by reason, and ranks valid issues by layer and kind", () => {
+    expect(text).toContain("Per layer: content 1 PASS · 0 MINOR · 1 MAJOR; metadata 1 PASS · 1 MINOR · 0 MAJOR; rendering 1 PASS · 0 MINOR · 1 MAJOR.");
+    expect(text).toContain("Invalid issues (kept in out/, never counted): 2 — evidence-not-verbatim 1, contradicts-image-facts 1.");
+    expect(text).toContain("## Issues by layer and kind");
+    expect(text).toContain("| layer | kind | cases | issues | major |");
+    expect(text).toContain("| rendering | code_or_math | 1 | 1 | 1 |");
+    expect(text).toContain("| content | missing_content | 1 | 1 | 1 |");
+    expect(text).toContain("| metadata | metadata | 1 | 1 | 0 |");
+    expect(text).not.toContain("| content | images |");
+    expect(text).not.toContain("| rendering | layout |");
+  });
+
+  it("counts the cross-confirmed issues by origin in the header and names merged cases", () => {
+    const merged = judged("delta", "MAJOR", [], { mode: "visual", layers: { content: "MAJOR", metadata: "MINOR", rendering: "PASS" }, resolution: { policy: "screen-then-confirm", from: "merged", disputed: true },
+      opinions: [{ backend: "claude", model: "s", verdict: "MAJOR", issues: [], summary: "a", wallMs: 1 }, { backend: "codex", model: "c", verdict: "MINOR", issues: [], summary: "b", wallMs: 1 }],
+      issues: [
+        { layer: "content", kind: "tables", severity: "major", evidence: "q1", note: "n", verified: true, origin: "both" },
+        { layer: "content", kind: "missing_content", severity: "major", evidence: "q2", note: "n", verified: true, origin: "one-sided-fact", refs: ["e1"] },
+        { layer: "content", kind: "missing_content", severity: "minor", originalSeverity: "major", evidence: "q3", note: "n", verified: true, origin: "one-sided-downgraded" },
+        { layer: "metadata", kind: "metadata", severity: "minor", subject: "author", evidence: "q4", note: "n", verified: true, origin: "one-sided" },
+      ] });
+    const report = renderReport([{ result: merged, origin: "fresh" }], { date: "2026-10-10", policy: "p", rubricVersion: RUBRIC_VERSION, ranSlugs: 1 });
+    expect(report).toContain("Cross-confirmed issues: 1 reported by both, 1 one-sided major kept by a fact, 1 one-sided major downgraded to minor, 1 one-sided minor.");
+    expect(report).toContain("| merged claude+codex (disputed) | fresh |");
+    expect(text).not.toContain("Cross-confirmed issues");
+  });
+
+  it("gives every case its three layer verdicts and only its valid kinds, noting the invalid ones", () => {
+    expect(text).toContain("| alpha | MAJOR | PASS | MINOR | MAJOR | code_or_math!, metadata (+1 invalid) | – | – | – | – | alpha summary | – | fresh |");
+    expect(text).toContain("| beta | MAJOR | MAJOR | PASS | PASS | missing_content! (+1 invalid) | – | – | – | – | beta summary | – | fresh |");
+    expect(text).toContain("| gamma | PASS | – | – | – | – | – | – | – | – | gamma summary | – | previous |");
+    expect(text).not.toMatch(/SECRET-/);
   });
 });
 
@@ -268,9 +375,19 @@ describe("codexBackend", () => {
     const outcome = await askOpinion(backend(async () => run({})), input, 1000);
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) throw new Error("expected an opinion");
-    const expected: Partial<Opinion> = { backend: "codex", model: "default", resolvedModel: "gpt-test", tokens: 1234, verdict: "MINOR", summary: goodAnswer.summary };
+    // Text mode: the verdict is computed from the valid issues (a verbatim minor metadata issue), not read from the answer.
+    const expected: Partial<Opinion> = { backend: "codex", model: "default", resolvedModel: "gpt-test", tokens: 1234, verdict: "MINOR", layers: { content: "PASS", metadata: "MINOR", rendering: null }, summary: goodAnswer.summary };
     expect(outcome.opinion).toMatchObject(expected);
-    expect(outcome.opinion.issues[0]).toMatchObject({ kind: "metadata", verified: true });
+    expect(outcome.opinion.issues[0]).toMatchObject({ layer: "metadata", kind: "metadata", verified: true });
+    expect(outcome.opinion.issues[0]).not.toHaveProperty("invalid");
+  });
+
+  it("askOpinion in text mode ignores the model's verdict and discards a paraphrased issue", async () => {
+    const answer = { verdict: "MAJOR", issues: [{ kind: "missing_content", severity: "major", evidence: "a sentence the page never had", note: "ending lost" }], summary: "s" };
+    const outcome = await askOpinion(backend(async () => run({ lastMessage: JSON.stringify(answer) })), input, 1000);
+    if (!outcome.ok) throw new Error(outcome.failure.error);
+    expect(outcome.opinion.verdict).toBe("PASS");
+    expect(outcome.opinion.issues[0]).toMatchObject({ verified: false, invalid: { reason: "evidence-not-verbatim" } });
   });
 
   it.each([

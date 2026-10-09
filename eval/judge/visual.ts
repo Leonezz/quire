@@ -4,7 +4,7 @@
 // planning and the key are pure.
 import { existsSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
-import type { RenderManifest, RenderMetrics } from "../render/types";
+import type { Embed, ReferenceImage, RenderedCode, RenderedImage, RenderedTable, RenderManifest, RenderMetrics } from "../render/types";
 import { truncateInput } from "./inputs";
 
 export const JUDGE_MODES = ["visual", "text"] as const;
@@ -31,6 +31,13 @@ export interface VisualInput {
   renderedTextTruncated: boolean;
   /** The capture viewport: one tile is this wide and (at most) this tall, in CSS px. */
   viewport: { width: number; height: number };
+  /** The image inventories: what the reader shows (r1…) and the sizeable images of the original (o1…) with their reader match. */
+  images: { rendered: RenderedImage[]; reference: ReferenceImage[] };
+  /** JavaScript or plugin content in the snapshot, in document order (e1… by position). */
+  embeds: Embed[];
+  /** The reader's tables (t1…) and code blocks (c1…), in document order. */
+  tables: RenderedTable[];
+  code: RenderedCode[];
 }
 
 export interface SideCount { sent: number; total: number }
@@ -71,6 +78,9 @@ function readManifest(renderOut: string, slug: string): RenderManifest {
   const { rendered, reference } = parsed;
   if (!isRecord(rendered) || !isStringList(rendered.tiles) || typeof rendered.textPath !== "string" || !isRecord(rendered.metrics)) throw bad("rendered.tiles/textPath/metrics missing");
   if (!isRecord(reference) || !isStringList(reference.tiles)) throw bad("reference.tiles missing");
+  // Rubric v6 checks image and embed claims against these inventories; a capture without them is stale, not empty.
+  if (!Array.isArray(rendered.images) || !Array.isArray(reference.images) || !Array.isArray(parsed.embeds)) throw bad("no image/embed inventories (rendered.images, reference.images, embeds): the capture predates them, re-capture it");
+  if (!Array.isArray(rendered.tables) || !Array.isArray(rendered.code) || typeof rendered.metrics.collapsedCode !== "number") throw bad("no table/code inventories (rendered.tables, rendered.code, metrics.collapsedCode): the capture predates them, re-capture it");
   if (!isStringList(parsed.warnings)) throw bad("warnings is not a list");
   const { viewport } = parsed;
   if (!isRecord(viewport) || typeof viewport.width !== "number" || typeof viewport.height !== "number") throw bad("viewport missing");
@@ -100,6 +110,10 @@ export function loadCapture(renderOut: string, slug: string): VisualInput {
     renderedText: text.text,
     renderedTextTruncated: text.truncated,
     viewport: { width: manifest.viewport.width, height: manifest.viewport.height },
+    images: { rendered: manifest.rendered.images, reference: manifest.reference.images },
+    embeds: manifest.embeds,
+    tables: manifest.rendered.tables,
+    code: manifest.rendered.code,
   };
 }
 
@@ -135,6 +149,12 @@ export interface RenderSummary {
   metrics: RenderMetrics;
   warnings: string[];
   failedReferenceRequests: number;
+  /** The inventories the issues were checked against; absent on results judged before rubric v6. */
+  images?: { rendered: RenderedImage[]; reference: ReferenceImage[] };
+  embeds?: Embed[];
+  /** The table and code inventories; absent on results judged before rubric 2026-10-10.9. */
+  tables?: RenderedTable[];
+  code?: RenderedCode[];
 }
 
 export function renderSummary(visual: VisualInput, plan: ImagePlan): RenderSummary {
@@ -146,5 +166,9 @@ export function renderSummary(visual: VisualInput, plan: ImagePlan): RenderSumma
     metrics: visual.metrics,
     warnings: visual.warnings,
     failedReferenceRequests: visual.failedReferenceRequests,
+    images: visual.images,
+    embeds: visual.embeds,
+    tables: visual.tables,
+    code: visual.code,
   };
 }

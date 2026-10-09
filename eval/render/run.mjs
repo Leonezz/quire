@@ -12,6 +12,7 @@ import { chromium } from "playwright";
 import { parseRenderArgs } from "./args.ts";
 import { captureCase, TILE_HEIGHT } from "./capture.mjs";
 import { createImageFetcher, imageUrlsOf } from "./image-proxy.ts";
+import { imageNodesOf } from "./images.ts";
 import { cachedManifest, captureCodeId, captureKey, rendererBuildId, summaryLine } from "./manifest.ts";
 import { startStaticServer } from "./server.ts";
 
@@ -102,7 +103,8 @@ for (const slug of slugs) {
   const charset = /charset=([^;\s]+)/i.exec(meta.contentType ?? "")?.[1];
   const parsed = JSON.parse(record.toString("utf8"));
   const imageUrls = parsed.reader?.payload ? imageUrlsOf(parsed.reader.payload) : [];
-  jobs.push({ slug, id: entry.id, title: String(parsed.title ?? ""), finalUrl: meta.finalUrl, imageUrls, snapshotGz, charset, key });
+  const imageNodes = parsed.reader?.payload ? imageNodesOf(parsed.reader.payload) : [];
+  jobs.push({ slug, id: entry.id, title: String(parsed.title ?? ""), finalUrl: meta.finalUrl, imageUrls, imageNodes, snapshotGz, charset, key });
 }
 
 let fresh = 0;

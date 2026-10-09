@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { TILE_PATTERN, planTiles, tileName } from "./tiles";
+import { TILE_PATTERN, planTiles, tileAt, tileName } from "./tiles";
 
 describe("planTiles", () => {
   it("cuts a region into full tiles and a shorter last one", () => {
@@ -34,5 +34,22 @@ describe("tileName", () => {
     expect(tileName("reference", 11)).toBe("reference-12.png");
     expect(TILE_PATTERN.test("reference-12.png")).toBe(true);
     expect(TILE_PATTERN.test("manifest.json")).toBe(false);
+  });
+});
+
+describe("tileAt", () => {
+  const { tiles } = planTiles(48, 4000, 1600, 2);
+  it("gives the 1-based tile holding a page y, by the capture's tile geometry", () => {
+    expect(tileAt(48, tiles)).toBe(1);
+    expect(tileAt(1647.9, tiles)).toBe(1);
+    expect(tileAt(1648, tiles)).toBe(2);
+    expect(tileAt(46.5, tiles)).toBe(1);
+  });
+
+  it("is null beyond the captured tiles, well above them, or without tiles", () => {
+    expect(tileAt(3248, tiles)).toBeNull();
+    expect(tileAt(0, tiles)).toBeNull();
+    expect(tileAt(10, [])).toBeNull();
+    expect(tileAt(Number.NaN, tiles)).toBeNull();
   });
 });

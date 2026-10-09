@@ -3,12 +3,15 @@
 import { mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
-import { prefetchImages, proxiedSource } from "./image-proxy.ts";
+import { extractEmbeds, markRepresented } from "./embeds.ts";
+import { IMAGE_ENDPOINT, prefetchImages, proxiedSource } from "./image-proxy.ts";
+import { buildReferenceImages, buildRenderedImages, linkImages } from "./images.ts";
 import { buildManifest } from "./manifest.ts";
-import { buildMetrics } from "./metrics.ts";
+import { buildMetrics, buildRenderedCode, buildRenderedTables } from "./metrics.ts";
 import { collectPageFacts } from "./page-facts.ts";
 import { injectBase } from "./reference.ts";
-import { TILE_PATTERN, planTiles, tileName } from "./tiles.ts";
+import { collectReferenceImages } from "./reference-facts.ts";
+import { TILE_PATTERN, planTiles, tileAt, tileName } from "./tiles.ts";
 
 export const TILE_HEIGHT = 1600;
 const READY_TIMEOUT_MS = 60_000;
@@ -18,9 +21,10 @@ const SELECTORS = { root: "[data-render-article]", column: ".reader-body" };
 
 /** @typedef {import("playwright").Browser} Browser */
 /** @typedef {import("./image-proxy.ts").ImageOutcome} ImageOutcome */
+/** @typedef {import("./images.ts").PayloadImage} PayloadImage */
 /**
  * @typedef {{
- *   browser: Browser; origin: string; slug: string; id: string; title: string; finalUrl: string; imageUrls: string[];
+ *   browser: Browser; origin: string; slug: string; id: string; title: string; finalUrl: string; imageUrls: string[]; imageNodes: PayloadImage[];
  *   snapshotGz: Uint8Array; charset: string | undefined; outDir: string; key: string;
  *   width: number; maxTiles: number; maxReferenceTiles: number; fetchImage: (src: string) => Promise<ImageOutcome>;
  * }} CaptureInput
@@ -83,12 +87,39 @@ async function shoot(page, tiles, side, outDir, x, width, scriptable, warnings) 
 
 const viewportOf = (width) => ({ width, height: TILE_HEIGHT, deviceScaleFactor: 1 });
 
+/**
+ * Runs in the harness page before its scripts: records which proxied source each blob: URL holds
+ * (window.__renderImageSources), so the page facts can name a loaded image by its original URL. The
+ * harness turns every proxy answer into a blob with Response.blob() and URL.createObjectURL().
+ */
+function recordBlobSources(endpoint) {
+  const sources = new Map();
+  const blobSource = new WeakMap();
+  Object.defineProperty(window, "__renderImageSources", { value: sources });
+  const readBlob = Response.prototype.blob;
+  Response.prototype.blob = async function blob() {
+    const result = await readBlob.call(this);
+    const url = new URL(this.url, location.href);
+    const src = url.pathname === endpoint ? url.searchParams.get("src") : null;
+    if (src) blobSource.set(result, src);
+    return result;
+  };
+  const createObjectURL = URL.createObjectURL.bind(URL);
+  URL.createObjectURL = (object) => {
+    const url = createObjectURL(object);
+    const src = blobSource.get(object);
+    if (src) sources.set(url, src);
+    return url;
+  };
+}
+
 /** @param {CaptureInput} input */
 async function captureRendered(input, warnings) {
   await prefetchImages(input.fetchImage, input.imageUrls);
   const context = await input.browser.newContext({ viewport: { width: input.width, height: TILE_HEIGHT }, deviceScaleFactor: 1, colorScheme: "light" });
   try {
     const page = await context.newPage();
+    await page.addInitScript(recordBlobSources, IMAGE_ENDPOINT);
     const failures = [];
     let fetches = 0;
     await page.route("**/__render/image?*", async (route) => {
@@ -129,7 +160,12 @@ async function captureRendered(input, warnings) {
     const x = Math.max(0, Math.floor(facts.box.left));
     const tiles = await shoot(page, plan.tiles, "rendered", input.outDir, x, Math.max(1, Math.min(input.width - x, Math.ceil(facts.box.width))), true, warnings);
     const metrics = buildMetrics(facts, input.title, failures.map((f) => f.src));
-    return { tiles, height: Math.round(facts.box.height), truncated: plan.truncated, metrics };
+    const images = buildRenderedImages(facts.images.map((image) => ({ ...image, tile: tileAt(image.top, plan.tiles) })), input.imageNodes);
+    const tables = buildRenderedTables(facts.tables.map(({ top, ...table }) => ({ ...table, tile: tileAt(top, plan.tiles) })));
+    const code = buildRenderedCode(facts.code.map((block) => ({ text: block.text, tile: tileAt(block.top, plan.tiles) })));
+    // What the reader shows that an embed can be recognised by: its links, media and (original) image URLs.
+    const shownUrls = [...facts.links, ...facts.media, ...images.map((image) => image.src).filter(Boolean)];
+    return { tiles, height: Math.round(facts.box.height), truncated: plan.truncated, metrics, images, tables, code, shownUrls };
   } finally {
     await context.close();
   }
@@ -146,14 +182,14 @@ function decodeSnapshot(bytes, charset, warnings) {
   }
 }
 
-/** @param {CaptureInput} input */
-async function captureReference(input, warnings) {
+/** @param {CaptureInput} input @param {string} snapshotHtml */
+async function captureReference(input, snapshotHtml, warnings) {
   const context = await input.browser.newContext({ viewport: { width: input.width, height: TILE_HEIGHT }, deviceScaleFactor: 1, colorScheme: "light", javaScriptEnabled: false });
   try {
     const page = await context.newPage();
     let failedRequests = 0;
     page.on("requestfailed", () => { failedRequests += 1; });
-    const html = injectBase(decodeSnapshot(gunzipSync(input.snapshotGz), input.charset, warnings), input.finalUrl);
+    const html = injectBase(snapshotHtml, input.finalUrl);
     try {
       await page.setContent(html, { waitUntil: "load", timeout: REFERENCE_LOAD_TIMEOUT_MS });
     } catch (error) {
@@ -162,8 +198,11 @@ async function captureReference(input, warnings) {
     }
     const height = await page.evaluate(() => Math.max(document.documentElement.scrollHeight, document.body?.scrollHeight ?? 0));
     const plan = planTiles(0, height, TILE_HEIGHT, input.maxReferenceTiles);
+    // Before the tiles: shooting scrolls the page, and the facts are in page coordinates either way.
+    const facts = await page.evaluate(collectReferenceImages);
+    const images = buildReferenceImages(facts.images.map((image) => ({ ...image, tile: tileAt(image.top, plan.tiles) })), facts.base);
     const tiles = await shoot(page, plan.tiles, "reference", input.outDir, 0, input.width, false, warnings);
-    return { tiles, height: Math.round(height), truncated: plan.truncated, failedRequests };
+    return { tiles, height: Math.round(height), truncated: plan.truncated, failedRequests, images };
   } finally {
     await context.close();
   }
@@ -174,8 +213,13 @@ export async function captureCase(input) {
   clearCase(input.outDir);
   const warnings = [];
   const rendered = await captureRendered(input, warnings);
-  const reference = await captureReference(input, warnings);
-  const manifest = buildManifest({ slug: input.slug, id: input.id, url: input.finalUrl, key: input.key, capturedAt: new Date(), viewport: viewportOf(input.width), rendered, reference, warnings });
+  const snapshotHtml = decodeSnapshot(gunzipSync(input.snapshotGz), input.charset, warnings);
+  const reference = await captureReference(input, snapshotHtml, warnings);
+  const embeds = markRepresented(extractEmbeds(snapshotHtml, input.finalUrl), rendered.shownUrls);
+  const manifest = buildManifest({
+    slug: input.slug, id: input.id, url: input.finalUrl, key: input.key, capturedAt: new Date(), viewport: viewportOf(input.width),
+    rendered, reference: { ...reference, images: linkImages(reference.images, rendered.images) }, embeds, warnings,
+  });
   writeFileSync(join(input.outDir, "manifest.json"), `${JSON.stringify(manifest, null, 2)}\n`);
   return manifest;
 }

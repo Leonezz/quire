@@ -1,14 +1,17 @@
 // The policy without any CLI: config + flags resolution, the cache key's sensitivity to the policy
-// and its models, and judgeCase under single / screen-then-confirm / both with fake backends.
+// and its models, and judgeCase under single / screen-then-confirm / both with fake backends. The
+// fakes answer in text mode, whose verdicts (since rubric v6) are computed from the valid issues:
+// an answer's own verdict field is ignored. Two opinions are cross-confirmed (merge.ts, tested in
+// merge.test.ts); text mode has no capture facts, so a one-sided major issue is always downgraded.
 import { describe, expect, it } from "vitest";
 import { BackendRunError, type BackendSpec, type JudgeBackend } from "./backends/types";
-import { cacheKey, isJudged, type JudgedIssue } from "./cache";
+import { cacheKey, isJudged } from "./cache";
 import { backendsNeeded, describePolicy, resolveConcurrency, resolvePolicy, VERDICTS as CONFIG_VERDICTS } from "./policy-config.mjs";
-import { judgeCase, parseEffectivePolicy, policyBackends, policyKey, unionIssues, type EffectivePolicy } from "./policy";
+import { judgeCase, parseEffectivePolicy, policyBackends, policyKey, type EffectivePolicy } from "./policy";
 import { RUBRIC_VERSION, TEXT_RUBRIC_VERSION, VERDICTS } from "./rubric";
 
-const CONFIG = { policy: "screen-then-confirm", screen: { backend: "claude", model: "haiku" }, confirm: { backend: "codex", model: "default" }, escalateOn: ["MINOR", "MAJOR"], escalateOnMajorIssue: true, concurrency: 3 };
-const SCREEN: EffectivePolicy = { policy: "screen-then-confirm", screen: { backend: "claude", model: "haiku" }, confirm: { backend: "codex", model: "default" }, escalateOn: ["MINOR", "MAJOR"], escalateOnMajorIssue: true };
+const CONFIG = { policy: "screen-then-confirm", screen: { backend: "claude", model: "haiku" }, confirm: { backend: "codex", model: "default" }, escalateOn: ["MINOR", "MAJOR"], concurrency: 3 };
+const SCREEN: EffectivePolicy = { policy: "screen-then-confirm", screen: { backend: "claude", model: "haiku" }, confirm: { backend: "codex", model: "default" }, escalateOn: ["MINOR", "MAJOR"] };
 const SINGLE: EffectivePolicy = { policy: "single", judge: { backend: "codex", model: "default" } };
 const BOTH: EffectivePolicy = { policy: "both", backends: [{ backend: "claude", model: "haiku" }, { backend: "codex", model: "default" }] };
 
@@ -52,6 +55,7 @@ describe("resolvePolicy (config.json + flags)", () => {
     ["a bad escalateOn", { ...CONFIG, escalateOn: ["FAIL"] }, {}, /escalateOn must be a non-empty list/],
     ["an empty escalateOn", { ...CONFIG, escalateOn: [] }, {}, /escalateOn must be a non-empty list/],
     ["a non-object config", "nope", {}, /must be a JSON object/],
+    ["the retired escalateOnMajorIssue", { ...CONFIG, escalateOnMajorIssue: true }, {}, /escalateOnMajorIssue is gone since rubric v6.*Remove the key/],
   ])("rejects %s with what to fix", (_label, config, flags, message) => {
     expect(() => resolvePolicy(config as never, flags as never)).toThrow(message);
   });
@@ -85,6 +89,7 @@ describe("parseEffectivePolicy (JUDGE_POLICY)", () => {
     ["a bad spec", JSON.stringify({ policy: "single", judge: { backend: "gemini", model: "x" } }), /judge is not a/],
     ["a bad escalateOn", JSON.stringify({ ...SCREEN, escalateOn: ["NOPE"] }), /escalateOn must be/],
     ["one backend for both", JSON.stringify({ policy: "both", backends: [SINGLE.judge] }), /must name two backends/],
+    ["the retired escalateOnMajorIssue", JSON.stringify({ ...SCREEN, escalateOnMajorIssue: true }), /escalateOnMajorIssue is gone since rubric v6/],
   ])("rejects %s", (_label, json, message) => {
     expect(() => parseEffectivePolicy(json)).toThrow(message);
   });
@@ -93,15 +98,13 @@ describe("parseEffectivePolicy (JUDGE_POLICY)", () => {
 describe("policyKey", () => {
   it("names the policy and every backend/model, so any change re-judges", () => {
     const key = (effective: EffectivePolicy) => cacheKey("src", "md", RUBRIC_VERSION, policyKey(effective));
-    expect(policyKey(SCREEN)).toBe("screen-then-confirm claude/haiku > codex/default on MAJOR,MINOR,major-issue");
-    expect(policyKey({ ...SCREEN, escalateOnMajorIssue: false })).toBe("screen-then-confirm claude/haiku > codex/default on MAJOR,MINOR");
+    expect(policyKey(SCREEN)).toBe("screen-then-confirm claude/haiku > codex/default on MAJOR,MINOR");
     expect(policyKey(SINGLE)).toBe("single codex/default");
     expect(policyKey(BOTH)).toBe("both claude/haiku + codex/default");
     const base = key(SCREEN);
     expect(key({ ...SCREEN })).toBe(base);
     expect(key({ ...SCREEN, escalateOn: ["MAJOR", "MINOR"] })).toBe(base);
     expect(key({ ...SCREEN, escalateOn: ["MAJOR"] })).not.toBe(base);
-    expect(key({ ...SCREEN, escalateOnMajorIssue: false })).not.toBe(base);
     expect(key({ ...SCREEN, screen: { backend: "claude", model: "sonnet" } })).not.toBe(base);
     expect(key({ ...SCREEN, confirm: { backend: "codex", model: "gpt-5.6" } })).not.toBe(base);
     expect(key({ ...SCREEN, screen: { backend: "codex", model: "haiku" } })).not.toBe(base);
@@ -113,19 +116,11 @@ describe("policyKey", () => {
   });
 });
 
-describe("unionIssues", () => {
-  const issue = (kind: JudgedIssue["kind"], evidence: string, note = "n"): JudgedIssue => ({ kind, severity: "minor", evidence, note, verified: true });
-  it("keeps the first list's order and adds the second's issues not already there by kind + evidence", () => {
-    expect(unionIssues([issue("layout", "a"), issue("tables", "b")], [issue("layout", "a", "other note"), issue("layout", "c"), issue("tables", "b")])).toEqual([issue("layout", "a"), issue("tables", "b"), issue("layout", "c")]);
-    expect(unionIssues([], [])).toEqual([]);
-  });
-});
-
 describe("judgeCase under a policy", () => {
   const input = { slug: "s", url: "https://x.test/p", source: "# Title\n\nBy Ada\n\nBody text.", extracted: "# Title\n\nBody text.", truncated: { source: false, extracted: false } };
   type Answer = { verdict: string; issues: { kind: string; severity: string; evidence: string; note: string }[]; summary: string };
   const answer = (verdict: string, issues: Answer["issues"] = []): Answer => ({ verdict, issues, summary: `${verdict} says` });
-  const issue = (kind: string, evidence: string) => ({ kind, severity: "minor", evidence, note: "n" });
+  const issue = (kind: string, evidence: string, severity = "minor") => ({ kind, severity, evidence, note: "n" });
   type Script = Record<string, (() => Promise<Answer | string>) | undefined>;
 
   /** Fake backends keyed "backend/model": each call returns the scripted answer (or throws) and is counted. */
@@ -153,8 +148,8 @@ describe("judgeCase under a policy", () => {
     const result = await judgeCase(input, opts);
     expect(calls).toEqual(["codex/default"]);
     if (!isJudged(result)) throw new Error(result.error);
-    expect(result).toMatchObject({ slug: "s", model: "default", resolvedModel: "default-resolved", tokens: 100, verdict: "MINOR", summary: "MINOR says", judgedAt: "2026-09-23T12:00:00.000Z", resolution: { policy: "single", from: "codex", disputed: false } });
-    // Text mode: the key the text judge always wrote, so cached text results stay valid.
+    expect(result).toMatchObject({ slug: "s", model: "default", resolvedModel: "default-resolved", tokens: 100, verdict: "MINOR", layers: { content: "PASS", metadata: "MINOR", rendering: null }, summary: "MINOR says", judgedAt: "2026-09-23T12:00:00.000Z", resolution: { policy: "single", from: "codex", disputed: false } });
+    // Text mode: the text rubric's version (bumped for v6) with the policy, no visual part.
     expect(result.key).toBe(cacheKey(input.source, input.extracted, TEXT_RUBRIC_VERSION, policyKey(SINGLE)));
     expect(result.rubricVersion).toBe(TEXT_RUBRIC_VERSION);
     expect(result).not.toHaveProperty("mode");
@@ -181,41 +176,51 @@ describe("judgeCase under a policy", () => {
     expect(result.opinions?.[0]?.costUsd).toBe(0.01);
   });
 
-  it("screen-then-confirm: a screener MINOR is confirmed; the confirmer's opinion is final and a differing verdict is disputed", async () => {
-    const { calls, options: opts } = options(SCREEN, { "claude/haiku": async () => answer("MINOR", [issue("layout", "Body text.")]), "codex/default": async () => answer("MAJOR", [issue("missing_content", "By Ada")]) });
+  it("screen-then-confirm: a screener MINOR is confirmed and the two are cross-confirmed; differing opinion verdicts are disputed", async () => {
+    const { calls, options: opts } = options(SCREEN, { "claude/haiku": async () => answer("MINOR", [issue("layout", "Body text.")]), "codex/default": async () => answer("MAJOR", [issue("missing_content", "By Ada", "major")]) });
     const result = await judgeCase(input, opts);
     expect(calls).toEqual(["claude/haiku", "codex/default"]);
     if (!isJudged(result)) throw new Error(result.error);
-    expect(result).toMatchObject({ verdict: "MAJOR", summary: "MAJOR says", model: "default", resolvedModel: "default-resolved", tokens: 200, resolution: { policy: "screen-then-confirm", from: "codex", disputed: true } });
-    expect(result.issues.map((item) => item.kind)).toEqual(["missing_content"]);
+    // The confirmer's one-sided major has no fact behind it (text mode), so it counts as minor: the case is MINOR.
+    expect(result).toMatchObject({ verdict: "MINOR", layers: { content: "MINOR", metadata: "PASS", rendering: null }, summary: "MAJOR says", model: "default", resolvedModel: "default-resolved", tokens: 200, resolution: { policy: "screen-then-confirm", from: "merged", disputed: true } });
+    expect(result.issues.map((item) => `${item.kind}:${item.severity}:${item.origin}`)).toEqual(["missing_content:minor:one-sided-downgraded", "layout:minor:one-sided"]);
+    expect(result.issues[0]?.originalSeverity).toBe("major");
     expect(result.opinions?.map((opinion) => `${opinion.backend}:${opinion.verdict}`)).toEqual(["claude:MINOR", "codex:MAJOR"]);
   });
 
   it("screen-then-confirm: agreeing verdicts are not disputed, and escalateOn decides what escalates", async () => {
-    const agree = options(SCREEN, { "claude/haiku": async () => answer("MAJOR"), "codex/default": async () => answer("MAJOR") });
+    const agree = options(SCREEN, { "claude/haiku": async () => answer("MAJOR", [issue("tables", "Body text.", "major")]), "codex/default": async () => answer("MINOR", [issue("missing_content", "By Ada", "major")]) });
     const result = await judgeCase(input, agree.options);
     if (!isJudged(result)) throw new Error(result.error);
-    expect(result.resolution).toEqual({ policy: "screen-then-confirm", from: "codex", disputed: false });
-    const majorOnly = options({ ...SCREEN, escalateOn: ["MAJOR"] }, { "claude/haiku": async () => answer("MINOR"), "codex/default": async () => { throw new Error("must not be called"); } });
+    // Both computed MAJOR (the answers' own verdict fields disagree, and do not matter): not disputed. Neither major is matched or fact-supported, so both count as minor.
+    expect(result.resolution).toEqual({ policy: "screen-then-confirm", from: "merged", disputed: false });
+    expect(result.verdict).toBe("MINOR");
+    const majorOnly = options({ ...SCREEN, escalateOn: ["MAJOR"] }, { "claude/haiku": async () => answer("MINOR", [issue("layout", "Body text.")]), "codex/default": async () => { throw new Error("must not be called"); } });
     const minor = await judgeCase(input, majorOnly.options);
     expect(majorOnly.calls).toEqual(["claude/haiku"]);
     if (!isJudged(minor)) throw new Error(minor.error);
     expect(minor.resolution?.from).toBe("claude");
   });
 
-  it("screen-then-confirm: a PASS that lists a major issue escalates too (unless escalateOnMajorIssue is off)", async () => {
+  it("screen-then-confirm: a screener that says PASS but lists a valid major issue is MAJOR, so it escalates; an invalid major issue escalates nothing", async () => {
     const majorIssue = { kind: "missing_content", severity: "major", evidence: "Body text.", note: "the ending is gone" };
     const strict = options(SCREEN, { "claude/haiku": async () => answer("PASS", [majorIssue]), "codex/default": async () => answer("MAJOR", [majorIssue]) });
     const result = await judgeCase(input, strict.options);
     expect(strict.calls).toEqual(["claude/haiku", "codex/default"]);
     if (!isJudged(result)) throw new Error(result.error);
+    // Both report it: it counts once, as major.
     expect(result.verdict).toBe("MAJOR");
-    expect(result.resolution).toEqual({ policy: "screen-then-confirm", from: "codex", disputed: true });
-    const lenient = options({ ...SCREEN, escalateOnMajorIssue: false }, { "claude/haiku": async () => answer("PASS", [majorIssue]), "codex/default": async () => { throw new Error("must not be called"); } });
+    expect(result.issues).toHaveLength(1);
+    expect(result.issues[0]).toMatchObject({ severity: "major", origin: "both" });
+    expect(result.opinions?.map((opinion) => opinion.verdict)).toEqual(["MAJOR", "MAJOR"]);
+    expect(result.resolution).toEqual({ policy: "screen-then-confirm", from: "merged", disputed: false });
+    const paraphrased = { ...majorIssue, evidence: "the page never said this" };
+    const lenient = options(SCREEN, { "claude/haiku": async () => answer("MAJOR", [paraphrased]), "codex/default": async () => { throw new Error("must not be called"); } });
     const kept = await judgeCase(input, lenient.options);
     expect(lenient.calls).toEqual(["claude/haiku"]);
     if (!isJudged(kept)) throw new Error(kept.error);
     expect(kept.verdict).toBe("PASS");
+    expect(kept.issues[0]).toMatchObject({ invalid: { reason: "evidence-not-verbatim" } });
   });
 
   it("screen-then-confirm: a failed screener fails the case before any confirmation", async () => {
@@ -227,7 +232,7 @@ describe("judgeCase under a policy", () => {
   });
 
   it("screen-then-confirm: a failed confirmer fails the case, keeping the screener's verdict in the error and its tokens in the total", async () => {
-    const { options: opts } = options(SCREEN, { "claude/haiku": async () => answer("MINOR"), "codex/default": async () => '{"verdict":"PASS"}' });
+    const { options: opts } = options(SCREEN, { "claude/haiku": async () => answer("MINOR", [issue("layout", "Body text.")]), "codex/default": async () => '{"verdict":"PASS"}' });
     const result = await judgeCase(input, opts);
     expect(isJudged(result)).toBe(false);
     if (isJudged(result)) throw new Error("expected a failure");
@@ -235,22 +240,31 @@ describe("judgeCase under a policy", () => {
     expect(result).toMatchObject({ model: "default", tokens: 200, rawAnswer: '{"verdict":"PASS"}' });
   });
 
-  it("both: both are always called; the more severe verdict wins, issues are the union, disagreement is disputed", async () => {
-    const { calls, options: opts } = options(BOTH, { "claude/haiku": async () => answer("MINOR", [issue("layout", "Body text."), issue("metadata", "By Ada")]), "codex/default": async () => answer("MAJOR", [issue("missing_content", "By Ada"), issue("layout", "Body text.")]) });
+  it("both: both are always called and cross-confirmed, the second in the confirmer's place; invalid issues are kept last and never count", async () => {
+    const { calls, options: opts } = options(BOTH, { "claude/haiku": async () => answer("MINOR", [issue("layout", "Body text."), issue("metadata", "By Ada"), issue("tables", "not in the page", "major")]), "codex/default": async () => answer("MAJOR", [issue("missing_content", "By Ada", "major"), issue("layout", "Body text.")]) });
     const result = await judgeCase(input, opts);
     expect(calls.sort()).toEqual(["claude/haiku", "codex/default"]);
     if (!isJudged(result)) throw new Error(result.error);
-    expect(result).toMatchObject({ verdict: "MAJOR", summary: "MAJOR says", model: "default", tokens: 200, resolution: { policy: "both", from: "codex", disputed: true } });
-    expect(result.issues.map((item) => `${item.kind}:${item.evidence}`)).toEqual(["missing_content:By Ada", "layout:Body text.", "metadata:By Ada"]);
-    expect(result.opinions).toHaveLength(2);
+    expect(result).toMatchObject({ verdict: "MINOR", summary: "MAJOR says", model: "default", tokens: 200, resolution: { policy: "both", from: "merged", disputed: true } });
+    expect(result.layers).toEqual({ content: "MINOR", metadata: "MINOR", rendering: null });
+    expect(result.issues.map((item) => `${item.kind}:${item.evidence}:${item.invalid ? "invalid" : item.origin}`)).toEqual(["layout:Body text.:both", "missing_content:By Ada:one-sided-downgraded", "metadata:By Ada:one-sided", "tables:not in the page:invalid"]);
+    expect(result.opinions?.map((opinion) => opinion.verdict)).toEqual(["MINOR", "MAJOR"]);
   });
 
-  it("both: on a tie the first backend decides and nothing is disputed", async () => {
+  it("both: the merged layers can be worse than either opinion's alone", async () => {
+    const { options: opts } = options(BOTH, { "claude/haiku": async () => answer("PASS", [issue("metadata", "By Ada")]), "codex/default": async () => answer("PASS", [issue("layout", "Body text.")]) });
+    const result = await judgeCase(input, opts);
+    if (!isJudged(result)) throw new Error(result.error);
+    expect(result.layers).toEqual({ content: "MINOR", metadata: "MINOR", rendering: null });
+    expect(result).toMatchObject({ verdict: "MINOR", resolution: { from: "merged", disputed: false } });
+  });
+
+  it("both: agreeing clean opinions merge to PASS, undisputed, named after the second backend", async () => {
     const { options: opts } = options(BOTH, { "claude/haiku": async () => answer("PASS"), "codex/default": async () => answer("PASS") });
     const result = await judgeCase(input, opts);
     if (!isJudged(result)) throw new Error(result.error);
-    expect(result.resolution).toEqual({ policy: "both", from: "claude", disputed: false });
-    expect(result.model).toBe("haiku");
+    expect(result.resolution).toEqual({ policy: "both", from: "merged", disputed: false });
+    expect(result).toMatchObject({ verdict: "PASS", model: "default" });
   });
 
   it("both: either failing fails the case and says what the other said", async () => {
@@ -258,7 +272,7 @@ describe("judgeCase under a policy", () => {
     const one = await judgeCase(input, second.options);
     if (isJudged(one)) throw new Error("expected a failure");
     expect(one.error).toBe("codex/default: codex exec exceeded 1000 ms and was killed (claude/haiku said PASS)");
-    const first = options(BOTH, { "claude/haiku": async () => "not json", "codex/default": async () => answer("MINOR") });
+    const first = options(BOTH, { "claude/haiku": async () => "not json", "codex/default": async () => answer("PASS", [issue("layout", "Body text.")]) });
     const other = await judgeCase(input, first.options);
     if (isJudged(other)) throw new Error("expected a failure");
     expect(other.error).toMatch(/^claude\/haiku: judge answer rejected: not JSON .* \(codex\/default said MINOR\)$/);

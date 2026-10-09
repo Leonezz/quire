@@ -1,34 +1,50 @@
-// The visual mode without any CLI: loading a capture (and failing loudly without one), capping the
-// tiles per call, the v4 prompt (images paragraph, omitted tiles, facts, rendered text), the schema
-// and parser with `where`, the cache key's sensitivity, and one opinion with a fake backend.
+// The visual mode without any CLI: loading a capture (and failing loudly without one or with a stale
+// one), capping the tiles per call, the v6 prompt (the standard's boundary, layers and severity, the
+// images paragraph, facts and inventories, rendered text), the v6 schema and parser, the cache key's
+// sensitivity, and one opinion with a fake backend (validated issues, computed layer verdicts).
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { RenderManifest, RenderMetrics } from "../render/types";
+import type { Embed, ReferenceImage, RenderedCode, RenderedImage, RenderedTable, RenderManifest, RenderMetrics } from "../render/types";
 import type { JudgeBackend } from "./backends/types";
 import { cacheKey, isJudged } from "./cache";
 import { captureExists, checkCaptures, renderCommand } from "./captures.mjs";
 import { askOpinion } from "./judge-case";
 import { caseKey, judgeCase, policyKey, type EffectivePolicy } from "./policy";
 import { MODES, resolveMaxImages, resolveMode } from "./policy-config.mjs";
-import { AnswerFormatError, buildPrompt, buildVisualPrompt, evidenceOccurs, parseAnswer, RUBRIC_VERSION, TEXT_RUBRIC_VERSION, VISUAL_ANSWER_SCHEMA, VISUAL_DIMENSIONS, type PromptInput } from "./rubric";
+import { AnswerFormatError, buildPrompt, evidenceOccurs, LAYERS, parseAnswer, RUBRIC_VERSION, TEXT_RUBRIC_VERSION, VISUAL_ANSWER_SCHEMA, type PromptInput } from "./rubric";
+import { ARTICLE_BOUNDARY, buildVisualPrompt, INVENTORY_MAX, SEVERITY_RULES, SOURCES_OF_TRUTH, THREE_LAYERS } from "./visual-prompt";
 import { DEFAULT_MAX_IMAGES, JUDGE_MODES, loadCapture, MissingCaptureError, planImages, type VisualInput } from "./visual";
 
 const metrics = (overrides: Partial<RenderMetrics> = {}): RenderMetrics => ({
   images: { total: 4, broken: 0, brokenSrc: [] },
   overflow: { count: 0, samples: [] },
   rawMarkup: { count: 0, samples: [] },
-  mathErrors: 0, unmarkedLists: 0, emptyCellTables: { count: 0, samples: [] }, emptyHeadings: 0, duplicateTitleHeadings: 0,
+  mathErrors: 0, unmarkedLists: 0, collapsedCode: 0, emptyCellTables: { count: 0, samples: [] }, emptyHeadings: 0, duplicateTitleHeadings: 0,
   counts: { codeBlocks: 2, tables: 1, figures: 3, lists: 4, footnotes: 0, headings: 6, words: 2400 },
   height: 14_000,
   ...overrides,
 });
 const tiles = (side: string, count: number) => Array.from({ length: count }, (_, index) => `/cap/${side}-${String(index + 1).padStart(2, "0")}.png`);
+const readerImages = (): RenderedImage[] => [
+  { id: "r1", tile: 1, src: "https://x.test/a.png", alt: "A diagram", caption: "Figure 1: the setup", broken: false },
+  { id: "r2", tile: 3, src: "https://x.test/b.png", alt: "", caption: "", broken: true },
+];
+const originalImages = (): ReferenceImage[] => [
+  { id: "o1", tile: 1, src: "https://x.test/a.png", candidates: [], alt: "A diagram", width: 640, height: 420, matchedBy: "r1" },
+  { id: "o2", tile: 4, src: "https://x.test/c.png", candidates: ["https://x.test/c@2x.png"], alt: "Loss curve", width: 800, height: 500, matchedBy: null },
+];
+const embeds = (): Embed[] => [
+  { kind: "iframe", tag: "iframe", src: "https://www.youtube.com/embed/v", host: "www.youtube.com", context: "Training setup and the results we got from it", representedInReader: false },
+  { kind: "tweet", tag: "blockquote", src: "https://twitter.com/a/status/1", host: "twitter.com", context: "As announced", representedInReader: true },
+];
+const tables = (): RenderedTable[] => [{ id: "t1", tile: 4, rows: 5, cols: 4, cells: 20, emptyCells: 13, head: "Metric | Chrome UX Report | PageSpeed" }, { id: "t2", tile: 5, rows: 3, cols: 2, cells: 4, emptyCells: 0, head: "Language | Tokens" }];
+const codeBlocks = (): RenderedCode[] => [{ id: "c1", tile: 2, lines: 6, chars: 140, collapsed: false, head: "import {onCLS} from 'web-vitals';" }, { id: "c2", tile: 3, lines: 1, chars: 212, collapsed: true, head: "def clipped_error(x): return tf.select(tf.abs(x) < 1.0," }];
 const visual = (overrides: Partial<VisualInput> = {}): VisualInput => ({
   manifestKey: "mk-1", renderedTiles: tiles("rendered", 8), referenceTiles: tiles("reference", 6), metrics: metrics(), warnings: [],
   truncated: { rendered: false, reference: false }, failedReferenceRequests: 0, renderedText: "Intro paragraph.\n\nThe figure caption reads Figure 2.", renderedTextTruncated: false,
-  viewport: { width: 1280, height: 1600 }, ...overrides,
+  viewport: { width: 1280, height: 1600 }, images: { rendered: readerImages(), reference: originalImages() }, embeds: embeds(), tables: tables(), code: codeBlocks(), ...overrides,
 });
 const input = (overrides: Partial<PromptInput> = {}): PromptInput => ({ slug: "s", url: "https://x.test/p", source: "# Title\n\nBy Ada\n\nBody text.", extracted: "# Title\n\nBody text.", truncated: { source: false, extracted: false }, visual: visual(), ...overrides });
 const SINGLE: EffectivePolicy = { policy: "single", judge: { backend: "codex", model: "default" } };
@@ -61,8 +77,9 @@ describe("loadCapture", () => {
   afterEach(() => { if (dir) rmSync(dir, { recursive: true, force: true }); });
   const manifest = (slug: string, extra: Partial<RenderManifest> = {}): RenderManifest => ({
     slug, id: "id", url: "https://x.test/p", key: "mk-real", capturedAt: "2026-10-08T00:00:00.000Z", viewport: { width: 1280, height: 1600, deviceScaleFactor: 1 },
-    rendered: { tiles: ["rendered-01.png", "rendered-02.png"], height: 3000, truncated: false, textPath: "rendered.txt", metrics: metrics({ images: { total: 2, broken: 1, brokenSrc: ["https://x.test/a.png"] } }) },
-    reference: { tiles: ["reference-01.png"], height: 1500, truncated: true, failedRequests: 2 },
+    rendered: { tiles: ["rendered-01.png", "rendered-02.png"], height: 3000, truncated: false, textPath: "rendered.txt", metrics: metrics({ images: { total: 2, broken: 1, brokenSrc: ["https://x.test/a.png"] } }), images: readerImages(), tables: tables(), code: codeBlocks() },
+    reference: { tiles: ["reference-01.png"], height: 1500, truncated: true, failedRequests: 2, images: originalImages() },
+    embeds: embeds(),
     warnings: ["images timed out"], ...extra,
   });
   const write = (slug: string, body: unknown, files = ["rendered-01.png", "rendered-02.png", "reference-01.png", "rendered.txt"]) => {
@@ -80,6 +97,8 @@ describe("loadCapture", () => {
     expect(loaded.referenceTiles).toEqual([join(root, "s", "reference-01.png")]);
     expect(loaded).toMatchObject({ manifestKey: "mk-real", truncated: { rendered: false, reference: true }, failedReferenceRequests: 2, warnings: ["images timed out"], renderedTextTruncated: true, viewport: { width: 1280, height: 1600 } });
     expect(loaded.metrics.images.brokenSrc).toEqual(["https://x.test/a.png"]);
+    expect(loaded.images).toEqual({ rendered: readerImages(), reference: originalImages() });
+    expect(loaded.embeds).toEqual(embeds());
     expect(captureExists(root, "s")).toBe(true);
   });
 
@@ -96,6 +115,8 @@ describe("loadCapture", () => {
     ["a manifest without tiles", { ...manifest("s"), rendered: { metrics: metrics() } }, undefined, /rendered.tiles/],
     ["a missing tile file", manifest("s"), ["rendered-01.png", "reference-01.png", "rendered.txt"], /tile rendered-02.png is missing/],
     ["a missing rendered text", manifest("s"), ["rendered-01.png", "rendered-02.png", "reference-01.png"], /rendered.txt is missing/],
+    ["a capture from before the table and code inventories", (() => { const old = manifest("s"); return { ...old, rendered: { ...old.rendered, code: undefined } }; })(), undefined, /no table\/code inventories .* re-capture it/],
+    ["a capture from before the inventories", (() => { const { embeds: _embeds, ...old } = manifest("s"); return { ...old, rendered: { ...old.rendered, images: undefined } }; })(), undefined, /no image\/embed inventories .* re-capture it/],
   ])("treats %s as no capture", (_label, body, files, message) => {
     const root = write("s", body, files);
     expect(() => loadCapture(root, "s")).toThrow(MissingCaptureError);
@@ -129,18 +150,71 @@ describe("mode and maxImages (config.json + --mode)", () => {
   });
 });
 
-describe("buildVisualPrompt (rubric v4)", () => {
+describe("buildVisualPrompt (rubric v6)", () => {
   const prompt = (overrides: Partial<VisualInput> = {}, max = 10) => { const case_ = input({ visual: visual(overrides) }); return buildVisualPrompt(case_, planImages(case_.visual!, max)); };
 
-  it("adds the two dimensions and the v4 fold, and keeps the text rubric's seven", () => {
+  it("carries the standard: sources of truth, the boundary table, the three layers and the severity lists", () => {
     const text = prompt();
-    for (const line of VISUAL_DIMENSIONS) expect(text).toContain(line);
-    expect(text).toContain("8. Rendering — the reader page shows every element correctly: no raw markup, broken images, horizontal overflow, unrendered math, mangled tables, collapsed code.");
-    expect(text).toContain("9. Visual fidelity — the figures, tables, code and math the original shows are present and readable in the reader.");
-    expect(text).toContain("7. Element-fidelity");
-    expect(text).toContain("- MAJOR: a 0 on Completeness, Element-fidelity, Rendering or Visual fidelity.");
-    expect(text).toContain("- PASS: every dimension ≥ 1 and a total ≥ 15 of 18.");
-    expect(text).toContain("{ verdict, issues: [{ kind, severity, evidence, note, where }], summary }");
+    for (const line of [...SOURCES_OF_TRUTH, ...ARTICLE_BOUNDARY, ...THREE_LAYERS, ...SEVERITY_RULES]) expect(text).toContain(line);
+    expect(text).toContain("| Must keep (missing it is an issue) | Must drop (keeping it is a minor issue; dropping it is never an issue) |");
+    expect(text).toContain("| Body content that needs JavaScript to show — interactive examples, embedded videos or tweets, dynamic charts: the reader must show the thing itself, or at least a link to it or a placeholder for it | Copyright, licence and trademark footers |");
+    expect(text).toContain("| Callouts, notes, admonitions, key points | Author bio cards, avatar cards |");
+    expect(text).toContain("| metadata (the extractor) | Title, author, publication date |");
+    expect(text).toContain("The overall verdict is the worst of the three.");
+    expect(text).toContain("Measured facts: the FACTS below");
+    expect(text).toContain("An issue that contradicts a fact does not count.");
+  });
+
+  it("states the severity rules of the standard: title major, author/date minor, lost JS content major, boundary leftovers minor, dropped chrome and the reference's own defects not issues", () => {
+    const text = prompt();
+    expect(text).toContain("- the title is wrong (not this article's title, the site name or interface text mixed in, the wrong heading taken)");
+    expect(text).toContain("- the author or the publication date is missing or wrong (when the page clearly shows one)");
+    expect(text).toContain("- body content that needs JavaScript (an interactive example, an embed, a dynamic chart) is entirely gone from the reader, with not even a link or a placeholder");
+    expect(text).toContain("- content outside the boundary left in the body (an author card, a subscribe block, a licence footer)");
+    expect(text).toContain("- content outside the boundary that was dropped");
+    expect(text).toContain("- a defect the original page has itself (the REFERENCE tiles show it broken the same way)");
+    expect(text).toContain("- differences in how the markdown is written, as long as the reader displays it correctly");
+    expect(text.indexOf("major — information is lost")).toBeLessThan(text.indexOf("- the title is wrong"));
+    expect(text.indexOf("- the title is wrong")).toBeLessThan(text.indexOf("minor — the information is all there"));
+    expect(text.indexOf("minor — the information is all there")).toBeLessThan(text.indexOf("- the author or the publication date"));
+    expect(text).not.toMatch(/Score the|dimension|Fold the scores/);
+  });
+
+  it("lists the reader images, the original images with their matches and the embeds with ids", () => {
+    const text = prompt();
+    expect(text).toContain('- r1 (tile 1, alt "A diagram", caption "Figure 1: the setup")');
+    expect(text).toContain("- r2 (tile 3, BROKEN)");
+    expect(text).toContain('- o1 (tile 1, 640×420, alt "A diagram") ↔ r1');
+    expect(text).toContain('- o2 (tile 4, 800×500, alt "Loss curve") — not in the reader');
+    expect(text).toContain('- e1 iframe www.youtube.com, after "Training setup and the results we got from it", shown in reader: no');
+    expect(text).toContain('- e2 tweet <blockquote> twitter.com, after "As announced", shown in reader: yes');
+    expect(text).toContain('- t1 (tile 4, 5×4, 13 of 20 cells empty — EMPTY CELLS, first row "Metric | Chrome UX Report | PageSpeed")');
+    expect(text).toContain('- t2 (tile 5, 3×2, 0 of 4 cells empty, first row "Language | Tokens")');
+    expect(text).toContain('- c1 (tile 2) 6 lines: "import {onCLS} from \'web-vitals\';"');
+    expect(text).toContain('- c2 (tile 3) shown as ONE line of 212 chars: "def clipped_error(x): return tf.select(tf.abs(x) < 1.0,"');
+    expect(text).toContain("- Code blocks shown as one long line (several lines run together): 0.");
+    const empty = prompt({ images: { rendered: [], reference: [] }, embeds: [], tables: [], code: [] });
+    expect(empty).toContain("- (none: the reader page shows no tables)");
+    expect(empty).toContain("- (none: the reader page shows no code blocks)");
+    expect(empty).toContain("- (none: the reader page shows no images)");
+    expect(empty).toContain("- (none: the snapshot has no JavaScript or plugin content)");
+    const many = prompt({ images: { rendered: Array.from({ length: INVENTORY_MAX + 3 }, (_, i) => ({ ...readerImages()[0]!, id: `r${i + 1}` })), reference: [] } });
+    expect(many).toContain(`- r${INVENTORY_MAX} (`);
+    expect(many).not.toContain(`- r${INVENTORY_MAX + 1} (`);
+    expect(many).toContain("- … and 3 more reader images not listed");
+  });
+
+  it("tells the model how refs work: image issues cite ids, missing needs an unmatched original, unshown embeds are major content issues", () => {
+    const text = prompt();
+    expect(text).toContain("- refs: the ids of the images (r…, o…), embeds (e…), tables (t…) and code blocks (c…) the issue is about, from the inventories above; [] when it is about none. An issue about a specific image, embed, table or code block must cite its id.");
+    expect(text).toContain("Claiming an image is missing requires an original image id that has no match");
+    expect(text).toContain("- Every embed that belongs to the article and is not shown in the reader (shown in reader: no) is a major content issue citing its e id.");
+    expect(text).toContain("{ issues: [{ layer, kind, severity, subject, evidence, where, refs, note }], summary }");
+    expect(text).toContain("- subject: for a metadata issue, what it is about: \"title\", \"author\" or \"date\" — every metadata issue must name it; null for every other issue. A wrong title is a major metadata issue; a missing or wrong author or date is a minor metadata issue, never a content issue.");
+    expect(text).toContain("a missing or wrong byline or date is a metadata issue, never missing content");
+    expect(text).toContain("- Absent from EXTRACTED or incomplete there → content (the extractor must be fixed). Examples: a missing figure; a missing callout; ✓/✗ icons that were not extracted, so the table cells are empty; an embed left without even a link.");
+    expect(text).toContain("- Intact in EXTRACTED but shown wrong by the reader → rendering (the reader must be fixed). Examples: an image that fails to load; a formula that is not typeset; code whose line breaks are in EXTRACTED but lost on display; a list shown without markers; content wider than the column.");
+    expect(text).toContain("Do not grade: the verdicts are computed from your issues.");
   });
 
   it("explains the tiles, their attachment order, and which were omitted by the cap", () => {
@@ -186,44 +260,52 @@ describe("buildVisualPrompt (rubric v4)", () => {
   it("is not the text prompt, which stays free of images", () => {
     const text = buildPrompt(input({ visual: undefined }));
     expect(text).not.toContain("RENDERED");
-    expect(text).not.toContain("8. Rendering");
+    expect(text).not.toContain("ARTICLE BOUNDARY");
     expect(() => buildVisualPrompt(input({ visual: undefined }), planImages(visual()))).toThrow(/has no render capture/);
   });
 });
 
-describe("the visual answer: schema and parser with where", () => {
-  const issue = (where: unknown, extra: Record<string, unknown> = {}) => ({ kind: "images", severity: "major", evidence: "Figure 2", note: "the figure is a broken image", where, ...extra });
-  const answer = (...issues: unknown[]) => JSON.stringify({ verdict: "MAJOR", issues, summary: "A figure is broken." });
-  const sent = { rendered: 7, reference: 3 };
+describe("the visual answer (v6): schema and parser", () => {
+  const issue = (extra: Record<string, unknown> = {}) => ({ layer: "rendering", kind: "images", severity: "major", subject: null, evidence: "Figure 2", note: "the figure is a broken image", where: { image: "rendered", tile: 3 }, refs: ["r2"], ...extra });
+  const answer = (...issues: unknown[]) => JSON.stringify({ issues, summary: "A figure is broken." });
 
-  it("requires where on every issue, as null or a tile reference (strict structured output)", () => {
+  it("has no verdict and requires every issue property (strict structured output), where nullable, refs a list", () => {
+    expect(VISUAL_ANSWER_SCHEMA.required).toEqual(["issues", "summary"]);
+    expect(VISUAL_ANSWER_SCHEMA.properties).not.toHaveProperty("verdict");
     const item = VISUAL_ANSWER_SCHEMA.properties.issues.items;
-    expect(item.required).toEqual(["kind", "severity", "evidence", "note", "where"]);
+    expect(item.required).toEqual(["layer", "kind", "severity", "subject", "evidence", "where", "refs", "note"]);
+    expect(item.properties.subject.anyOf).toEqual([{ type: "null" }, { type: "string", enum: ["title", "author", "date"] }]);
+    expect(Object.keys(item.properties).sort()).toEqual([...item.required].sort());
+    expect(item.properties.layer.enum).toEqual([...LAYERS]);
     expect(item.properties.where.anyOf[0]).toEqual({ type: "null" });
     expect(item.properties.where.anyOf[1]).toMatchObject({ type: "object", additionalProperties: false, required: ["image", "tile"], properties: { image: { enum: ["rendered", "reference"] }, tile: { type: "integer", minimum: 1 } } });
+    expect(item.properties.refs).toMatchObject({ type: "array", items: { type: "string" } });
   });
 
-  it("accepts tile references within the tiles sent, and null", () => {
-    const parsed = parseAnswer(answer(issue({ image: "rendered", tile: 7 }), issue({ image: "reference", tile: 1 }), issue(null)), sent);
-    expect(parsed.issues.map((item) => item.where)).toEqual([{ image: "rendered", tile: 7 }, { image: "reference", tile: 1 }, null]);
+  it("accepts layer, tile references (attached or not: validation judges that), null where and refs, deduping refs", () => {
+    const parsed = parseAnswer(answer(issue(), issue({ where: { image: "reference", tile: 9 }, refs: ["o2", "o2", " "] }), issue({ layer: "content", where: null, refs: [] })), "visual");
+    expect(parsed.issues.map((item) => [item.layer, item.where, item.refs, item.subject])).toEqual([["rendering", { image: "rendered", tile: 3 }, ["r2"], null], ["rendering", { image: "reference", tile: 9 }, ["o2"], null], ["content", null, [], null]]);
+    expect(parseAnswer(answer(issue({ kind: "metadata", subject: "date" })), "visual").issues[0]?.subject).toBe("date");
+    expect(parsed).not.toHaveProperty("verdict");
   });
 
   it.each([
-    ["a missing where", answer({ kind: "images", severity: "major", evidence: "e", note: "n" }), /where is missing/],
-    ["a rendered tile past the ones sent", answer(issue({ image: "rendered", tile: 8 })), /tile 8 is not one of the 7 rendered tile/],
-    ["a reference tile past the ones sent", answer(issue({ image: "reference", tile: 4 })), /tile 4 is not one of the 3 reference/],
-    ["tile 0", answer(issue({ image: "rendered", tile: 0 })), /tile 0/],
-    ["a fractional tile", answer(issue({ image: "rendered", tile: 1.5 })), /tile 1.5/],
-    ["an unknown image", answer(issue({ image: "source", tile: 1 })), /image "source" is not rendered\|reference/],
-    ["extra keys in where", answer(issue({ image: "rendered", tile: 1, x: 3 })), /unexpected keys: x/],
-    ["a string where", answer(issue("rendered 3")), /neither null nor an object/],
+    ["a verdict (v6 answers have none)", JSON.stringify({ verdict: "MAJOR", issues: [], summary: "s" }), /unexpected keys: verdict/],
+    ["a missing layer", answer(issue({ layer: undefined })), /layer undefined is not one of content, metadata, rendering/],
+    ["an unknown layer", answer(issue({ layer: "display" })), /layer "display"/],
+    ["a missing where", answer((({ where: _where, ...rest }) => rest)(issue())), /where is missing/],
+    ["a missing refs", answer((({ refs: _refs, ...rest }) => rest)(issue())), /refs is missing/],
+    ["a missing subject", answer((({ subject: _subject, ...rest }) => rest)(issue())), /subject is missing/],
+    ["an unknown subject", answer(issue({ subject: "byline" })), /subject "byline" is not title\|author\|date\|null/],
+    ["refs that are not strings", answer(issue({ refs: [2] })), /refs is not a list of ids/],
+    ["tile 0", answer(issue({ where: { image: "rendered", tile: 0 } })), /tile 0 is not a positive integer/],
+    ["a fractional tile", answer(issue({ where: { image: "rendered", tile: 1.5 } })), /tile 1.5/],
+    ["an unknown image", answer(issue({ where: { image: "source", tile: 1 } })), /image "source" is not rendered\|reference/],
+    ["extra keys in where", answer(issue({ where: { image: "rendered", tile: 1, x: 3 } })), /unexpected keys: x/],
+    ["a string where", answer(issue({ where: "rendered 3" })), /neither null nor an object/],
   ])("rejects %s", (_label, text, message) => {
-    expect(() => parseAnswer(text, sent)).toThrow(AnswerFormatError);
-    expect(() => parseAnswer(text, sent)).toThrow(message);
-  });
-
-  it("text mode neither needs nor returns where", () => {
-    expect(parseAnswer(answer({ kind: "images", severity: "major", evidence: "e", note: "n" })).issues[0]).not.toHaveProperty("where");
+    expect(() => parseAnswer(text, "visual")).toThrow(AnswerFormatError);
+    expect(() => parseAnswer(text, "visual")).toThrow(message);
   });
 
   it("evidence counts as verbatim when it occurs in any of the texts, rendered text included", () => {
@@ -256,9 +338,12 @@ describe("a visual opinion with a fake backend", () => {
     id: "claude", model: "fake", preflight: async () => {},
     run: async ({ images, schema, prompt }) => { seen.push({ ...(images ? { images } : {}), schema, prompt }); return { raw, tokens: 30_000 }; },
   });
-  const good = JSON.stringify({ verdict: "MAJOR", issues: [{ kind: "images", severity: "major", evidence: "The figure caption reads Figure 2.", note: "broken figure", where: { image: "rendered", tile: 2 } }, { kind: "layout", severity: "minor", evidence: "Body text.", note: "n", where: null }], summary: "One figure is broken." });
+  const brokenFigure = { layer: "rendering", kind: "images", severity: "major", subject: null, evidence: "The figure caption reads Figure 2.", note: "broken figure", where: { image: "rendered", tile: 3 }, refs: ["r2"] };
+  const layoutNit = { layer: "content", kind: "layout", severity: "minor", subject: null, evidence: "Body text.", note: "n", where: null, refs: [] };
+  const claimsPresentMissing = { layer: "content", kind: "images", severity: "major", subject: null, evidence: "Body text.", note: "the diagram is missing", where: { image: "reference", tile: 1 }, refs: ["o1"] };
+  const good = JSON.stringify({ issues: [brokenFigure, layoutNit, claimsPresentMissing], summary: "One figure is broken." });
 
-  it("attaches the planned tiles, uses the visual schema, verifies quotes against the rendered text and keeps where", async () => {
+  it("attaches the planned tiles, uses the visual schema, validates every issue and computes the layer verdicts", async () => {
     const seen: { images?: string[]; schema?: object; prompt?: string }[] = [];
     const outcome = await askOpinion(fake(good, seen), input(), 1000);
     expect(seen[0]?.images).toEqual([...tiles("rendered", 7), ...tiles("reference", 3)]);
@@ -267,16 +352,54 @@ describe("a visual opinion with a fake backend", () => {
     if (!outcome.ok) throw new Error(outcome.failure.error);
     expect(outcome.opinion.images).toBe(10);
     expect(outcome.opinion.issues).toEqual([
-      { kind: "images", severity: "major", evidence: "The figure caption reads Figure 2.", note: "broken figure", where: { image: "rendered", tile: 2 }, verified: true },
-      { kind: "layout", severity: "minor", evidence: "Body text.", note: "n", where: null, verified: true },
+      { ...brokenFigure, verified: true },
+      { ...layoutNit, verified: true },
+      { ...claimsPresentMissing, verified: true, invalid: { reason: "contradicts-image-facts", detail: "o1 is in the reader as r1, not broken" } },
     ]);
+    // The invalid content-layer major issue does not count: content is MINOR from the layout nit alone.
+    expect(outcome.opinion.layers).toEqual({ content: "MINOR", metadata: "PASS", rendering: "MAJOR" });
+    expect(outcome.opinion.verdict).toBe("MAJOR");
   });
 
-  it("records a tile outside the ones sent as a failed opinion, with the raw answer", async () => {
-    const bad = good.replace('"tile":2', '"tile":9');
+  it("puts author and date issues in the metadata layer as minor and title issues as major, whatever the model said; a metadata issue without a subject is invalid", async () => {
+    const raw = JSON.stringify({ summary: "s", issues: [
+      { layer: "content", kind: "missing_content", severity: "major", subject: "author", evidence: "By Ada", note: "the author card is gone", where: null, refs: [] },
+      { layer: "metadata", kind: "metadata", severity: "minor", subject: "title", evidence: "# Title", note: "the title has the site name", where: null, refs: [] },
+      { layer: "metadata", kind: "metadata", severity: "major", subject: "date", evidence: "Body text.", note: "the date is missing", where: null, refs: [] },
+      { layer: "content", kind: "metadata", severity: "minor", subject: null, evidence: "By Ada", note: "something about metadata", where: null, refs: [] },
+    ] });
+    const outcome = await askOpinion(fake(raw, []), input(), 1000);
+    if (!outcome.ok) throw new Error(outcome.failure.error);
+    expect(outcome.opinion.issues.map((item) => [item.layer, item.kind, item.severity, item.originalSeverity, item.invalid?.reason])).toEqual([
+      ["metadata", "missing_content", "minor", "major", undefined],
+      ["metadata", "metadata", "major", "minor", undefined],
+      ["metadata", "metadata", "minor", "major", undefined],
+      ["metadata", "metadata", "minor", undefined, "metadata-without-subject"],
+    ]);
+    expect(outcome.opinion.layers).toEqual({ content: "PASS", metadata: "MAJOR", rendering: "PASS" });
+  });
+
+  it("sets the layer from the facts before the verdicts: a missing original figure is content, whatever the model said", async () => {
+    const raw = JSON.stringify({ summary: "s", issues: [{ layer: "rendering", kind: "images", severity: "major", subject: null, evidence: "Body text.", note: "the loss curve is missing", where: null, refs: ["o2"] }] });
+    const outcome = await askOpinion(fake(raw, []), input(), 1000);
+    if (!outcome.ok) throw new Error(outcome.failure.error);
+    expect(outcome.opinion.issues[0]).toMatchObject({ layer: "content", originalLayer: "rendering" });
+    expect(outcome.opinion.layers).toEqual({ content: "MAJOR", metadata: "PASS", rendering: "PASS" });
+  });
+
+  it("keeps an issue on a tile that was not attached as invalid instead of failing the opinion", async () => {
+    const bad = JSON.stringify({ issues: [{ ...brokenFigure, where: { image: "rendered", tile: 9 } }], summary: "s" });
     const outcome = await askOpinion(fake(bad, []), input(), 1000);
+    if (!outcome.ok) throw new Error(outcome.failure.error);
+    expect(outcome.opinion.issues[0]?.invalid).toEqual({ reason: "tile-not-sent", detail: "rendered tile 9 was not attached (7 rendered tiles sent)" });
+    expect(outcome.opinion.verdict).toBe("PASS");
+  });
+
+  it("records an answer with a verdict (the v5 shape) as a failed opinion, with the raw answer", async () => {
+    const old = JSON.stringify({ verdict: "MAJOR", issues: [], summary: "s" });
+    const outcome = await askOpinion(fake(old, []), input(), 1000);
     expect(outcome.ok).toBe(false);
-    if (!outcome.ok) expect(outcome.failure).toMatchObject({ error: expect.stringMatching(/tile 9 is not one of the 7 rendered/), rawAnswer: bad });
+    if (!outcome.ok) expect(outcome.failure).toMatchObject({ error: expect.stringMatching(/unexpected keys: verdict/), rawAnswer: old });
   });
 
   it("sends no images and the text schema in text mode", async () => {
@@ -285,11 +408,11 @@ describe("a visual opinion with a fake backend", () => {
     expect(seen[0]).not.toHaveProperty("images");
   });
 
-  it("judgeCase stamps the mode, the visual rubric and what of the capture it used", async () => {
+  it("judgeCase stamps the mode, the visual rubric, the layers and what of the capture it used, inventories included", async () => {
     const result = await judgeCase(input(), { policy: { policy: "single", judge: { backend: "claude", model: "fake" } }, backend: () => fake(good, []), timeoutMs: 1000, maxImages: 10 });
     if (!isJudged(result)) throw new Error(result.error);
-    expect(result).toMatchObject({ mode: "visual", rubricVersion: RUBRIC_VERSION, verdict: "MAJOR" });
-    expect(result.render).toMatchObject({ manifestKey: "mk-1", sent: { rendered: 7, reference: 3 }, tiles: { rendered: tiles("rendered", 8).map((path) => path.slice(5)) } });
+    expect(result).toMatchObject({ mode: "visual", rubricVersion: RUBRIC_VERSION, verdict: "MAJOR", layers: { content: "MINOR", metadata: "PASS", rendering: "MAJOR" } });
+    expect(result.render).toMatchObject({ manifestKey: "mk-1", sent: { rendered: 7, reference: 3 }, tiles: { rendered: tiles("rendered", 8).map((path) => path.slice(5)) }, images: { rendered: readerImages(), reference: originalImages() }, embeds: embeds() });
     expect(result.key).toBe(caseKey(input(), { policy: "single", judge: { backend: "claude", model: "fake" } }, 10));
   });
 });

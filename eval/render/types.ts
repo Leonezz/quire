@@ -18,6 +18,8 @@ export interface RenderMetrics {
   rawMarkup: { count: number; samples: { pattern: string; text: string }[] };
   /** Math that failed to render (KaTeX/Temml error nodes or `$…$` left as text). */
   mathErrors: number;
+  /** Code blocks shown as a single line of 100+ characters (see RenderedCode.collapsed). */
+  collapsedCode: number;
   /** Visible lists whose items show no bullet or number (the list style resolved to none). */
   unmarkedLists: number;
   /** Tables where at least a quarter of the body cells are empty (no text, no image or icon) — content such as ✓/✗ icons that did not survive; table is the 1-based index among the article's tables. */
@@ -29,6 +31,72 @@ export interface RenderMetrics {
   counts: { codeBlocks: number; tables: number; figures: number; lists: number; footnotes: number; headings: number; words: number };
   /** Total rendered height of the article in CSS pixels. */
   height: number;
+}
+
+/** One image the reader shows, in document order; `id` is how the judge refers to it ("r1", "r2", …). */
+export interface RenderedImage {
+  id: string;
+  /** The 1-based rendered tile the image's top falls in; null when it lies beyond the captured tiles. */
+  tile: number | null;
+  /** The original image URL (before the capture's proxy), alt text and figure caption, each possibly "". */
+  src: string;
+  alt: string;
+  caption: string;
+  broken: boolean;
+}
+
+/** One sizeable image on the original page (JavaScript off), in document order; `id` is "o1", "o2", …. */
+export interface ReferenceImage {
+  id: string;
+  tile: number | null;
+  /** The src and every lazy-load candidate (data-src, data-original, srcset entries…), absolute. */
+  src: string;
+  candidates: string[];
+  alt: string;
+  /** Laid-out size in CSS px (0 when the page left it unsized); images under 48 px on both sides are not listed. */
+  width: number;
+  height: number;
+  /** The reader image ("r…") judged to be the same picture by URL (file name stem, size suffixes and query stripped), or null. */
+  matchedBy: string | null;
+}
+
+/** Content the original page fills in with JavaScript or a plugin; found in the snapshot HTML, in document order. */
+export interface Embed {
+  kind: "iframe" | "video" | "audio" | "canvas" | "tweet" | "instagram" | "custom-element" | "noscript";
+  /** The tag name (lowercase), the src or data URL when there is one, and its host. */
+  tag: string;
+  src: string;
+  host: string;
+  /** Up to 160 characters of the nearest preceding heading or paragraph, so the judge can find where it belonged. */
+  context: string;
+  /** Whether the reader shows something for it: the embed's URL (or its host + path) appears as a link, image or media source in the reader. */
+  representedInReader: boolean;
+}
+
+/** One table the reader shows, in document order; `id` is "t1", "t2", …. */
+export interface RenderedTable {
+  id: string;
+  tile: number | null;
+  rows: number;
+  cols: number;
+  /** Body cells (td) and how many hold no text and no image/icon. */
+  cells: number;
+  emptyCells: number;
+  /** Up to 80 characters of the first row's text, so the judge can tell tables apart. */
+  head: string;
+}
+
+/** One code block the reader shows, in document order; `id` is "c1", "c2", …. */
+export interface RenderedCode {
+  id: string;
+  tile: number | null;
+  /** Lines and characters of the block's visible text. */
+  lines: number;
+  chars: number;
+  /** A block shown as a single line of 100 characters or more: almost always several lines run together. */
+  collapsed: boolean;
+  /** The first 80 characters of its text, verbatim, for locating it in EXTRACTED. */
+  head: string;
 }
 
 export interface RenderedSide {
@@ -48,9 +116,11 @@ export interface RenderManifest {
   key: string;
   capturedAt: string;
   viewport: { width: number; height: number; deviceScaleFactor: number };
-  rendered: RenderedSide & { textPath: string; metrics: RenderMetrics };
+  rendered: RenderedSide & { textPath: string; metrics: RenderMetrics; images: RenderedImage[]; tables: RenderedTable[]; code: RenderedCode[] };
   /** The original page from the snapshot: JavaScript off (the extractor never ran it), network on for CSS and images; it can lack styles or images. */
-  reference: RenderedSide & { failedRequests: number };
+  reference: RenderedSide & { failedRequests: number; images: ReferenceImage[] };
+  /** JavaScript or plugin content in the snapshot (iframes, videos, tweets, custom elements…); the standard (docs/design/eval-rubric.md §2) requires the reader to show each one that belongs to the article, or a link to it. */
+  embeds: Embed[];
   /** Anything that went wrong but still produced tiles (a timeout waiting for images, a reference that never finished loading). */
   warnings: string[];
 }

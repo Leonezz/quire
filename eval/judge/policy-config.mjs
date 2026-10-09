@@ -3,7 +3,9 @@
 // JUDGE_POLICY. policy.ts declares the TypeScript shape (EffectivePolicy) this produces.
 //
 //   single              one backend: --backend / --model, else config.confirm (the authoritative judge)
-//   screen-then-confirm config.screen judges first; a verdict in escalateOn is confirmed by config.confirm
+//   screen-then-confirm config.screen judges first; a verdict in escalateOn (default MINOR, MAJOR: not
+//                       PASS) gets a second opinion from config.confirm, cross-confirmed with the first. Verdicts are computed from the valid
+//                       issues (rubric v6), so a major issue always means MAJOR and escalates.
 //   both                config.screen and config.confirm both judge every case
 // --screen-model / --confirm-model replace the models of screen-then-confirm and both.
 
@@ -18,7 +20,7 @@ const DEFAULT_ESCALATE_ON = ["MINOR", "MAJOR"];
  * @typedef {{ policy?: unknown; screen?: unknown; confirm?: unknown; single?: unknown; escalateOn?: unknown; escalateOnMajorIssue?: unknown; concurrency?: unknown; mode?: unknown; maxImages?: unknown }} JudgeConfigFile
  * @typedef {{ policy?: string; backend?: string; model?: string; screenModel?: string; confirmModel?: string }} PolicyFlags
  * @typedef {{ policy: "single"; judge: BackendSpec }
- *   | { policy: "screen-then-confirm"; screen: BackendSpec; confirm: BackendSpec; escalateOn: readonly string[]; escalateOnMajorIssue: boolean }
+ *   | { policy: "screen-then-confirm"; screen: BackendSpec; confirm: BackendSpec; escalateOn: readonly string[] }
  *   | { policy: "both"; backends: readonly [BackendSpec, BackendSpec] }} EffectivePolicy
  */
 
@@ -85,8 +87,8 @@ export function resolvePolicy(config, flags = {}) {
   const screen = backendSpec(config.screen, "screen", flags.screenModel);
   const confirm = backendSpec(config.confirm, "confirm", flags.confirmModel);
   if (policy === "screen-then-confirm") {
-    if (config.escalateOnMajorIssue !== undefined && typeof config.escalateOnMajorIssue !== "boolean") throw new Error(`config.json escalateOnMajorIssue must be true or false, got ${JSON.stringify(config.escalateOnMajorIssue)}`);
-    return { policy, screen, confirm, escalateOn: escalateOn(config.escalateOn), escalateOnMajorIssue: config.escalateOnMajorIssue ?? true };
+    if (config.escalateOnMajorIssue !== undefined) throw new Error("config.json escalateOnMajorIssue is gone since rubric v6: verdicts are computed from the valid issues, so any major issue makes the verdict MAJOR and escalates. Remove the key.");
+    return { policy, screen, confirm, escalateOn: escalateOn(config.escalateOn) };
   }
   return { policy: "both", backends: [screen, confirm] };
 }

@@ -3,12 +3,17 @@
 // The table is rendered here in full; the script only filters, sorts and expands what is already
 // on the page, so the report reads without JavaScript too. A visual case shows its rendered and
 // reference tiles as lazy thumbnails linked (relatively, from eval/judge/report.html) to the local
-// captures in eval/render/out/<slug>/, with the tiles its issues point at marked.
-import type { Agreement, BackendStat, CaseIssue, CaseOpinion, CaseRow, KindStat, RenderTotals, ReportData, Totals } from "./data";
+// captures in eval/render/out/<slug>/, with the tiles its issues point at marked. Each case shows its
+// three layer verdicts as badges; issues the program discarded are struck through with their reason;
+// the expanded case lists the image inventories (reader images, original images with their match)
+// and the embeds the issues were checked against.
+import type { Agreement, BackendStat, CaseIssue, CaseOpinion, CaseRow, KindStat, LayerTotals, RenderTotals, ReportData, Totals } from "./data";
+import type { LayerVerdicts } from "../verdict";
 
 // Local rather than imported from ./data: this module must load under Node's type stripping, which needs
 // an explicit .ts extension the TypeScript config does not allow, so it keeps to type-only imports.
 const VERDICT_ORDER = ["PASS", "MINOR", "MAJOR"] as const;
+const LAYER_ORDER = ["content", "metadata", "rendering"] as const;
 
 const esc = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 const attr = (text: string) => esc(text).replace(/'/g, "&#39;");
@@ -77,6 +82,11 @@ ul.plain { margin: 6px 0; padding-left: 18px; }
 .shot img { display: block; width: 112px; height: 140px; object-fit: cover; object-position: top; border: 1px solid var(--line); border-radius: 4px; background: var(--surface); }
 .shot.hit img { border: 2px solid var(--critical); } .shot.unsent img { opacity: .55; } .shot .n { display: block; margin-top: 2px; } .shot.hit .n { color: var(--critical); font-weight: 600; }
 a.where { font-size: 11px; margin-left: 4px; white-space: nowrap; }
+.layers { white-space: nowrap; } .layers .badge { font-weight: 500; padding: 0 6px; margin-right: 2px; } .badge.v-none { background: var(--neutral-bg); color: var(--ink-3); }
+.layer-tag { font-size: 11px; color: var(--ink-2); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; margin-left: 2px; } .refs { font-size: 11px; color: var(--ink-2); margin-left: 4px; }
+li.invalid > del { color: var(--ink-3); } li.invalid blockquote { text-decoration: line-through; color: var(--ink-3); } .reason { display: inline-block; font-size: 11px; color: var(--critical); margin-left: 4px; }
+.origin { font-size: 11px; border-radius: 4px; padding: 0 5px; margin-left: 4px; background: var(--neutral-bg); color: var(--ink-2); } .origin.both { background: var(--good-bg); } .origin.one-sided-fact { background: var(--warning-bg); } .origin.one-sided-downgraded { text-decoration: none; background: var(--neutral-bg); }
+.inventory { margin: 8px 0; font-size: 12px; } .inventory table { margin: 4px 0 8px; font-size: 12px; } .inventory td, .inventory th { padding: 3px 8px; } .inventory .missing { color: var(--critical); font-weight: 600; } .inventory code { word-break: break-all; }
 @media (max-width: 720px) { th.opt, td.opt { display: none; } }
 `;
 
@@ -144,10 +154,23 @@ function headerTiles(totals: Totals): string {
     tile("MINOR", fmtInt(totals.MINOR), pct(totals.MINOR), VERDICT_COLOR.MINOR),
     tile("MAJOR", fmtInt(totals.MAJOR), pct(totals.MAJOR), VERDICT_COLOR.MAJOR),
     tile("Errors", fmtInt(totals.errors), "judge calls that failed", VERDICT_COLOR.error),
-    tile("Issues", fmtInt(totals.issues), `${totals.majorIssues} major · ${totals.unverified} unverified quote${totals.unverified === 1 ? "" : "s"}`),
+    tile("Issues", fmtInt(totals.issues), `${totals.majorIssues} major · ${totals.invalid} invalid (not counted) · ${totals.unverified} unverified quote${totals.unverified === 1 ? "" : "s"}`),
     tile("Escalated", fmtInt(totals.escalated), "cases with a second opinion"),
     tile("Disputed", fmtInt(totals.disputed), "backends disagreed on the verdict"),
   ].join("")}</div>`;
+}
+
+/** One tile per layer with its verdict counts; nothing when no case carries layers (all judged before rubric v6). */
+function layerTiles(layers: LayerTotals): string {
+  const judged = LAYER_ORDER.filter((layer) => layers[layer].judged > 0);
+  if (!judged.length) return "";
+  return `<div class="tiles">${judged.map((layer) => tile(`${layer} layer`, VERDICT_ORDER.map((verdict) => `<span class="badge ${verdictClass(verdict)}">${layers[layer][verdict]} ${verdict}</span>`).join(" "), `${layers[layer].judged} case${layers[layer].judged === 1 ? "" : "s"} judged on this layer`)).join("")}</div>`;
+}
+
+/** The discarded issues by reason; nothing when none. */
+function invalidLine(totals: Totals): string {
+  if (!totals.invalid) return "";
+  return `<p class="small">Invalid issues, never counted: ${Object.entries(totals.invalidByReason).map(([reason, n]) => `${esc(reason)} ${n}`).join(" · ")}.</p>`;
 }
 
 /** The capture facts over the corpus; nothing when no case was judged with a capture. */
@@ -234,7 +257,48 @@ function whereChip(issue: CaseIssue, row: CaseRow | undefined): string {
   return file && row ? ` <a class="where" href="${attr(capturePath(row.slug, file))}" target="_blank" rel="noopener">${esc(label)} ↗</a>` : ` <span class="where small">${esc(label)}</span>`;
 }
 
-const issueItem = (issue: CaseIssue, row?: CaseRow) => `<li><span class="kind ${issue.severity}">${esc(issue.kind)}</span> <strong>${issue.severity}</strong> — ${esc(issue.note)}${whereChip(issue, row)}<blockquote>${esc(issue.evidence)} <span class="${issue.verified ? "verified" : "unverified"}">${issue.verified ? "✓ verbatim" : "⚠ not found verbatim"}</span></blockquote></li>`;
+const ORIGIN_LABEL: Record<string, string> = { both: "both", "one-sided-fact": "one-sided + fact", "one-sided-downgraded": "downgraded", "one-sided": "one-sided" };
+const ORIGIN_TITLE: Record<string, string> = { both: "both judges reported it", "one-sided-fact": "one judge reported it; a measured fact keeps it major", "one-sided-downgraded": "one judge reported it as major; no measured fact supports it, so it counts as minor", "one-sided": "one judge reported it" };
+/** Who reported a cross-confirmed issue; nothing on single-opinion cases. */
+function originChip(issue: CaseIssue): string {
+  if (!issue.origin) return "";
+  const label = `${ORIGIN_LABEL[issue.origin] ?? issue.origin}${issue.originalSeverity && issue.originalSeverity !== issue.severity ? ` (was ${issue.originalSeverity})` : ""}`;
+  return `<span class="origin ${attr(issue.origin)}" title="${attr(ORIGIN_TITLE[issue.origin] ?? issue.origin)}">${esc(label)}</span>`;
+}
+
+/** One issue; a discarded one is struck through with the program's reason and counts for nothing. */
+function issueItem(issue: CaseIssue, row?: CaseRow): string {
+  const head = `<span class="kind ${issue.severity}">${esc(issue.kind)}</span>${issue.layer ? `<span class="layer-tag">${esc(issue.layer)}</span>` : ""} <strong>${issue.severity}</strong> — ${esc(issue.note)}`;
+  const refs = `${issue.refs?.length ? `<span class="refs">[${issue.refs.map(esc).join(", ")}]</span>` : ""}${originChip(issue)}`;
+  const quote = `<blockquote>${esc(issue.evidence)} <span class="${issue.verified ? "verified" : "unverified"}">${issue.verified ? "✓ verbatim" : "⚠ not found verbatim"}</span></blockquote>`;
+  if (!issue.invalid) return `<li>${head}${refs}${whereChip(issue, row)}${quote}</li>`;
+  return `<li class="invalid" title="not counted"><del>${head}</del>${refs}${whereChip(issue, row)} <span class="reason">invalid: ${esc(issue.invalid.reason)} — ${esc(issue.invalid.detail)}</span>${quote}</li>`;
+}
+
+/** The three layer verdicts as small badges ("–" for a layer not judged); a dash for results from before rubric v6. */
+function layerBadges(layers: LayerVerdicts | undefined): string {
+  if (!layers) return '<span class="small">–</span>';
+  return `<span class="layers">${LAYER_ORDER.map((layer) => { const verdict = layers[layer]; return `<span class="badge ${verdict ? verdictClass(verdict) : "v-none"}" title="${layer} ${verdict ?? "not judged"}">${layer[0]!.toUpperCase()} ${verdict ?? "–"}</span>`; }).join("")}</span>`;
+}
+
+const INVENTORY_ROWS = 60;
+const clipCell = (text: string, max = 90) => (text.length <= max ? text : `${text.slice(0, max - 1)}…`);
+/** The inventories the case's issues were checked against: original images with their reader match, reader images, embeds. */
+function inventoryBlock(row: CaseRow): string {
+  const images = row.render?.images;
+  const embeds = row.render?.embeds;
+  const tables = row.render?.tables;
+  const code = row.render?.code;
+  if (!images && !embeds && !tables && !code) return "";
+  const more = (total: number) => (total > INVENTORY_ROWS ? `<p class="small">and ${total - INVENTORY_ROWS} more</p>` : "");
+  const tileText = (tile: number | null) => (tile === null ? "below" : String(tile));
+  const reference = images ? `<h4>Original images (${images.reference.length}, ${images.reference.filter((image) => image.matchedBy === null).length} not in the reader)</h4>${images.reference.length ? `<div class="table-wrap"><table><thead><tr><th>id</th><th>tile</th><th>size</th><th>alt</th><th>in the reader</th></tr></thead><tbody>${images.reference.slice(0, INVENTORY_ROWS).map((image) => `<tr><td><code>${esc(image.id)}</code></td><td>${tileText(image.tile)}</td><td>${image.width}×${image.height}</td><td>${esc(clipCell(image.alt))}</td><td>${image.matchedBy ? `↔ <code>${esc(image.matchedBy)}</code>` : '<span class="missing">not in the reader</span>'}</td></tr>`).join("")}</tbody></table></div>${more(images.reference.length)}` : '<p class="small">None.</p>'}` : "";
+  const rendered = images ? `<h4>Reader images (${images.rendered.length}, ${images.rendered.filter((image) => image.broken).length} broken)</h4>${images.rendered.length ? `<div class="table-wrap"><table><thead><tr><th>id</th><th>tile</th><th>alt / caption</th><th>src</th><th>state</th></tr></thead><tbody>${images.rendered.slice(0, INVENTORY_ROWS).map((image) => `<tr><td><code>${esc(image.id)}</code></td><td>${tileText(image.tile)}</td><td>${esc(clipCell([image.alt, image.caption].filter(Boolean).join(" / ")))}</td><td><code>${esc(clipCell(image.src, 70))}</code></td><td>${image.broken ? '<span class="missing">broken</span>' : "ok"}</td></tr>`).join("")}</tbody></table></div>${more(images.rendered.length)}` : '<p class="small">None.</p>'}` : "";
+  const embedTable = embeds ? `<h4>Embeds (${embeds.length}, ${embeds.filter((embed) => !embed.representedInReader).length} not shown in the reader)</h4>${embeds.length ? `<div class="table-wrap"><table><thead><tr><th>id</th><th>kind</th><th>host</th><th>after</th><th>in the reader</th></tr></thead><tbody>${embeds.slice(0, INVENTORY_ROWS).map((embed, index) => `<tr><td><code>e${index + 1}</code></td><td>${esc(embed.kind)}${embed.tag && embed.tag !== embed.kind ? ` <code>&lt;${esc(embed.tag)}&gt;</code>` : ""}</td><td>${esc(embed.host || "–")}</td><td>${esc(clipCell(embed.context, 80))}</td><td>${embed.representedInReader ? "shown" : '<span class="missing">not shown</span>'}</td></tr>`).join("")}</tbody></table></div>${more(embeds.length)}` : '<p class="small">None.</p>'}` : "";
+  const tableTable = tables ? `<h4>Tables (${tables.length}, ${tables.filter((table) => table.emptyCells > 0).length} with empty cells)</h4>${tables.length ? `<div class="table-wrap"><table><thead><tr><th>id</th><th>tile</th><th>size</th><th>empty cells</th><th>first row</th></tr></thead><tbody>${tables.slice(0, INVENTORY_ROWS).map((table) => `<tr><td><code>${esc(table.id)}</code></td><td>${tileText(table.tile)}</td><td>${table.rows}×${table.cols}</td><td>${table.emptyCells ? `<span class="missing">${table.emptyCells} of ${table.cells}</span>` : `0 of ${table.cells}`}</td><td>${esc(clipCell(table.head))}</td></tr>`).join("")}</tbody></table></div>${more(tables.length)}` : '<p class="small">None.</p>'}` : "";
+  const codeTable = code ? `<h4>Code blocks (${code.length}, ${code.filter((block) => block.collapsed).length} shown as one line)</h4>${code.length ? `<div class="table-wrap"><table><thead><tr><th>id</th><th>tile</th><th>lines</th><th>first characters</th></tr></thead><tbody>${code.slice(0, INVENTORY_ROWS).map((block) => `<tr><td><code>${esc(block.id)}</code></td><td>${tileText(block.tile)}</td><td>${block.collapsed ? `<span class="missing">one line of ${block.chars} chars</span>` : String(block.lines)}</td><td><code>${esc(clipCell(block.head, 70))}</code></td></tr>`).join("")}</tbody></table></div>${more(code.length)}` : '<p class="small">None.</p>'}` : "";
+  return `<details class="inventory"><summary>Image, embed, table and code inventories</summary>${reference}${rendered}${embedTable}${tableTable}${codeTable}</details>`;
+}
 
 /** One side's thumbnails: every captured tile, the ones the judge did not get dimmed, the ones an issue points at marked. */
 function strip(row: CaseRow, side: Side): string {
@@ -279,21 +343,23 @@ function factsCell(row: CaseRow): string {
 }
 
 function opinionCard(opinion: CaseOpinion, final: boolean, row: CaseRow): string {
-  return `<div class="opinion${final ? " final" : ""}"><h4>${esc(opinion.backend)} <span class="small">${esc(opinion.model)}</span><span class="badge ${verdictClass(opinion.verdict)}">${opinion.verdict}</span>${final ? ` <span class="small">· final</span>` : ""}</h4><div class="small">${fmtTokens(opinion.tokens)} tokens · ${fmtCost(opinion.costUsd)} · ${fmtMs(opinion.wallMs)}${opinion.images ? ` · ${opinion.images} images` : ""}</div><p class="muted" style="margin:6px 0">${esc(opinion.summary)}</p>${opinion.issues.length ? `<ul class="issues">${opinion.issues.map((issue) => issueItem(issue, row)).join("")}</ul>` : `<p class="small">No issues.</p>`}</div>`;
+  return `<div class="opinion${final ? " final" : ""}"><h4>${esc(opinion.backend)} <span class="small">${esc(opinion.model)}</span><span class="badge ${verdictClass(opinion.verdict)}">${opinion.verdict}</span>${final ? ` <span class="small">· final</span>` : ""}</h4>${opinion.layers ? `<div>${layerBadges(opinion.layers)}</div>` : ""}<div class="small">${fmtTokens(opinion.tokens)} tokens · ${fmtCost(opinion.costUsd)} · ${fmtMs(opinion.wallMs)}${opinion.images ? ` · ${opinion.images} images` : ""}</div><p class="muted" style="margin:6px 0">${esc(opinion.summary)}</p>${opinion.issues.length ? `<ul class="issues">${opinion.issues.map((issue) => issueItem(issue, row)).join("")}</ul>` : `<p class="small">No issues.</p>`}</div>`;
 }
+
+const validCount = (row: CaseRow) => row.issues.filter((issue) => !issue.invalid).length;
 
 function caseBody(row: CaseRow): string {
   const showOpinions = row.opinions.length >= 2;
   const opinions = showOpinions ? `<h3 style="margin-top:12px">Opinions${row.disputed ? ' <span class="badge v-minor">disputed</span>' : ""}</h3><div class="opinions">${row.opinions.map((opinion, i) => opinionCard(opinion, opinion.backend === row.decidedBy && row.opinions.findIndex((o) => o.backend === row.decidedBy) === i, row)).join("")}</div>` : "";
-  return `<tbody class="case" data-verdict="${row.verdict}" data-kinds="${attr(row.kinds.map((k) => k.kind).join(" "))}" data-backend="${row.decidedBy}" data-disputed="${row.disputed ? 1 : 0}" data-delta="${row.delta}" data-text="${attr(`${row.slug} ${row.url}`.toLowerCase())}" data-sortslug="${attr(row.slug)}" data-sortverdict="${VERDICT_ORDER.indexOf(row.verdict)}" data-sortkinds="${row.kinds.length}" data-sortissues="${row.issues.length}" data-sortbackend="${row.decidedBy}" data-sortmajor="${row.issues.filter((i) => i.severity === "major").length}" data-sorttokens="${row.tokens ?? 0}" data-sortfacts="${row.render ? row.render.metrics.images.broken + row.render.metrics.overflow.count + row.render.metrics.rawMarkup.count + row.render.metrics.mathErrors : -1}" data-sortdelta="${["regressed", "new", "same", "improved"].indexOf(row.delta)}">
-<tr><td><button class="expand" aria-expanded="false" aria-label="Show details for ${attr(row.slug)}"></button></td><td><code>${esc(row.slug)}</code>${row.url ? ` <a class="small" href="${attr(row.url)}" target="_blank" rel="noopener">↗</a>` : ""}</td><td><span class="badge ${verdictClass(row.verdict)}">${row.verdict}</span>${row.disputed ? ' <span class="badge v-minor" title="backends disagreed">?</span>' : ""}</td><td>${row.kinds.map((k) => `<span class="kind ${k.severity}">${esc(k.kind)}</span>`).join("") || '<span class="small">–</span>'}</td><td class="num">${row.issues.length}</td><td class="opt">${factsCell(row)}</td><td class="opt">${esc(row.decidedBy)}${row.opinions.length >= 2 ? ` <span class="small">(${row.opinions.length})</span>` : ""}</td><td class="opt"><span class="delta ${row.delta}">${row.delta}${row.baselineVerdict && row.delta !== "same" ? ` <span class="small">(${row.baselineVerdict})</span>` : ""}</span></td><td class="num opt">${fmtTokens(row.tokens)}</td></tr>
-<tr class="detail" hidden><td colspan="9"><p class="muted" style="margin:0 0 6px">${esc(row.summary)}</p><div class="small">${esc(row.model)} · rubric ${esc(row.rubricVersion)} · ${esc(row.judgedAt)} · ${fmtMs(row.wallMs)}${row.truncated ? " · input truncated" : ""} · ${row.mode} mode${row.url ? ` · <a href="${attr(row.url)}" target="_blank" rel="noopener">${esc(row.url)}</a>` : ""}</div>${factsBlock(row)}${row.issues.length ? `<ul class="issues">${row.issues.map((issue) => issueItem(issue, row)).join("")}</ul>` : `<p class="small">No issues.</p>`}${shotsBlock(row)}${opinions}</td></tr>
+  return `<tbody class="case" data-verdict="${row.verdict}" data-kinds="${attr(row.kinds.map((k) => k.kind).join(" "))}" data-backend="${row.decidedBy}" data-disputed="${row.disputed ? 1 : 0}" data-delta="${row.delta}" data-text="${attr(`${row.slug} ${row.url}`.toLowerCase())}" data-sortslug="${attr(row.slug)}" data-sortverdict="${VERDICT_ORDER.indexOf(row.verdict)}" data-sortkinds="${row.kinds.length}" data-sortissues="${validCount(row)}" data-sortbackend="${row.decidedBy}" data-sortmajor="${row.issues.filter((i) => !i.invalid && i.severity === "major").length}" data-sorttokens="${row.tokens ?? 0}" data-sortfacts="${row.render ? row.render.metrics.images.broken + row.render.metrics.overflow.count + row.render.metrics.rawMarkup.count + row.render.metrics.mathErrors : -1}" data-sortdelta="${["regressed", "new", "same", "improved"].indexOf(row.delta)}">
+<tr><td><button class="expand" aria-expanded="false" aria-label="Show details for ${attr(row.slug)}"></button></td><td><code>${esc(row.slug)}</code>${row.url ? ` <a class="small" href="${attr(row.url)}" target="_blank" rel="noopener">↗</a>` : ""}</td><td><span class="badge ${verdictClass(row.verdict)}">${row.verdict}</span>${row.disputed ? ' <span class="badge v-minor" title="backends disagreed">?</span>' : ""}</td><td class="opt">${layerBadges(row.layers)}</td><td>${row.kinds.map((k) => `<span class="kind ${k.severity}">${esc(k.kind)}</span>`).join("") || '<span class="small">–</span>'}</td><td class="num">${validCount(row)}${row.issues.length > validCount(row) ? ` <span class="small" title="discarded as invalid">+${row.issues.length - validCount(row)}</span>` : ""}</td><td class="opt">${factsCell(row)}</td><td class="opt">${esc(row.decidedBy)}${row.opinions.length >= 2 ? ` <span class="small">(${row.opinions.length})</span>` : ""}</td><td class="opt"><span class="delta ${row.delta}">${row.delta}${row.baselineVerdict && row.delta !== "same" ? ` <span class="small">(${row.baselineVerdict})</span>` : ""}</span></td><td class="num opt">${fmtTokens(row.tokens)}</td></tr>
+<tr class="detail" hidden><td colspan="10"><p class="muted" style="margin:0 0 6px">${esc(row.summary)}</p><div class="small">${esc(row.model)} · rubric ${esc(row.rubricVersion)} · ${esc(row.judgedAt)} · ${fmtMs(row.wallMs)}${row.truncated ? " · input truncated" : ""} · ${row.mode} mode${row.url ? ` · <a href="${attr(row.url)}" target="_blank" rel="noopener">${esc(row.url)}</a>` : ""}</div>${factsBlock(row)}${row.issues.length ? `<ul class="issues">${row.issues.map((issue) => issueItem(issue, row)).join("")}</ul>` : `<p class="small">No issues.</p>`}${inventoryBlock(row)}${shotsBlock(row)}${opinions}</td></tr>
 </tbody>`;
 }
 
 function casesSection(data: ReportData): string {
   const kinds = data.byKind.map((k) => k.kind);
-  const backends = data.byBackend.map((b) => b.backend);
+  const backends = [...data.byBackend.map((b) => b.backend as string), ...(data.cases.some((row) => row.decidedBy === "merged") ? ["merged"] : [])];
   const option = (value: string, label = value) => `<option value="${attr(value)}">${esc(label)}</option>`;
   const th = (label: string, key: string, numeric = false, cls = "") => `<th class="${cls}"><button type="button" data-key="${key}" data-numeric="${numeric ? 1 : 0}" aria-sort="none">${esc(label)}</button></th>`;
   return `<h2>Cases</h2>
@@ -307,7 +373,7 @@ function casesSection(data: ReportData): string {
 <button type="button" id="expand-all">Expand all</button><button type="button" id="collapse-all">Collapse all</button>
 <span class="count" id="f-count">${data.cases.length} of ${data.cases.length} cases</span>
 </form>
-<div class="table-wrap"><table id="cases"><thead><tr><th></th>${th("slug", "slug")}${th("verdict", "verdict", true)}${th("kinds", "kinds", true)}${th("issues", "issues", true, "num")}${th("render facts", "facts", true, "opt")}${th("decided by", "backend", false, "opt")}${th("vs baseline", "delta", true, "opt")}${th("tokens", "tokens", true, "num opt")}</tr></thead>
+<div class="table-wrap"><table id="cases"><thead><tr><th></th>${th("slug", "slug")}${th("verdict", "verdict", true)}<th class="opt">layers</th>${th("kinds", "kinds", true)}${th("issues", "issues", true, "num")}${th("render facts", "facts", true, "opt")}${th("decided by", "backend", false, "opt")}${th("vs baseline", "delta", true, "opt")}${th("tokens", "tokens", true, "num opt")}</tr></thead>
 ${data.cases.map(caseBody).join("\n")}
 </table></div>`;
 }
@@ -327,6 +393,8 @@ export function renderHtml(data: ReportData): string {
 <h1>Extraction quality report</h1>
 <p class="muted">Generated ${esc(data.generatedAt)} from <code>eval/judge/out</code>. Verdicts, issue kinds and evidence quotes are the judge's; quotes come from third-party pages, so this file stays local. Screenshots load from <code>eval/render/out</code> next to it.</p>
 ${headerTiles(data.totals)}
+${layerTiles(data.totals.layers)}
+${invalidLine(data.totals)}
 ${renderTiles(data.renderTotals)}
 ${backendTiles(data.byBackend)}
 <h2>Overview</h2>

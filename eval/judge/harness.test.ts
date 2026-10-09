@@ -12,7 +12,8 @@ import { claudeBackend } from "./backends/claude";
 import { codexBackend } from "./backends/codex";
 import type { BackendSpec, JudgeBackend } from "./backends/types";
 import { compareToBaseline, describeDelta, updateBaseline, type Baseline } from "./baseline";
-import { isJudged, readCached, readPrevious, writeResult, type FailedCase, type JudgeResult } from "./cache";
+import { isJudged, readCached, readPrevious, writeResult, type FailedCase, type JudgedCase, type JudgedIssue, type JudgeResult } from "./cache";
+import { originCounts } from "./merge";
 import { extractedMarkdown, truncateInput } from "./inputs";
 import { describePolicy, resolveMaxImages, resolveMode, resolvePolicy } from "./policy-config.mjs";
 import { caseKey, judgeCase, parseEffectivePolicy, type EffectivePolicy } from "./policy";
@@ -70,7 +71,19 @@ async function evaluate(snapshot: Snapshot): Promise<ReportRow> {
   return { result, origin: "fresh" };
 }
 
-const describeResult = (result: JudgeResult) => isJudged(result) ? `${result.verdict}${result.issues.length ? ` · ${[...new Set(result.issues.map((issue) => issue.kind))].join(", ")}` : ""} · ${decidedBy(result)}` : `ERROR ${result.error.split("\n")[0]}`;
+const layersText = (result: JudgedCase) => (result.layers ? ` (content ${result.layers.content} · metadata ${result.layers.metadata}${result.layers.rendering ? ` · rendering ${result.layers.rendering}` : ""})` : "");
+/** On a cross-confirmed case: how many counted issues each origin gave. */
+const originsText = (valid: readonly JudgedIssue[]) => {
+  const counts = originCounts(valid);
+  const parts = ([["both", "both"], ["one-sided-fact", "fact"], ["one-sided-downgraded", "downgraded"], ["one-sided", "one-sided"]] as const).filter(([origin]) => counts[origin] > 0).map(([origin, label]) => `${counts[origin]} ${label}`);
+  return parts.length ? ` · ${parts.join(", ")}` : "";
+};
+const describeResult = (result: JudgeResult) => {
+  if (!isJudged(result)) return `ERROR ${result.error.split("\n")[0]}`;
+  const valid = result.issues.filter((issue) => !issue.invalid);
+  const invalid = result.issues.length - valid.length;
+  return `${result.verdict}${layersText(result)}${valid.length ? ` · ${[...new Set(valid.map((issue) => `${issue.layer}/${issue.kind}${issue.severity === "major" ? "!" : ""}`))].join(", ")}` : ""}${invalid ? ` · ${invalid} invalid` : ""}${originsText(valid)} · ${decidedBy(result)}`;
+};
 const describeCost = (result: JudgeResult) => {
   const cost = isJudged(result) ? (result.opinions ?? []).reduce<number | undefined>((sum, opinion) => (opinion.costUsd === undefined ? sum : (sum ?? 0) + opinion.costUsd), undefined) : undefined;
   const perOpinion = isJudged(result) && (result.opinions?.length ?? 0) > 0 ? ` [${(result.opinions ?? []).map((opinion) => `${opinion.backend} ${opinion.verdict} ${(opinion.wallMs / 1000).toFixed(0)} s${opinion.tokens ? ` ${opinion.tokens.toLocaleString("en-US")} tok` : ""}${opinion.costUsd !== undefined ? ` $${opinion.costUsd.toFixed(4)}` : ""}${opinion.images ? ` ${opinion.images} img` : ""}`).join(" · ")}]` : "";

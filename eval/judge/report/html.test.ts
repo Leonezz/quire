@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { renderHtml } from "./html";
-import { emptyData, hybridData, legacyData, visualData } from "./fixtures";
+import { emptyData, hybridData, legacyData, v6Data, visualData } from "./fixtures";
 
 const count = (text: string, needle: string) => text.split(needle).length - 1;
 
@@ -90,5 +90,49 @@ describe("renderHtml", () => {
     expect(html).toContain("4 images");
     expect(renderHtml(legacyData())).not.toContain("Broken images");
     expect(renderHtml(legacyData())).not.toContain('<div class="shots">');
+  });
+});
+
+describe("renderHtml (rubric v6)", () => {
+  const html = renderHtml(v6Data());
+
+  it("shows the per-layer totals, the invalid count by reason, and three layer badges per case and per opinion", () => {
+    expect(html).toContain('<div class="label">rendering layer</div><div class="value"><span class="badge v-pass">1 PASS</span> <span class="badge v-minor">0 MINOR</span> <span class="badge v-major">1 MAJOR</span></div><div class="sub">2 cases judged on this layer</div>');
+    expect(html).toContain("Invalid issues, never counted: contradicts-image-facts 1 · evidence-not-verbatim 1.");
+    expect(html).toContain('<span class="layers"><span class="badge v-pass" title="content PASS">C PASS</span><span class="badge v-minor" title="metadata MINOR">M MINOR</span><span class="badge v-major" title="rendering MAJOR">R MAJOR</span></span>');
+    expect(html).toContain("1 major · 2 invalid (not counted)");
+    // the row counts valid issues, with the discarded ones as +n
+    expect(html).toContain('<td class="num">2 <span class="small" title="discarded as invalid">+1</span></td>');
+    expect(renderHtml(legacyData())).toContain('<td class="opt"><span class="small">–</span></td>');
+  });
+
+  it("strikes an invalid issue through and gives the program's reason; valid issues show their layer and refs", () => {
+    expect(html).toContain('<li class="invalid" title="not counted"><del><span class="kind major">images</span><span class="layer-tag">content</span> <strong>major</strong> — images is wrong</del><span class="refs">[o1]</span> <span class="reason">invalid: contradicts-image-facts — o1 is in the reader as r1, not broken</span>');
+    expect(html).toContain('<li><span class="kind major">images</span><span class="layer-tag">rendering</span> <strong>major</strong> — images is wrong<span class="refs">[r2]</span>');
+    expect(html).toContain("invalid: evidence-not-verbatim");
+  });
+
+  it("marks where each cross-confirmed issue comes from, and offers merged in the decided-by filter", () => {
+    expect(html).toContain('<span class="refs">[r2]</span><span class="origin both" title="both judges reported it">both</span>');
+    expect(html).toContain('<span class="origin one-sided" title="one judge reported it">one-sided</span>');
+    expect(html).toContain('data-backend="merged"');
+    expect(html).toContain('<option value="merged">');
+    const downgraded = renderHtml({ ...v6Data(), cases: v6Data().cases.map((row) => ({ ...row, issues: row.issues.map((item) => (item.kind === "metadata" ? { ...item, origin: "one-sided-downgraded" as const, originalSeverity: "major" as const } : item)) })) });
+    expect(downgraded).toContain('<span class="origin one-sided-downgraded" title="one judge reported it as major; no measured fact supports it, so it counts as minor">downgraded (was major)</span>');
+  });
+
+  it("lists the image and embed inventories in the expanded case, with matches and what is missing", () => {
+    expect(html).toContain("<summary>Image, embed, table and code inventories</summary>");
+    expect(html).toContain("<h4>Original images (2, 1 not in the reader)</h4>");
+    expect(html).toContain("<tr><td><code>o1</code></td><td>1</td><td>640×420</td><td>Figure 1</td><td>↔ <code>r1</code></td></tr>");
+    expect(html).toContain('<tr><td><code>o2</code></td><td>2</td><td>800×500</td><td>Figure 3</td><td><span class="missing">not in the reader</span></td></tr>');
+    expect(html).toContain("<h4>Reader images (2, 1 broken)</h4>");
+    expect(html).toContain('<span class="missing">broken</span>');
+    expect(html).toContain("<h4>Embeds (1, 1 not shown in the reader)</h4>");
+    expect(html).toContain('<tr><td><code>e1</code></td><td>iframe</td><td>www.youtube.com</td><td>Training setup and the demo video</td><td><span class="missing">not shown</span></td></tr>');
+    expect(renderHtml(legacyData())).not.toContain("inventories</summary>");
+    const withCode = renderHtml({ ...v6Data(), cases: v6Data().cases.map((row) => (row.render ? { ...row, render: { ...row.render, tables: [{ id: "t1", tile: 4, rows: 5, cols: 4, cells: 20, emptyCells: 13, head: "Metric | LCP" }], code: [{ id: "c1", tile: 3, lines: 1, chars: 212, collapsed: true, head: "def clipped_error(x):" }] } } : row)) });
+    expect(withCode).toContain('<tr><td><code>t1</code></td><td>4</td><td>5×4</td><td><span class="missing">13 of 20</span></td><td>Metric | LCP</td></tr>');
+    expect(withCode).toContain('<tr><td><code>c1</code></td><td>3</td><td><span class="missing">one line of 212 chars</span></td><td><code>def clipped_error(x):</code></td></tr>');
   });
 });

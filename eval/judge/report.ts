@@ -1,10 +1,13 @@
-// eval/judge/report.md: counts, what the hybrid judge cost (opinions, tokens, dollars per backend,
-// escalations, disputes), the render capture's measured facts (broken images, overflow, raw markup,
-// math errors) totalled and per case, issue kinds ranked (what to fix next), one row per case with
-// the backend that decided it. Only verdicts, kinds, fact counts and the judge's own summary go in;
-// evidence quotes and image URLs from third-party pages stay in out/.
-import { isJudged, type JudgedCase, type JudgeResult, type Opinion } from "./cache";
+// eval/judge/report.md: counts (overall and per layer), what the hybrid judge cost (opinions, tokens,
+// dollars per backend, escalations, disputes), the issues the program discarded as invalid (by
+// reason), the render capture's measured facts (broken images, overflow, raw markup, math errors)
+// totalled and per case, valid issues by layer × kind (what to fix next), one row per case with its
+// three layer verdicts and the backend that decided it. Only verdicts, kinds, fact counts and the
+// judge's own summary go in; evidence quotes and image URLs from third-party pages stay in out/.
+import { isJudged, type JudgedCase, type JudgedIssue, type JudgeResult, type Opinion } from "./cache";
+import { originCounts } from "./merge";
 import { PROBLEM_KINDS, VERDICTS } from "./rubric";
+import { INVALID_REASONS, LAYERS, type Layer, type Verdict } from "./verdict";
 
 /** Where a row came from: judged in this run, served from the cache in this run, or left by an earlier run. */
 export type RowOrigin = "fresh" | "cached" | "previous";
@@ -24,17 +27,48 @@ const cell = (text: string) => text.replace(/\|/g, "\\|").replace(/\s+/g, " ").t
 const clip = (text: string, max: number) => (text.length <= max ? text : `${text.slice(0, max - 1)}…`);
 const usd = (amount: number) => `$${amount.toFixed(amount < 0.1 ? 4 : 2)}`;
 
-function issueCounts(rows: readonly ReportRow[]): { kind: string; issues: number; slugs: number; major: number }[] {
-  return PROBLEM_KINDS.map((kind) => {
-    const judged = rows.map((row) => row.result).filter(isJudged);
-    const issues = judged.flatMap((result) => result.issues.filter((issue) => issue.kind === kind));
-    return { kind, issues: issues.length, slugs: judged.filter((result) => result.issues.some((issue) => issue.kind === kind)).length, major: issues.filter((issue) => issue.severity === "major").length };
-  }).filter((row) => row.issues > 0).sort((a, b) => b.slugs - a.slugs || b.major - a.major || b.issues - a.issues);
+const isValid = (issue: JudgedIssue) => !issue.invalid;
+
+/** Valid issues per layer and kind, ranked by cases, then major, then issues; issues from before rubric v6 (no layer) are left out. */
+function issueCounts(rows: readonly ReportRow[]): { layer: Layer; kind: string; issues: number; slugs: number; major: number }[] {
+  const judged = rows.map((row) => row.result).filter(isJudged);
+  return LAYERS.flatMap((layer) => PROBLEM_KINDS.map((kind) => {
+    const matches = (issue: JudgedIssue) => isValid(issue) && issue.layer === layer && issue.kind === kind;
+    const issues = judged.flatMap((result) => result.issues.filter(matches));
+    return { layer, kind, issues: issues.length, slugs: judged.filter((result) => result.issues.some(matches)).length, major: issues.filter((issue) => issue.severity === "major").length };
+  })).filter((row) => row.issues > 0).sort((a, b) => b.slugs - a.slugs || b.major - a.major || b.issues - a.issues);
 }
 
-/** "codex/default", plus "(disputed)" when the other opinion disagreed; "–" for results older than the hybrid judge. */
+/** Per layer, how many cases got each verdict (cases without that layer — older results, or rendering in text mode — are not counted). */
+export function layerTotals(results: readonly JudgeResult[]): Record<Layer, Record<Verdict, number> & { judged: number }> {
+  const judged = results.filter(isJudged);
+  return Object.fromEntries(LAYERS.map((layer) => {
+    const verdicts = judged.map((result) => result.layers?.[layer]).filter((verdict): verdict is Verdict => typeof verdict === "string");
+    const count = (verdict: Verdict) => verdicts.filter((candidate) => candidate === verdict).length;
+    return [layer, { judged: verdicts.length, PASS: count("PASS"), MINOR: count("MINOR"), MAJOR: count("MAJOR") }];
+  })) as Record<Layer, Record<Verdict, number> & { judged: number }>;
+}
+
+/** The header's cross-confirmation sentence: how the counted issues of two-opinion cases stand; empty when there are none. */
+export function describeOrigins(results: readonly JudgeResult[]): string {
+  const counts = originCounts(results.filter(isJudged).flatMap((result) => result.issues));
+  const total = counts.both + counts["one-sided-fact"] + counts["one-sided-downgraded"] + counts["one-sided"];
+  if (!total) return "";
+  return `Cross-confirmed issues: ${counts.both} reported by both, ${counts["one-sided-fact"]} one-sided major kept by a fact, ${counts["one-sided-downgraded"]} one-sided major downgraded to minor, ${counts["one-sided"]} one-sided minor.`;
+}
+
+/** The header's invalid-issues sentence: how many of the cases' issues the program discarded, by reason; empty when none. */
+export function describeInvalid(results: readonly JudgeResult[]): string {
+  const invalid = results.filter(isJudged).flatMap((result) => result.issues.flatMap((issue) => (issue.invalid ? [issue.invalid.reason] : [])));
+  if (!invalid.length) return "";
+  const byReason = INVALID_REASONS.map((reason) => [reason, invalid.filter((candidate) => candidate === reason).length] as const).filter(([, count]) => count > 0);
+  return `Invalid issues (kept in out/, never counted): ${invalid.length} — ${byReason.map(([reason, count]) => `${reason} ${count}`).join(", ")}.`;
+}
+
+/** "codex/default", or "merged claude+codex" for a cross-confirmed case, plus "(disputed)" when the two opinions' verdicts differed; "–" for results older than the hybrid judge. */
 export function decidedBy(result: JudgedCase): string {
   const from = result.resolution?.from;
+  if (from === "merged") return `merged ${(result.opinions ?? []).map((opinion) => opinion.backend).join("+")}${result.resolution?.disputed ? " (disputed)" : ""}`;
   const opinion = from ? result.opinions?.find((candidate) => candidate.backend === from) : undefined;
   if (!from || !opinion) return "–";
   return `${from}/${opinion.model}${result.resolution?.disputed ? " (disputed)" : ""}`;
@@ -47,10 +81,15 @@ function factCells(result: JudgeResult): string {
   return `${metrics.images.broken} | ${metrics.overflow.count} | ${metrics.rawMarkup.count} | ${metrics.mathErrors}`;
 }
 
+/** The three layer cells; "–" for a layer not judged (text mode's rendering) and for results from before rubric v6. */
+const layerCells = (result: JudgedCase) => LAYERS.map((layer) => result.layers?.[layer] ?? "–").join(" | ");
+
 function rowLine({ result, origin }: ReportRow): string {
-  if (!isJudged(result)) return `| ${result.slug} | error | – | ${factCells(result)} | ${cell(clip(result.error, SUMMARY_MAX))} | – | ${origin} |`;
-  const kinds = [...new Set(result.issues.map((issue) => `${issue.kind}${issue.severity === "major" ? "!" : ""}`))].join(", ") || "–";
-  return `| ${result.slug} | ${result.verdict} | ${kinds} | ${factCells(result)} | ${cell(clip(result.summary, SUMMARY_MAX))} | ${decidedBy(result)} | ${origin} |`;
+  if (!isJudged(result)) return `| ${result.slug} | error | – | – | – | – | ${factCells(result)} | ${cell(clip(result.error, SUMMARY_MAX))} | – | ${origin} |`;
+  const valid = result.issues.filter(isValid);
+  const kinds = [...new Set(valid.map((issue) => `${issue.kind}${issue.severity === "major" ? "!" : ""}`))].join(", ") || "–";
+  const invalid = result.issues.length - valid.length;
+  return `| ${result.slug} | ${result.verdict} | ${layerCells(result)} | ${kinds}${invalid ? ` (+${invalid} invalid)` : ""} | ${factCells(result)} | ${cell(clip(result.summary, SUMMARY_MAX))} | ${decidedBy(result)} | ${origin} |`;
 }
 
 export interface FactTotals { captured: number; broken: number; brokenCases: number; overflow: number; overflowCases: number; rawMarkup: number; rawMarkupCases: number; mathErrors: number; mathErrorCases: number }
@@ -124,24 +163,33 @@ export function renderReport(rows: readonly ReportRow[], options: ReportOptions)
   const kinds = issueCounts(sorted);
   const opinions = describeOpinions(results);
   const facts = describeFacts(results);
+  const invalid = describeInvalid(results);
+  const origins = describeOrigins(results);
+  const layers = layerTotals(results);
+  const layerLine = LAYERS.filter((layer) => layers[layer].judged > 0).map((layer) => `${layer} ${VERDICTS.map((verdict) => `${layers[layer][verdict]} ${verdict}`).join(" · ")}`).join("; ");
   return [
     `# Extraction quality judge — ${options.date}`,
     "",
     `${results.length} cases: ${VERDICTS.map((verdict) => `${count(verdict)} ${verdict}`).join(" · ")} · ${errors} error. This run judged ${options.ranSlugs} (${fresh} fresh, ${cached} cached)${previous ? `; ${previous} rows are from earlier runs` : ""}. Judge: ${options.policy}${options.mode ? `; mode ${options.mode}` : ""}; rubric ${options.rubricVersion}.${truncated ? ` ${truncated} case(s) had an input cut to fit the prompt.` : ""}${unverified ? ` ${unverified} evidence quote(s) could not be found verbatim in the inputs.` : ""}`,
+    ...(layerLine ? ["", `Per layer: ${layerLine}.`] : []),
+    ...(origins ? ["", origins] : []),
+    ...(invalid ? ["", invalid] : []),
     ...(opinions ? ["", opinions] : []),
     ...(facts ? ["", facts] : []),
     "",
-    "## Issues by kind",
+    "## Issues by layer and kind",
     "",
-    kinds.length ? "| kind | cases | issues | major |" : "No issues reported.",
-    ...(kinds.length ? ["|---|---:|---:|---:|", ...kinds.map((row) => `| ${row.kind} | ${row.slugs} | ${row.issues} | ${row.major} |`)] : []),
+    "Valid issues only; issues from results judged before rubric v6 carry no layer and are not counted here.",
+    "",
+    kinds.length ? "| layer | kind | cases | issues | major |" : "No issues reported.",
+    ...(kinds.length ? ["|---|---|---:|---:|---:|", ...kinds.map((row) => `| ${row.layer} | ${row.kind} | ${row.slugs} | ${row.issues} | ${row.major} |`)] : []),
     "",
     "## Cases",
     "",
-    "`kind!` marks a major issue. `broken`, `overflow`, `raw` and `math` are the render capture's measured facts (broken images, elements wider than the column, markup shown as text, formulas that failed to render); `–` means the case was judged without a capture. `decided by` is the backend whose opinion became the verdict; `(disputed)` means the other backend's verdict differed. Evidence quotes live in `eval/judge/out/<slug>.json` and screenshots in `eval/render/out/<slug>/` (neither committed).",
+    "`content`, `metadata` and `rendering` are the layer verdicts; the verdict is the worst of them (`–`: the layer was not judged, as rendering in text mode, or the result predates rubric v6). `kind!` marks a major issue; kinds are those of the valid issues, `(+n invalid)` counts the ones the program discarded. `broken`, `overflow`, `raw` and `math` are the render capture's measured facts (broken images, elements wider than the column, markup shown as text, formulas that failed to render); `–` means the case was judged without a capture. `decided by` is the backend whose opinion became the verdict, or `merged` when two opinions were cross-confirmed into one issue list; `(disputed)` means the two opinions' own verdicts differed. Evidence quotes live in `eval/judge/out/<slug>.json` and screenshots in `eval/render/out/<slug>/` (neither committed).",
     "",
-    "| slug | verdict | kinds | broken | overflow | raw | math | summary | decided by | origin |",
-    "|---|---|---|---:|---:|---:|---:|---|---|---|",
+    "| slug | verdict | content | metadata | rendering | kinds | broken | overflow | raw | math | summary | decided by | origin |",
+    "|---|---|---|---|---|---|---:|---:|---:|---:|---|---|---|",
     ...sorted.map(rowLine),
     "",
   ].join("\n");

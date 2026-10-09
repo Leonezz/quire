@@ -1,30 +1,37 @@
 // How a case is judged under a policy: which backends are asked, in what order, and how their
 // opinions fold into the case's verdict. Pure apart from the backends it is handed.
 //
-//   single              one opinion; it is the verdict.
-//   screen-then-confirm the screener answers first. PASS (or any verdict outside escalateOn) is
-//                       final. Otherwise the confirmer answers and its opinion is final; `disputed`
-//                       when the two verdicts differ. A failed screener fails the case. A failed
-//                       confirmer also fails the case: JudgedCase has no field for a partial
-//                       failure, and a screener-only verdict passed off as confirmed would be a
-//                       silent downgrade. The error names the screener's verdict so it is not lost.
-//   both                both answer (in parallel). The more severe verdict's opinion is final
-//                       (MAJOR > MINOR > PASS; the first backend on a tie), its issues joined with
-//                       the other's (deduped by kind + evidence); `disputed` when verdicts differ.
-//                       Either failing fails the case.
+// Every verdict here is the program's (verdict.ts): per layer from the valid issues, the overall one
+// the worst layer. A case with two opinions is cross-confirmed (merge.ts, docs/design/eval-rubric.md
+// §6): their valid issues merge into one list, an issue both report counting once, a one-sided major
+// issue counting as major only with a measured fact behind it; the case's verdicts come from that
+// list, `resolution.from` is "merged", and `disputed` says the two opinions' own verdicts differ.
+//
+//   single              one opinion; its issues and verdicts are the case's.
+//   screen-then-confirm the screener answers first. A verdict outside escalateOn (by default PASS)
+//                       is final, the screener's alone. Otherwise the confirmer answers and the two
+//                       are cross-confirmed. Any valid major issue makes the screener's verdict MAJOR,
+//                       so a "PASS with a major issue" cannot happen. A failed screener fails the
+//                       case. A failed confirmer also fails the case: JudgedCase has no field for a
+//                       partial failure, and a screener-only verdict passed off as confirmed would be
+//                       a silent downgrade. The error names the screener's verdict so it is not lost.
+//   both                both answer (in parallel) and are cross-confirmed, the second backend in the
+//                       confirmer's place. Either failing fails the case.
 //
 // The cache key covers the policy and every backend/model it names, so changing any of them
 // re-judges every case; in visual mode also the mode, the capture's key and the tiles attached.
 import { cacheKey, type BackendId, type FailedCase, type JudgedCase, type JudgedIssue, type JudgeResult, type Opinion, type Resolution } from "./cache";
 import { describeSpec, type BackendSpec, type JudgeBackend } from "./backends/types";
-import { askOpinion, type OpinionFailure } from "./judge-case";
+import { askOpinion, mergeFactsOf, type OpinionFailure } from "./judge-case";
+import { crossConfirm } from "./merge";
 import { RUBRIC_VERSION, TEXT_RUBRIC_VERSION, VERDICTS, type PromptInput, type Verdict } from "./rubric";
+import { layerVerdicts, overallVerdict, type LayerVerdicts } from "./verdict";
 import { DEFAULT_MAX_IMAGES, planImages, renderSummary, visualKeyPart } from "./visual";
 
 export type PolicyId = Resolution["policy"];
 export type EffectivePolicy =
   | { policy: "single"; judge: BackendSpec }
-  | { policy: "screen-then-confirm"; screen: BackendSpec; confirm: BackendSpec; escalateOn: readonly Verdict[]; /** Also escalate a PASS whose issues include a major one: screeners are lenient, and a major issue contradicts PASS under the rubric. */ escalateOnMajorIssue: boolean }
+  | { policy: "screen-then-confirm"; screen: BackendSpec; confirm: BackendSpec; escalateOn: readonly Verdict[] }
   | { policy: "both"; backends: readonly [BackendSpec, BackendSpec] };
 
 const POLICIES: readonly PolicyId[] = ["single", "screen-then-confirm", "both"];
@@ -47,8 +54,8 @@ export function parseEffectivePolicy(json: string): EffectivePolicy {
     case "screen-then-confirm": {
       const escalateOn = parsed.escalateOn;
       if (!Array.isArray(escalateOn) || escalateOn.length === 0 || escalateOn.some((verdict) => !(VERDICTS as readonly string[]).includes(verdict))) throw new Error(`JUDGE_POLICY.escalateOn must be a non-empty list from ${VERDICTS.join("|")}: ${json}`);
-      if (parsed.escalateOnMajorIssue !== undefined && typeof parsed.escalateOnMajorIssue !== "boolean") throw new Error(`JUDGE_POLICY.escalateOnMajorIssue must be a boolean: ${json}`);
-      return { policy: "screen-then-confirm", screen: parseSpec(parsed.screen, "screen"), confirm: parseSpec(parsed.confirm, "confirm"), escalateOn: escalateOn as Verdict[], escalateOnMajorIssue: parsed.escalateOnMajorIssue ?? true };
+      if (parsed.escalateOnMajorIssue !== undefined) throw new Error(`JUDGE_POLICY.escalateOnMajorIssue is gone since rubric v6 (any valid major issue makes the verdict MAJOR); resolve the policy with the current policy-config.mjs: ${json}`);
+      return { policy: "screen-then-confirm", screen: parseSpec(parsed.screen, "screen"), confirm: parseSpec(parsed.confirm, "confirm"), escalateOn: escalateOn as Verdict[] };
     }
     case "both": {
       if (!Array.isArray(parsed.backends) || parsed.backends.length !== 2) throw new Error(`JUDGE_POLICY.backends must name two backends: ${json}`);
@@ -61,7 +68,7 @@ export function parseEffectivePolicy(json: string): EffectivePolicy {
 export function policyKey(effective: EffectivePolicy): string {
   switch (effective.policy) {
     case "single": return `single ${describeSpec(effective.judge)}`;
-    case "screen-then-confirm": return `screen-then-confirm ${describeSpec(effective.screen)} > ${describeSpec(effective.confirm)} on ${[...effective.escalateOn].sort().join(",")}${effective.escalateOnMajorIssue ? ",major-issue" : ""}`;
+    case "screen-then-confirm": return `screen-then-confirm ${describeSpec(effective.screen)} > ${describeSpec(effective.confirm)} on ${[...effective.escalateOn].sort().join(",")}`;
     case "both": return `both ${effective.backends.map(describeSpec).join(" + ")}`;
   }
 }
@@ -95,20 +102,24 @@ export function caseKey(input: PromptInput, policy: EffectivePolicy, maxImages =
   return cacheKey(input.source, input.extracted, RUBRIC_VERSION, `${policyKey(policy)} ${visualKeyPart(input.visual, planImages(input.visual, maxImages))}`);
 }
 
-const RANK: Record<Verdict, number> = { PASS: 0, MINOR: 1, MAJOR: 2 };
-const moreSevere = (a: Opinion, b: Opinion): Opinion => (RANK[b.verdict] > RANK[a.verdict] ? b : a);
-
-/** a's issues, then those of b not already there (same kind and evidence). */
-export function unionIssues(a: readonly JudgedIssue[], b: readonly JudgedIssue[]): JudgedIssue[] {
-  const seen = new Set(a.map((issue) => `${issue.kind}\u0000${issue.evidence}`));
-  return [...a, ...b.filter((issue) => !seen.has(`${issue.kind}\u0000${issue.evidence}`))];
-}
-
-interface Resolved { opinions: Opinion[]; final: Opinion; issues: JudgedIssue[]; resolution: Resolution }
+interface Resolved { opinions: Opinion[]; final: Opinion; issues: JudgedIssue[]; layers: LayerVerdicts; verdict: Verdict; resolution: Resolution }
 type Outcome = { ok: true; resolved: Resolved } | { ok: false; failure: OpinionFailure; error: string; opinions: Opinion[] };
 
 const failed = (failure: OpinionFailure, error: string, opinions: Opinion[] = []): Outcome => ({ ok: false, failure, error, opinions });
-const resolved = (opinions: Opinion[], final: Opinion, issues: JudgedIssue[], policy: PolicyId, disputed: boolean): Outcome => ({ ok: true, resolved: { opinions, final, issues, resolution: { policy, from: final.backend, disputed } } });
+/** The layers askOpinion computed; an opinion without them is a programming error, never a PASS. */
+function layersOf(opinion: Opinion): LayerVerdicts {
+  if (!opinion.layers) throw new Error(`${opinion.backend}/${opinion.model} opinion has no layer verdicts`);
+  return opinion.layers;
+}
+/** The case decided by one opinion: its issues and verdicts. */
+const decided = (opinion: Opinion, policy: PolicyId): Outcome => ({ ok: true, resolved: { opinions: [opinion], final: opinion, issues: opinion.issues, layers: layersOf(opinion), verdict: opinion.verdict, resolution: { policy, from: opinion.backend, disputed: false } } });
+
+/** Two opinions cross-confirmed: the merged issue list decides; the confirmer gives the summary and the model named on the case. */
+function merged(input: PromptInput, screen: Opinion, confirm: Opinion, policy: PolicyId): Outcome {
+  const issues = crossConfirm(screen.issues, confirm.issues, mergeFactsOf(input));
+  const layers = layerVerdicts(issues, input.visual !== undefined);
+  return { ok: true, resolved: { opinions: [screen, confirm], final: confirm, issues, layers, verdict: overallVerdict(layers), resolution: { policy, from: "merged", disputed: screen.verdict !== confirm.verdict } } };
+}
 
 async function judgeUnderPolicy(input: PromptInput, { policy, backend, timeoutMs, maxImages = DEFAULT_MAX_IMAGES }: JudgeCaseOptions): Promise<Outcome> {
   const ask = (spec: BackendSpec) => askOpinion(backend(spec), input, timeoutMs, maxImages);
@@ -116,24 +127,21 @@ async function judgeUnderPolicy(input: PromptInput, { policy, backend, timeoutMs
     case "single": {
       const outcome = await ask(policy.judge);
       if (!outcome.ok) return failed(outcome.failure, `${describeSpec(policy.judge)}: ${outcome.failure.error}`);
-      return resolved([outcome.opinion], outcome.opinion, outcome.opinion.issues, "single", false);
+      return decided(outcome.opinion, "single");
     }
     case "screen-then-confirm": {
       const screen = await ask(policy.screen);
       if (!screen.ok) return failed(screen.failure, `screener ${describeSpec(policy.screen)}: ${screen.failure.error}`);
-      const escalate = policy.escalateOn.includes(screen.opinion.verdict) || (policy.escalateOnMajorIssue && screen.opinion.issues.some((issue) => issue.severity === "major"));
-      if (!escalate) return resolved([screen.opinion], screen.opinion, screen.opinion.issues, "screen-then-confirm", false);
+      if (!policy.escalateOn.includes(screen.opinion.verdict)) return decided(screen.opinion, "screen-then-confirm");
       const confirm = await ask(policy.confirm);
       if (!confirm.ok) return failed(confirm.failure, `confirmer ${describeSpec(policy.confirm)} failed after screener ${describeSpec(policy.screen)} said ${screen.opinion.verdict}: ${confirm.failure.error}`, [screen.opinion]);
-      return resolved([screen.opinion, confirm.opinion], confirm.opinion, confirm.opinion.issues, "screen-then-confirm", screen.opinion.verdict !== confirm.opinion.verdict);
+      return merged(input, screen.opinion, confirm.opinion, "screen-then-confirm");
     }
     case "both": {
       const [first, second] = await Promise.all(policy.backends.map(ask));
       if (!first.ok) return failed(first.failure, `${describeSpec(policy.backends[0])}: ${first.failure.error}${second.ok ? ` (${describeSpec(policy.backends[1])} said ${second.opinion.verdict})` : `; ${describeSpec(policy.backends[1])}: ${second.failure.error}`}`, second.ok ? [second.opinion] : []);
       if (!second.ok) return failed(second.failure, `${describeSpec(policy.backends[1])}: ${second.failure.error} (${describeSpec(policy.backends[0])} said ${first.opinion.verdict})`, [first.opinion]);
-      const final = moreSevere(first.opinion, second.opinion);
-      const other = final === first.opinion ? second.opinion : first.opinion;
-      return resolved([first.opinion, second.opinion], final, unionIssues(final.issues, other.issues), "both", first.opinion.verdict !== second.opinion.verdict);
+      return merged(input, first.opinion, second.opinion, "both");
     }
   }
 }
@@ -161,8 +169,8 @@ export async function judgeCase(input: PromptInput, options: JudgeCaseOptions): 
     const result: FailedCase = { ...base, model: failure.model, ...(failure.resolvedModel ? { resolvedModel: failure.resolvedModel } : {}), ...(tokens !== undefined ? { tokens } : {}), ...stamp(), error: outcome.error, ...(failure.rawAnswer !== undefined ? { rawAnswer: failure.rawAnswer } : {}) };
     return result;
   }
-  const { opinions, final, issues, resolution } = outcome.resolved;
+  const { opinions, final, issues, layers, verdict, resolution } = outcome.resolved;
   const tokens = sumTokens(opinions);
-  const result: JudgedCase = { ...base, model: final.model, ...(final.resolvedModel ? { resolvedModel: final.resolvedModel } : {}), ...(tokens !== undefined ? { tokens } : {}), ...stamp(), verdict: final.verdict, issues, summary: final.summary, opinions, resolution };
+  const result: JudgedCase = { ...base, model: final.model, ...(final.resolvedModel ? { resolvedModel: final.resolvedModel } : {}), ...(tokens !== undefined ? { tokens } : {}), ...stamp(), verdict, layers, issues, summary: final.summary, opinions, resolution };
   return result;
 }
