@@ -248,7 +248,8 @@ function notifyIfUnfocused(event: AgentEvent) {
   notification.show();
 }
 
-const codex = new CodexClient({ onDiagnostic: (message) => console.warn(`[agent] ${message}`), configuredPath: () => settings.get().codexPath });
+// Quire's own CODEX_HOME: its threads would otherwise show up in the user's Codex app. It signs in separately.
+const codex = new CodexClient({ onDiagnostic: (message) => console.warn(`[agent] ${message}`), configuredPath: () => settings.get().codexPath, codexHome: join(userData, "codex") });
 const agent = new AgentService({
   client: codex, tools: agentTools, userData, store, sessions,
   toolHandler: createToolHandler({ store, items, annotations, onChanged: () => broadcast("library:changed"), onMaterialized: (record) => void images.prefetch(imageUrlsOf(record)) }),

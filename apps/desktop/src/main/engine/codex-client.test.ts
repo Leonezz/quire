@@ -41,7 +41,7 @@ function basicScript(onTurn: (fake: FakeProcess, turnRequest: Json) => void, ove
   };
 }
 
-function harness(script: (message: Json, fake: FakeProcess) => void, options: { turnTimeoutMs?: number } = {}) {
+function harness(script: (message: Json, fake: FakeProcess) => void, options: { turnTimeoutMs?: number; codexHome?: string; ensureDir?: (path: string) => void } = {}) {
   const processes: FakeProcess[] = [];
   const diagnostics: string[] = [];
   const spawn: Spawn = (_command, args) => {
@@ -121,6 +121,24 @@ describe("CodexClient", () => {
     expect(init.params).toMatchObject({ clientInfo: { name: "quire" }, capabilities: { experimentalApi: true } });
     expect(h.server().written[1]).toMatchObject({ method: "initialized" });
     expect(seen[0]?.CODEX_HOME).toBe("/home/reader/.codex");
+  });
+
+  it("runs codex in Quire's own CODEX_HOME when one is given, creating it first, so its threads stay out of the user's Codex app", async () => {
+    const seen: NodeJS.ProcessEnv[] = [];
+    const created: string[] = [];
+    const h = harness(basicScript(() => {}), { codexHome: "/data/quire/codex", ensureDir: (path) => created.push(path) });
+    const spawn = h.client as unknown as { spawn: Spawn };
+    const inner = spawn.spawn;
+    spawn.spawn = (command, args, options) => { seen.push(options.env); return inner(command, args, options); };
+    await h.client.account();
+    expect(created).toEqual(["/data/quire/codex"]);
+    expect(seen.map((env) => env.CODEX_HOME)).toEqual(["/data/quire/codex"]);
+  });
+
+  it("fails loudly when Quire's CODEX_HOME cannot be created", async () => {
+    const h = harness(basicScript(() => {}), { codexHome: "/read-only/codex", ensureDir: () => { throw new Error("EACCES"); } });
+    await expect(h.client.account()).rejects.toThrow(/Could not create Quire's Codex home \/read-only\/codex: EACCES/);
+    expect(h.processes.filter((p) => p.args[0] === "app-server")).toHaveLength(0);
   });
 
   it("runs a turn: thread/start with the tools, streamed deltas, a tool call, the final text", async () => {

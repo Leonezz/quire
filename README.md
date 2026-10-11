@@ -42,7 +42,7 @@ Alpha builds for macOS are published on the [Releases page](https://github.com/L
 
 After that it opens like any other app. Quire checks for newer alphas and offers them in **Settings › About**; installing in place works when the new build carries the same signature, otherwise it opens the download page.
 
-The agent needs the [Codex CLI](https://github.com/openai/codex) installed and signed in (`codex login`); everything else works without it.
+The agent needs the [Codex CLI](https://github.com/openai/codex) installed; everything else works without it. Quire runs Codex in a home of its own (`<userData>/codex`), so its conversations stay out of your Codex app and it asks you to sign in to ChatGPT once, from the agent panel. Threads an older Quire left in `~/.codex` can be listed and archived with `node apps/desktop/scripts/clean-codex-threads.mjs [--archive | --delete]`.
 
 ## Run it from source
 

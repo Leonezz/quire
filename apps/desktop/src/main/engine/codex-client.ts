@@ -1,5 +1,5 @@
 import { spawn as nodeSpawn } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
 import { delimiter, join } from "node:path";
 import { createInterface } from "node:readline";
@@ -34,6 +34,13 @@ export interface CodexClientOptions {
   exists?: (path: string) => boolean;
   /** The binary the settings name; read at every resolution, empty means auto-detect. */
   configuredPath?: () => string;
+  /**
+   * Quire's own CODEX_HOME. Threads there stay out of the user's Codex app, which lists every
+   * app-server thread of ~/.codex as an interactive ("vscode") one. Absent means CODEX_HOME, then ~/.codex.
+   */
+  codexHome?: string;
+  /** Creates `codexHome` before the server starts (codex refuses a CODEX_HOME that does not exist). */
+  ensureDir?: (path: string) => void;
   sleep?: (ms: number) => Promise<void>;
   /** stderr lines, declined approvals and other non-fatal facts; never silent, never a throw. */
   onDiagnostic?: (message: string) => void;
@@ -84,6 +91,8 @@ export class CodexClient {
   private readonly env: NodeJS.ProcessEnv;
   private readonly exists: (path: string) => boolean;
   private readonly configuredPath: () => string;
+  private readonly codexHome: string | undefined;
+  private readonly ensureDir: (path: string) => void;
   private readonly sleep: (ms: number) => Promise<void>;
   private readonly diagnostic: (message: string) => void;
   private readonly turnTimeoutMs: number;
@@ -102,6 +111,8 @@ export class CodexClient {
     this.env = options.env ?? process.env;
     this.exists = options.exists ?? existsSync;
     this.configuredPath = options.configuredPath ?? (() => "");
+    this.codexHome = options.codexHome;
+    this.ensureDir = options.ensureDir ?? ((path) => { mkdirSync(path, { recursive: true }); });
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.diagnostic = options.onDiagnostic ?? (() => {});
     this.turnTimeoutMs = options.turnTimeoutMs ?? DEFAULT_TURN_TIMEOUT_MS;
@@ -122,7 +133,7 @@ export class CodexClient {
   binary(): string { return resolveCodexBinary(this.env, this.exists, this.configuredPath()); }
 
   private childEnv(): NodeJS.ProcessEnv {
-    return { ...this.env, CODEX_HOME: str(this.env.CODEX_HOME) ?? join(str(this.env.HOME) ?? homedir(), ".codex"), NO_COLOR: "1" };
+    return { ...this.env, CODEX_HOME: this.codexHome ?? str(this.env.CODEX_HOME) ?? join(str(this.env.HOME) ?? homedir(), ".codex"), NO_COLOR: "1" };
   }
 
   /** "codex-cli X.Y.Z" from `codex --version`, run once. */
@@ -146,6 +157,10 @@ export class CodexClient {
 
   start(): void {
     if (this.process) return;
+    if (this.codexHome) {
+      try { this.ensureDir(this.codexHome); }
+      catch (error) { throw new CodexError("AGENT_UNAVAILABLE", `Could not create Quire's Codex home ${this.codexHome}: ${error instanceof Error ? error.message : String(error)}`); }
+    }
     const child = this.spawn(this.binary(), ["app-server"], { env: this.childEnv() });
     this.process = child;
     createInterface({ input: child.stdout }).on("line", (line) => this.handleLine(line));
