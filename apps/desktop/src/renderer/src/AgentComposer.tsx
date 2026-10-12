@@ -49,7 +49,12 @@ export function AgentComposer({ status, statusError, authRequired, running, plac
           </div>
         </div>
       ) : null}
-      {available && authRequired ? <div className="justify-self-start">{signIn}</div> : null}
+      {available && authRequired ? (
+        <div className="grid justify-items-start gap-1.5 text-[12.5px] text-label-2">
+          {status.reason ? <span>{status.reason}</span> : null}
+          {signIn}
+        </div>
+      ) : null}
       <div className="flex items-end gap-1.5">
         {armedTask !== "ask" ? <button type="button" className="mb-1.5 inline-flex h-[22px] shrink-0 cursor-default items-center gap-1 rounded-pill border-0 bg-purple-soft px-2 text-[11.5px] font-medium text-purple-text" aria-label={`${taskLabel[armedTask]} — press to clear`} onClick={() => onArmedTaskChange("ask")}>{taskLabel[armedTask]}<Icon of={X} size="sm" /></button> : null}
         <TextField multiline aria-label="Ask the agent" placeholder={running ? "Still answering…" : placeholder} value={draft} onChange={setDraft} isDisabled={!available || running} className="min-w-0 flex-1"

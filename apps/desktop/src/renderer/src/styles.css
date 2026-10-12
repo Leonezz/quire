@@ -27,8 +27,9 @@ html[data-render] body { overflow: visible; }
 /* Motion: quiet, short, and only where something appears. A reader (or a preview) switches with a
    120ms fade; the side panel slides in over 160ms (`panel-slide`, in @read/ui); nothing moves for reduced motion. */
 @keyframes reader-enter { from { opacity: 0; } to { opacity: 1; } }
-@keyframes toolbar-pop { from { opacity: 0; transform: translate(-50%, 4px) scale(.96); } to { opacity: 1; transform: translate(-50%, 0) scale(1); } }
-@keyframes toolbar-pop-below { from { opacity: 0; transform: translate(-50%, -4px) scale(.96); } to { opacity: 1; transform: translate(-50%, 0) scale(1); } }
+/* The bar is centred by its own `translate` (-translate-x-1/2), which composes with `transform`: the keyframes only nudge and scale. */
+@keyframes toolbar-pop { from { opacity: 0; transform: translateY(4px) scale(.96); } to { opacity: 1; transform: none; } }
+@keyframes toolbar-pop-below { from { opacity: 0; transform: translateY(-4px) scale(.96); } to { opacity: 1; transform: none; } }
 .reader-enter { animation: reader-enter .12s ease-out both; }
 /* The sidebar toggle: react-resizable-panels jumps flex-grow; during the toggle that jump is eased. */
 [data-sidebar-sliding] #sidebar, [data-sidebar-sliding] #main { transition: flex-grow .2s cubic-bezier(.2, .8, .2, 1); }

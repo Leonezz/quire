@@ -3,7 +3,7 @@ import { Button, Kbd, NumberField, Segment, Segmented, Sheet, SheetDialog, Switc
 import type { AgentStatus, Settings, SettingsPatch } from "../../shared/contracts";
 import { AboutSection } from "./AboutSection";
 import { FeedbackSection } from "./FeedbackSection";
-import { agentStore, useAgentStatus } from "./agentStore";
+import { agentStore, needsSignIn, useAgentStatus } from "./agentStore";
 import { read } from "./api";
 import { KEYBOARD_MAP } from "./keyboardMap";
 import { ReadingControls } from "./ReadingSettings";
@@ -41,7 +41,7 @@ function Row({ label, hint, children }: { label: string; hint?: string | undefin
 function agentLine(status: AgentStatus | undefined, error: string | undefined): string {
   if (error) return error;
   if (!status) return "Checking the agent…";
-  if (status.available) return `Codex ${status.version ?? ""}${status.account ? ` · ${status.account}` : ""}${status.running === 1 ? " · answering" : status.running > 1 ? ` · answering ${status.running}` : ""}`.replace(/\s+/g, " ").trim();
+  if (status.available) return `Codex ${status.version ?? ""}${status.account ? ` · ${status.account}` : ""}${status.reason ? ` · ${status.reason}` : ""}${status.running === 1 ? " · answering" : status.running > 1 ? ` · answering ${status.running}` : ""}`.replace(/\s+/g, " ").trim();
   return status.reason ?? "The agent is not available.";
 }
 
@@ -102,7 +102,6 @@ export function SettingsSheet({ open, onClose, section, onOpenLink }: { open: bo
     setCopied(true);
   };
   const savedNote = (field: Field) => (saved === field && !errors[field] ? "Saved." : undefined);
-  const needsSignIn = agent !== undefined && !agent.available && /sign in|log in|login/i.test(agent.reason ?? "");
   const enterSaves = (field: "codexPath" | "agentModel") => (event: React.KeyboardEvent) => { if (event.key === "Enter") { event.preventDefault(); void save(field, drafts[field]); } };
   const storeKey = () => { if (drafts.typesafeApiKey.trim()) void save("typesafeApiKey", drafts.typesafeApiKey); };
 
@@ -131,7 +130,7 @@ export function SettingsSheet({ open, onClose, section, onOpenLink }: { open: bo
             <Row label="Status">
               <div className="flex flex-wrap items-center gap-2 pt-2 text-[13px] text-label">
                 <span className={agentError ? "text-red-text" : ""}>{agentLine(agent, agentError)}</span>
-                {needsSignIn ? <Button size="sm" variant="primary" onPress={() => void login()}>Sign in</Button> : null}
+                {needsSignIn(agent) ? <Button size="sm" variant="primary" onPress={() => void login()}>Sign in</Button> : null}
                 <Button size="sm" variant="quiet" onPress={() => void refreshAgent()}>Check again</Button>
               </div>
             </Row>

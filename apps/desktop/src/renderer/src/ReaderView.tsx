@@ -22,6 +22,8 @@ import { TextViewBanner } from "./TextViewBanner";
 import type { MaterialViewController } from "./useMaterialView";
 import { flashQuoteRange, reportQuoteJump, resolveQuoteRange, scrollQuoteIntoView, type MaterialQuoteJump } from "./quoteJump";
 import { qualityLabel } from "./qualityLabel";
+import { isReportShortcut } from "./keyboardMap";
+import { reportSelectionOf, takeLiveSelection, viewportOf, rectOf, type ReportRequest, type ReportSelection } from "./reportRequest";
 
 type OutlineEntry = { id: string; label: string; level: number };
 
@@ -77,8 +79,11 @@ export interface ReaderProps {
   /** The Info panel saved metadata: the owner replaces its record so the header and body follow. */
   onMaterialSaved: (record: MaterialRecord) => void;
   onOpenSettings?: (() => void) | undefined;
-  /** "Report rendering problem…" (the quality pill, the Info panel, the quality banner): the owner opens the feedback sheet for the current view. */
-  onReport: () => void;
+  /**
+   * "Report" (⌥⌘R, the selection toolbar, the quality pill, the Info panel, the quality banner): the owner opens the report
+   * panel for the current view, with a way to measure this reader at submit time and the passage pointed at, if any.
+   */
+  onReport: (request: ReportRequest) => void;
   /** The shell's Add · Search icons, at the far right of the toolbar segment. Escape closes the panel, then calls `onBack`. */
   trailing?: ReactNode;
 }
@@ -96,7 +101,9 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
   const [activeHeading, setActiveHeading] = useState<string | undefined>(undefined);
   const [tocPinned, setTocPinned] = useState(false);
   const [progress, setProgress] = useState(0);
-    const [prefs, setPrefs] = useReadingPrefs();
+  // The exact scrolled fraction, for a report's screenshot position (the state above is rounded for the bar).
+  const fractionRef = useRef(0);
+  const [prefs, setPrefs] = useReadingPrefs();
   const [findOpen, setFindOpen] = useState(false);
   const [bodyGeneration, setBodyGeneration] = useState(0);
   const { annotations, error: annotationsError, add, update, remove } = useAnnotations(material.id);
@@ -201,6 +208,14 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
     const range = bodyRef.current ? resolveTextQuoteRange(bodyRef.current, capture.locator, capture.quote) : undefined;
     void copyText(citationFor(material, { quote: capture.quote }, sectionOf(range)));
   };
+  // A report measures the viewport when it is submitted, and finds an attached passage again for its box then.
+  const measureReport = useCallback((selection: ReportSelection | undefined) => {
+    const viewport = viewportOf(viewportRef.current, fractionRef.current);
+    const range = selection && bodyRef.current ? resolveTextQuoteRange(bodyRef.current, selection.locator, selection.quote) : undefined;
+    return { ...(viewport ? { viewport } : {}), ...(range ? { selectionRect: rectOf(range.getBoundingClientRect()) } : {}) };
+  }, []);
+  const report = useCallback((selection?: ReportSelection) => onReport({ measure: measureReport, ...(selection ? { selection } : {}) }), [onReport, measureReport]);
+  const reportFromChrome = useCallback(() => report(), [report]);
 
   useEffect(() => {
     const frame = requestAnimationFrame(() => { setOutline(outlineOf(bodyRef.current)); setBodyGeneration((value) => value + 1); });
@@ -234,6 +249,7 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
     const onScroll = () => {
       const max = viewport.scrollHeight - viewport.clientHeight;
       const fraction = max > 0 ? Math.min(1, viewport.scrollTop / max) : 1;
+      fractionRef.current = fraction;
       setProgress(Math.round(fraction * 100));
       onProgressRef.current?.(fraction);
       setActiveHeading(currentHeading(viewport, bodyRef.current));
@@ -247,9 +263,11 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
   // On `document`, not `window`: the shell's own ⌘J listens on the window and yields when a reader already handled it.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
-      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
       // A sheet (Settings, the feedback report) has its own keys; the reader's single letters stay out of it.
       if (event.target instanceof Element && event.target.closest("[role=dialog]")) return;
+      // ⌥⌘R reports from anywhere in the reader, a note being typed included; a selected passage goes along.
+      if (isReportShortcut(event)) { event.preventDefault(); report(takeLiveSelection(bodyRef.current, captureSelection)); return; }
+      if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
       if (event.key === "Escape") { event.preventDefault(); if (panel) setPanel(null); else onBack?.(); }
       if (event.key === "t") { event.preventDefault(); setTocPinned((pinned) => !pinned); }
       if (event.key === "n" && !event.metaKey && !event.ctrlKey) { event.preventDefault(); setPanel((open) => (open === "notes" ? null : "notes")); }
@@ -259,7 +277,7 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [panel, onBack]);
+  }, [panel, onBack, report, captureSelection]);
 
   // A stable resolver: the surface keys its image cache by resolver identity, so a new function per render
   // would re-request every image on each scroll tick (flicker and layout jumps).
@@ -271,14 +289,14 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
 
   return (
     <div className="grid h-full grid-cols-[minmax(0,1fr)] grid-rows-[52px_minmax(0,1fr)]">
-      <ReaderToolbar title={material.title} subtitle={subtitle} badge={quality} onReport={onReport} onRebuild={onRebuild} tocPinned={tocPinned} onTocChange={setTocPinned} panel={panel} onPanelChange={setPanel} prefs={prefs} onPrefsChange={setPrefs} trailing={trailing} views={viewSwitch} />
+      <ReaderToolbar title={material.title} subtitle={subtitle} badge={quality} onReport={reportFromChrome} onRebuild={onRebuild} tocPinned={tocPinned} onTocChange={setTocPinned} panel={panel} onPanelChange={setPanel} prefs={prefs} onPrefsChange={setPrefs} trailing={trailing} views={viewSwitch} />
 
       <SplitGroup id="reader" aria-label="Reader and panel" className="h-full">
       <SplitPanel id="page" minSize={PAGE_MIN}>
       <main key={material.id} className="reader-enter relative grid h-full min-h-0 grid-rows-[2px_minmax(0,1fr)] overflow-hidden bg-content">
         <div className="bg-separator-soft">{prefs.focus ? null : <i className="block h-full bg-accent opacity-80" style={{ width: `${progress}%` }} />}</div>
         {findOpen ? <FindBar root={bodyRef.current} generation={bodyGeneration} onClose={() => setFindOpen(false)} /> : null}
-        <SelectionToolbar root={bodyRef.current} viewport={viewportRef.current} capture={captureSelection} onHighlight={onHighlight} onNote={(capture) => void onNote(capture)} onCopy={onCopyCapture} onAsk={(capture) => { setAsked(capture); setPanel("agent"); }} />
+        <SelectionToolbar root={bodyRef.current} viewport={viewportRef.current} capture={captureSelection} onHighlight={onHighlight} onNote={(capture) => void onNote(capture)} onCopy={onCopyCapture} onAsk={(capture) => { setAsked(capture); setPanel("agent"); }} onReport={(capture, rect) => report(reportSelectionOf(capture, rect))} />
         {outline.length > 1 ? (
           <div className="pointer-events-none absolute inset-y-6 right-1.5 z-10 flex items-center">
             <TocRail aria-label="Contents" entries={outline.map((entry) => ({ id: entry.id, label: entry.label, level: entry.level - 1 }))} activeId={activeHeading} pinned={tocPinned} resting="hidden" onSelect={(id) => document.getElementById(id)?.scrollIntoView({ block: "start", behavior: "smooth" })} />
@@ -288,7 +306,7 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
           bylineExtra={material.origin === "agent" ? null : <a href={material.finalUrl} onClick={(event) => { event.preventDefault(); onOpenLink(material.finalUrl); }}>Open original ↗</a>}
           banner={content.view === "text" && content.report
             ? <TextViewBanner report={content.report} onOpenPdf={() => views.select("pdf")} />
-            : <QualityBanner material={material} low={quality.low} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onReport={onReport} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError} />} />
+            : <QualityBanner material={material} low={quality.low} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onReport={reportFromChrome} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError} />} />
       </main>
       </SplitPanel>
       {panelOpen ? (
@@ -296,7 +314,7 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
           <ColumnSeparator label="Resize panel" />
           <SplitPanel id="inspector" defaultSize={sizes.sizeOf("inspector", PANEL_DEFAULT)} minSize={PANEL_MIN} maxSize={PANEL_MAX} onResize={sizes.onResize("inspector")}>
             <ReaderInspector material={material} views={views} panel={panel} onClose={() => setPanel(null)} subject={material.title} agentContext={agentContext} onClearSelection={() => setAsked(null)}
-              agentSessionId={rebuildSession} onAgentSessionChange={setPanelSession} onReport={onReport} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError}
+              agentSessionId={rebuildSession} onAgentSessionChange={setPanelSession} onReport={reportFromChrome} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError}
               annotations={annotations} annotationsError={annotationsError} mirroredViews={mirroredViews(view, textContent)} activeAnnotation={activeAnnotation} noteDraft={noteDraft} onNoteDraftChange={setNoteDraft}
               onJump={(annotation) => { const shown = shownAnnotation(annotation); if (shown) jumpTo(shown); else onJumpAcross(annotation); }} onUpdateNote={(id, note) => void update(id, { note })} onDeleteAnnotation={(id) => void remove(id)}
               sectionFor={(annotation) => { const shown = shownAnnotation(annotation); return shown && bodyRef.current ? sectionOf(resolveTextQuoteRange(bodyRef.current, shown.locator, shown.quote)) : undefined; }}

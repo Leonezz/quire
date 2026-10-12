@@ -23,6 +23,7 @@
     "@read/reader-pdf": "workspace:*",
     "@read/ui": "workspace:*",
     "electron-updater": "6.8.9",
+    "fflate": "0.8.3",
     "linkedom": "0.18.13",
     "lucide-react": "1.46.0",
     "mathml-to-latex": "1.8.0",

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SelectionToolbar, TOOLBAR_GAP, placeToolbar } from "./SelectionToolbar";
 
@@ -35,7 +35,7 @@ describe("SelectionToolbar", () => {
   });
   afterEach(() => { vi.restoreAllMocks(); document.getSelection()?.removeAllRanges(); });
 
-  function mount(selectionTop: number) {
+  function mount(selectionTop: number, onReport = vi.fn()) {
     const frame = document.createElement("div");
     frame.getBoundingClientRect = () => ({ ...box, right: 1000, x: 200, y: 100, toJSON: () => undefined }) as DOMRect;
     const paragraph = document.createElement("p");
@@ -45,7 +45,7 @@ describe("SelectionToolbar", () => {
     // jsdom's Range has no layout: the selection rectangle is stubbed per test.
     Object.defineProperty(Range.prototype, "getBoundingClientRect", { configurable: true, value: () => ({ ...rect(selectionTop), right: 620, x: 500, y: selectionTop, toJSON: () => undefined }) as DOMRect });
     const capture = vi.fn(() => ({ locator: "text-quote:v2:x", quote: "words to select" }));
-    render(<SelectionToolbar root={frame} viewport={frame} capture={capture} onHighlight={vi.fn()} onNote={vi.fn()} onCopy={vi.fn()} onAsk={vi.fn()} />);
+    render(<SelectionToolbar root={frame} viewport={frame} capture={capture} onHighlight={vi.fn()} onNote={vi.fn()} onCopy={vi.fn()} onAsk={vi.fn()} onReport={onReport} />);
     const range = document.createRange();
     range.setStart(paragraph.firstChild!, 5);
     range.setEnd(paragraph.firstChild!, 20);
@@ -62,5 +62,20 @@ describe("SelectionToolbar", () => {
     const toolbar = mount(110);
     expect(toolbar.getAttribute("data-side")).toBe("below");
     expect(toolbar.style.top).toBe(`${130 - 100 + TOOLBAR_GAP}px`);
+  });
+
+  it("Report hands over the passage and its box in window pixels, then clears the selection and hides", () => {
+    const onReport = vi.fn();
+    const toolbar = mount(400, onReport);
+    const report = screen.getByRole("button", { name: "Report" });
+    expect(report.querySelector("svg.icon")).toBeTruthy();
+    expect(toolbar.lastElementChild).toBe(report);
+    act(() => { fireEvent.click(report); });
+    expect(onReport).toHaveBeenCalledTimes(1);
+    const [capture, box] = onReport.mock.calls[0]! as [unknown, DOMRect];
+    expect(capture).toEqual({ locator: "text-quote:v2:x", quote: "words to select" });
+    expect({ top: box.top, left: box.left, width: box.width, height: box.height }).toEqual({ top: 400, left: 500, width: 120, height: 20 });
+    expect(document.getSelection()?.rangeCount).toBe(0);
+    expect(screen.queryByRole("toolbar", { name: "Selection" })).toBeNull();
   });
 });

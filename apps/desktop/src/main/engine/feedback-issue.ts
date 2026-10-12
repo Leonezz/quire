@@ -4,7 +4,8 @@ import type { RenderingFeedback, RenderingProblemKind } from "../../shared/contr
 // versions the report was made with; never the capture or the extracted text (the reader attaches
 // the bundle by hand). The fields are the ids of .github/ISSUE_TEMPLATE/rendering.yml: `url`,
 // `note`, `versions`. Its `kinds` checkboxes cannot be prefilled through the URL, so the kinds go
-// at the top of the note, in the template's own words.
+// at the top of the note, in the template's own words. A one-step report (with a package) ends the
+// note with an "Attachments" paragraph: paste the screenshot from the clipboard, drag in the zip.
 
 export const ISSUE_TEMPLATE = "rendering.yml";
 /** Browsers and GitHub start dropping very long URLs; the note is truncated to stay inside this. */
@@ -70,9 +71,27 @@ export function versionsTextFor(feedback: RenderingFeedback): string {
   ].join("\n");
 }
 
-function noteTextFor(feedback: Pick<RenderingFeedback, "kinds" | "note">, note: string): string {
+function basename(path: string): string {
+  return path.split(/[\\/]/).pop() ?? path;
+}
+
+/** What the reader still has to do in the issue: paste the screenshot (when it is on the clipboard) and drag in the zip. Undefined without a package. */
+export function attachmentsTextFor(feedback: Pick<RenderingFeedback, "package" | "app">): string | undefined {
+  const pack = feedback.package;
+  if (!pack) return undefined;
+  const zip = basename(pack.zipPath);
+  const mac = feedback.app.platform === "darwin";
+  const paste = mac ? "⌘V" : "Ctrl+V";
+  const shown = mac ? "shown in Finder" : "shown in your file manager";
+  const steps = pack.copiedToClipboard
+    ? `The screenshot is on your clipboard: press ${paste} here. Then drag ${zip} (${shown}) into this box.`
+    : `Drag ${zip} (${shown}) into this box.`;
+  return `**Attachments**\n${steps}`;
+}
+
+function noteTextFor(feedback: Pick<RenderingFeedback, "kinds" | "package" | "app">, note: string): string {
   const kinds = feedback.kinds.map((kind) => `- ${PROBLEM_KIND_LABELS[kind]}`).join("\n");
-  return note.trim().length > 0 ? `${kinds}\n\n${note}` : kinds;
+  return [kinds, note.trim().length > 0 ? note : "", attachmentsTextFor(feedback) ?? ""].filter((part) => part.length > 0).join("\n\n");
 }
 
 function buildUrl(feedback: RenderingFeedback, repo: IssueRepo, note: string): string {
@@ -87,8 +106,9 @@ function buildUrl(feedback: RenderingFeedback, repo: IssueRepo, note: string): s
 }
 
 /**
- * The link that opens a prefilled issue. The note is the only part that can grow without bound,
- * so it is cut (with an ellipsis) until the whole URL fits MAX_ISSUE_URL_LENGTH.
+ * The link that opens a prefilled issue. The reader's note is the only part that can grow without bound,
+ * so it is cut (with an ellipsis) until the whole URL fits MAX_ISSUE_URL_LENGTH; the kinds and the
+ * attachments paragraph are always kept whole.
  */
 export function issueUrlFor(feedback: RenderingFeedback, repo: IssueRepo): string {
   let note = feedback.note;

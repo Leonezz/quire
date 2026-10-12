@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { AgentContext, AgentFailureCode, AgentSession, AgentTask, AgentTurnRecord } from "../../shared/contracts";
 import { read } from "./api";
-import { agentStore, newPendingKey, useAgentRun, useAgentStatus, type RunState } from "./agentStore";
+import { agentStore, needsSignIn, newPendingKey, useAgentRun, useAgentStatus, type RunState } from "./agentStore";
 import { contextKeyOf } from "./useAgentSessions";
 
 export interface ToolActivity { key: string; name: string; status: "running" | "done" | "failed"; summary?: string | undefined }
@@ -201,7 +201,7 @@ export function useAgent(context: AgentContext, { sessionId: namedSessionId, lab
     catch (cause: unknown) { setStopError(cause instanceof Error ? cause.message : "Could not stop the agent."); }
   }, []);
 
-  const authRequired = askFailure?.code === "AUTH_REQUIRED" || (status?.available === false && /sign in|log in|login/i.test(status.reason ?? ""));
+  const authRequired = askFailure?.code === "AUTH_REQUIRED" || needsSignIn(status);
 
   return {
     status, statusError, refreshStatus: agentStore.refreshStatus, login: agentStore.login,

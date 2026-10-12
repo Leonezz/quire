@@ -11,7 +11,12 @@ import { isMaterialViewId } from "./material-views";
 //   report.json   the RenderingFeedback record (what the Settings list shows)
 //   meta.json     the corpus entry (slug, url, finalUrl, status, contentType, bytes, generator, fetchedAt, framework, tags = kinds)
 //   page.html.gz  the saved original page, gzipped, only when the reader chose to include the capture
+//   original.pdf  instead of page.html.gz for the pdf and text views: the PDF itself
 //   extracted.md  what Quire made of it (the view's markdown, or its plain text when there is no markdown)
+// A one-step report (createSubmission, then feedback-submit.ts) adds:
+//   reader-document.json  the view's reader document ({ schema, document }), when it has one
+//   screenshots/          the reader and original-page screenshots and composite.png
+//   quire-report-<slug>-<id>.zip  all of the above, to drag into the issue
 
 const ID = /^[a-f0-9]{16}$/;
 export const MAX_FEEDBACK_NOTE = 20_000;
@@ -19,7 +24,7 @@ const MAX_SLUG = 80;
 const REPORT_FILE = "report.json";
 
 /** The material fields a report is built from; MaterialStore.get() returns a superset. */
-export type FeedbackMaterialRecord = Pick<MaterialRecord, "id" | "url" | "finalUrl" | "title" | "fetchedAt" | "mediaType" | "capture" | "pdf">;
+export type FeedbackMaterialRecord = Pick<MaterialRecord, "id" | "url" | "finalUrl" | "title" | "fetchedAt" | "mediaType" | "capture" | "pdf"> & { primaryView?: MaterialViewId };
 
 export interface FeedbackMaterials {
   get(id: string): Promise<FeedbackMaterialRecord | undefined>;
@@ -27,7 +32,31 @@ export interface FeedbackMaterials {
   getView(id: string, view: MaterialViewId): Promise<MaterialViewContent | undefined>;
   /** The saved original page; undefined when none was kept. */
   captureBytes(id: string): Promise<Uint8Array | undefined>;
+  /** A stored PDF's bytes (the primary one, or the given view's); undefined when none is stored. */
+  bytes(id: string, view?: MaterialViewId): Promise<Uint8Array | undefined>;
 }
+
+/** The one-step report's input: the draft plus the reader's current reading settings. */
+export type SubmitDraft = RenderingFeedbackDraft & { prefs: Record<string, unknown> };
+
+/** The original the bundle carries: the saved page, or the PDF for the pdf and text views. */
+export type FeedbackOriginal = { kind: "page"; bytes: Uint8Array } | { kind: "pdf"; bytes: Uint8Array };
+
+/** What createSubmission wrote, with what the screenshot steps need next. */
+export interface FeedbackSubmission {
+  record: RenderingFeedback;
+  material: FeedbackMaterialRecord;
+  content: MaterialViewContent;
+  /** The corpus slug (meta.json), used in the zip's name. */
+  slug: string;
+  original?: FeedbackOriginal;
+  /** Parts of the bundle that could not be written as intended; the report goes on. */
+  warnings: string[];
+}
+
+/** The views whose original is the PDF rather than the saved page. */
+const PDF_VIEWS: readonly MaterialViewId[] = ["pdf", "text"];
+export const READER_DOCUMENT_FILE = "reader-document.json";
 
 export interface FeedbackStoreOptions {
   materials: FeedbackMaterials;
@@ -69,20 +98,37 @@ function validId(value: string): string {
   return value;
 }
 
-function validKinds(value: readonly RenderingProblemKind[]): RenderingProblemKind[] {
+function validKinds(value: readonly RenderingProblemKind[], requireOne: boolean): RenderingProblemKind[] {
+  if (!Array.isArray(value)) throw new FeedbackError("kinds must be a list of problem kinds.");
   const unknown = value.find((kind) => !RENDERING_PROBLEM_KINDS.includes(kind));
   if (unknown !== undefined) throw new FeedbackError(`Unknown problem kind: ${String(unknown)}`);
   const kinds = [...new Set(value)];
-  if (kinds.length === 0) throw new FeedbackError("Pick at least one thing that went wrong.");
+  if (requireOne && kinds.length === 0) throw new FeedbackError("Pick at least one thing that went wrong.");
   return kinds;
 }
 
-function validDraft(draft: RenderingFeedbackDraft): RenderingFeedbackDraft {
+/** The two-step form asks for at least one kind; the one-step report makes kinds optional. */
+function validDraft<T extends RenderingFeedbackDraft>(draft: T, requireKind: boolean): T {
   if (!ID.test(draft.materialId)) throw new FeedbackError(`Not a material id: ${draft.materialId}`);
   if (!isMaterialViewId(draft.view)) throw new FeedbackError(`Not a view: ${String(draft.view)}`);
   if (typeof draft.note !== "string" || draft.note.length > MAX_FEEDBACK_NOTE) throw new FeedbackError(`The note must be at most ${MAX_FEEDBACK_NOTE} characters.`);
   if (typeof draft.includeCapture !== "boolean") throw new FeedbackError("includeCapture must be true or false.");
-  return { ...draft, kinds: validKinds(draft.kinds) };
+  return { ...draft, kinds: validKinds(draft.kinds, requireKind) };
+}
+
+/** A file of the bundle, relative to its directory. */
+interface BundleFile { path: string; data: Uint8Array | string }
+
+/** reader-document.json: the reader document as JSON, tagged with its schema. A payload that is not JSON is kept as text, with a warning. */
+export function readerDocumentFileOf(reader: NonNullable<MaterialViewContent["reader"]>): { text: string; warning?: string } {
+  try {
+    return { text: JSON.stringify({ schema: reader.schema, document: JSON.parse(reader.payload) as unknown }, null, 2) };
+  } catch (error) {
+    return {
+      text: JSON.stringify({ schema: reader.schema, payload: reader.payload }, null, 2),
+      warning: `The reader document is not valid JSON (${error instanceof Error ? error.message : String(error)}); it is kept as text in ${READER_DOCUMENT_FILE}.`,
+    };
+  }
 }
 
 /** GitHub only: the issue link the reader pastes back must point at github.com over https. */
@@ -121,12 +167,28 @@ export class FeedbackStore {
 
   /** Writes the bundle and returns the record. The material and the reported view must be in the library. */
   async create(input: RenderingFeedbackDraft): Promise<RenderingFeedback> {
-    const draft = validDraft(input);
+    return (await this.build(validDraft(input, true), undefined)).record;
+  }
+
+  /**
+   * The one-step report's bundle: what create writes, plus reader-document.json, the selection and the
+   * reader's position and settings on the record. Kinds may be empty. Fails loudly when nothing can be written.
+   */
+  async createSubmission(input: SubmitDraft): Promise<FeedbackSubmission> {
+    const draft = validDraft(input, false);
+    if (!draft.prefs || typeof draft.prefs !== "object" || Array.isArray(draft.prefs)) throw new FeedbackError("prefs must be an object of reading settings.");
+    return this.build(draft, {
+      readerState: { scrollFraction: draft.viewport?.scrollFraction ?? 0, prefs: { ...draft.prefs } },
+      ...(draft.selection ? { selection: { quote: draft.selection.quote, prefix: draft.selection.prefix, suffix: draft.selection.suffix } } : {}),
+    });
+  }
+
+  private async build(draft: RenderingFeedbackDraft, extras: Pick<RenderingFeedback, "selection" | "readerState"> | undefined): Promise<FeedbackSubmission> {
     const material = await this.materials.get(draft.materialId);
     if (!material) throw new FeedbackError(`Material ${draft.materialId} is not in the library.`);
     const content = await this.materials.getView(draft.materialId, draft.view);
     if (!content) throw new FeedbackError(`The ${draft.view} view of "${material.title}" is not stored, so there is nothing to report on; open it first.`);
-    const capture = draft.includeCapture ? await this.requireCapture(material) : undefined;
+    const original = draft.includeCapture ? await this.requireOriginal(material, draft.view) : undefined;
     const createdAt = this.now().toISOString();
     const id = mintId(material.id, createdAt);
     const record: RenderingFeedback = {
@@ -134,11 +196,32 @@ export class FeedbackStore {
       app: { ...this.app },
       quality: content.quality, problems: content.problems,
       ...(draft.view === "text" && content.report ? { report: content.report } : {}),
-      capture: { included: capture !== undefined, ...(material.capture ? { byteLength: material.capture.byteLength, mediaType: material.capture.mediaType } : {}) },
+      capture: captureOf(material, original),
       bundleDir: this.bundleDir(id),
+      ...extras,
     };
-    await this.writeBundle(record, metaOf(record, material), extractedTextOf(content), capture);
-    return record;
+    const meta = metaOf(record, material, original);
+    const warnings: string[] = [];
+    const files: BundleFile[] = [
+      { path: "meta.json", data: JSON.stringify(meta, null, 2) },
+      { path: "extracted.md", data: extractedTextOf(content) },
+      ...(original?.kind === "page" ? [{ path: "page.html.gz", data: gzipSync(original.bytes) }] : []),
+      ...(original?.kind === "pdf" ? [{ path: "original.pdf", data: original.bytes }] : []),
+    ];
+    if (extras && content.reader) {
+      const readerFile = readerDocumentFileOf(content.reader);
+      files.push({ path: READER_DOCUMENT_FILE, data: readerFile.text });
+      if (readerFile.warning) warnings.push(readerFile.warning);
+    }
+    await this.writeBundle(record, files);
+    return { record, material, content, slug: meta.slug, ...(original ? { original } : {}), warnings };
+  }
+
+  private async requireOriginal(material: FeedbackMaterialRecord, view: MaterialViewId): Promise<FeedbackOriginal> {
+    if (!PDF_VIEWS.includes(view)) return { kind: "page", bytes: await this.requireCapture(material) };
+    const bytes = await this.materials.bytes(material.id, "pdf");
+    if (!bytes) throw new FeedbackError(`The PDF of "${material.title}" is not stored; fetch the PDF view first, or report it without the original.`);
+    return { kind: "pdf", bytes };
   }
 
   private async requireCapture(material: FeedbackMaterialRecord): Promise<Uint8Array> {
@@ -149,19 +232,25 @@ export class FeedbackStore {
   }
 
   /** The bundle is assembled under a staging name and renamed into place, so a crash leaves no half bundle behind. */
-  private async writeBundle(record: RenderingFeedback, meta: CorpusMeta, extracted: string, capture: Uint8Array | undefined): Promise<void> {
+  private async writeBundle(record: RenderingFeedback, files: readonly BundleFile[]): Promise<void> {
     const staging = join(this.root, `.${record.id}.partial`);
     await mkdir(staging, { recursive: true });
     try {
-      await writeFile(join(staging, "meta.json"), JSON.stringify(meta, null, 2), "utf8");
-      await writeFile(join(staging, "extracted.md"), extracted, "utf8");
-      if (capture) await writeFile(join(staging, "page.html.gz"), gzipSync(capture));
+      for (const file of files) await writeFile(join(staging, file.path), file.data, typeof file.data === "string" ? "utf8" : undefined);
       await writeFile(join(staging, REPORT_FILE), JSON.stringify(record, null, 2), "utf8");
       await rename(staging, record.bundleDir);
     } catch (error) {
       await rm(staging, { recursive: true, force: true });
       throw error;
     }
+  }
+
+  /** Rewrites the record of an existing bundle (the one-step report adds its package once it is built). */
+  async save(record: RenderingFeedback): Promise<RenderingFeedback> {
+    const current = await this.require(record.id);
+    if (current.bundleDir !== record.bundleDir) throw new FeedbackError(`Feedback ${record.id} lives in ${current.bundleDir}, not ${record.bundleDir}.`);
+    await writeFile(this.reportPath(record.id), JSON.stringify(record, null, 2), "utf8");
+    return record;
   }
 
   /** Every report, newest first. A bundle whose record cannot be read is reported through `warn` and left out. */
@@ -207,15 +296,22 @@ export class FeedbackStore {
   }
 }
 
+/** What the record says about the original: the saved page's size and type, or the PDF's when the bundle carries the PDF. */
+function captureOf(material: FeedbackMaterialRecord, original: FeedbackOriginal | undefined): RenderingFeedback["capture"] {
+  if (original?.kind === "pdf") return { included: true, byteLength: original.bytes.byteLength, mediaType: "application/pdf" };
+  return { included: original !== undefined, ...(material.capture ? { byteLength: material.capture.byteLength, mediaType: material.capture.mediaType } : {}) };
+}
+
 /** The corpus entry for the bundle. `bytes` is the saved page's size (or the PDF's) — the same number a fetch would have reported. */
-function metaOf(record: RenderingFeedback, material: FeedbackMaterialRecord): CorpusMeta {
+function metaOf(record: RenderingFeedback, material: FeedbackMaterialRecord, original: FeedbackOriginal | undefined): CorpusMeta {
+  const pdf = original?.kind === "pdf";
   return {
     slug: slugForUrl(material.finalUrl, record.id),
     url: material.url,
     finalUrl: material.finalUrl,
     status: 200,
-    contentType: material.capture?.mediaType ?? material.mediaType,
-    bytes: material.capture?.byteLength ?? material.pdf?.byteLength ?? 0,
+    contentType: pdf ? "application/pdf" : material.capture?.mediaType ?? material.mediaType,
+    bytes: pdf ? original.bytes.byteLength : material.capture?.byteLength ?? material.pdf?.byteLength ?? 0,
     generator: "",
     fetchedAt: material.fetchedAt,
     framework: "unknown",

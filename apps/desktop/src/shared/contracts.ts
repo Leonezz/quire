@@ -645,8 +645,29 @@ export interface RenderingFeedbackDraft {
   kinds: RenderingProblemKind[];
   /** Free text, may be empty. */
   note: string;
-  /** Put the saved original page (the capture) into the bundle so the problem can be reproduced; requires `record.capture`. */
+  /** Put the saved original page (the capture, or the PDF itself) into the bundle so the problem can be reproduced; requires `record.capture` or a stored PDF. */
   includeCapture: boolean;
+  /** Where the reader is: the reading viewport in window CSS pixels (for the screenshot of what they see) and the scroll position (0–1). */
+  viewport?: { x: number; y: number; width: number; height: number; scrollFraction: number };
+  /** A passage the reader selected to point at the problem ("Report" in the selection toolbar): the quote with its context and its box in window CSS pixels. */
+  selection?: { quote: string; prefix: string; suffix: string; rect: { x: number; y: number; width: number; height: number } };
+}
+
+/** What a one-step report produced, besides the record: everything the reader needs to finish filing it. */
+export interface RenderingFeedbackPackage {
+  /** `<userData>/feedback/<id>/quire-report-<slug>-<id>.zip`: the whole bundle, ready to drag into the issue (kept under GitHub's 25 MB attachment limit). */
+  zipPath: string;
+  zipBytes: number;
+  /** The screenshots in the bundle, relative to the bundle directory (screenshots/…png|jpg). */
+  screenshots: string[];
+  /** The side-by-side image (reader at the reader's position or selection | original page at the same text) that was put on the clipboard; relative path. */
+  composite?: string;
+  /** Whether the issue page was opened, the zip revealed in Finder, and the composite copied to the clipboard. */
+  issueOpened: boolean;
+  revealed: boolean;
+  copiedToClipboard: boolean;
+  /** Capture steps that failed but did not stop the report (e.g. the original page never finished loading); shown to the reader. */
+  warnings: string[];
 }
 
 export interface RenderingFeedback {
@@ -673,9 +694,26 @@ export interface RenderingFeedback {
   bundleDir: string;
   /** The GitHub issue the reader filed for it, once they pasted it back. */
   issueUrl?: string;
+  /** Present for reports made with feedbackSubmit (the one-step flow). */
+  package?: RenderingFeedbackPackage;
+  /** The selection the report points at, when there was one. */
+  selection?: { quote: string; prefix: string; suffix: string };
+  /** Where the reader was (0–1) and with which reading settings, so the screenshot can be reproduced. */
+  readerState?: { scrollFraction: number; prefs: Record<string, unknown> };
 }
 
 export interface ReadApiFeedback {
+  /**
+   * The one-step report: writes the bundle (snapshot, extraction, screenshots of the reader and of the
+   * original page, context), zips it, opens the prefilled GitHub issue, reveals the zip in Finder and
+   * copies the side-by-side screenshot to the clipboard. Nothing is uploaded by the app. `prefs` are the
+   * reader's current reading settings (recorded, and used for the full-article screenshot).
+   */
+  feedbackSubmit: (draft: RenderingFeedbackDraft & { prefs: Record<string, unknown> }) => Promise<RenderingFeedback>;
+  /** Reports the progress of a running feedbackSubmit ("Capturing the page…", "Packaging…"). */
+  onFeedbackProgress: (listener: (progress: { id: string; step: "capturing" | "rendering-original" | "packaging" | "opening"; message: string }) => void) => () => void;
+  /** Copies the report's side-by-side screenshot to the clipboard again. */
+  feedbackCopyScreenshot: (id: string) => Promise<void>;
   /** Writes the bundle and the record; nothing leaves the machine. */
   feedbackCreate: (draft: RenderingFeedbackDraft) => Promise<RenderingFeedback>;
   feedbackList: () => Promise<RenderingFeedback[]>;

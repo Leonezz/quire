@@ -32,6 +32,19 @@ async function mountPanel() {
 afterEach(() => { cleanup(); agentStore.stop(); clearQuoteJumpReport(); vi.restoreAllMocks(); });
 
 describe("AgentPanel", () => {
+  it("shows why a sign-in failed next to Sign in, while Codex itself runs", async () => {
+    const timedOut = "The sign-in did not complete within three minutes. Finish it in the browser and try again.";
+    setup(async () => ({ ok: true, sessionId: "s1", turnId: "t1" }));
+    api.read.agentStatus = vi.fn(async () => ({ available: true, version: "0.157.0", running: 0, reason: "Sign in to ChatGPT to use the agent." }));
+    api.read.agentLogin = vi.fn(async () => ({ available: true, version: "0.157.0", running: 0, reason: timedOut }));
+    await mountPanel();
+    expect(screen.getByText("Sign in to ChatGPT to use the agent.")).toBeTruthy();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Sign in to Codex" })); await flush(); });
+    expect(api.read.agentLogin).toHaveBeenCalled();
+    expect(screen.getByText(timedOut)).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Sign in to Codex" })).toBeTruthy();
+  });
+
   it("says quietly when a citation's quoted passage was not found, until the next citation is pressed", async () => {
     setup(async () => ({ ok: true, sessionId: "s1", turnId: "t1" }));
     await mountPanel();

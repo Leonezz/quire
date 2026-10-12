@@ -1,20 +1,21 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Copy, MessageSquarePlus, Sparkles } from "lucide-react";
-import { Button } from "@read/ui";
+import { Copy, Flag, MessageSquarePlus, Sparkles } from "lucide-react";
+import { Button, Icon } from "@read/ui";
 import type { AnnotationColor } from "../../shared/contracts";
 import { ANNOTATION_COLORS } from "./annotations";
 
 export interface SelectionCapture { locator: string; quote: string }
 
 export type ToolbarSide = "above" | "below";
-type Placement = { top: number; left: number; side: ToolbarSide; capture: SelectionCapture };
+/** `rect` is the selection's box in window CSS pixels when the bar was last placed (scrolling places it again). */
+type Placement = { top: number; left: number; side: ToolbarSide; capture: SelectionCapture; rect: DOMRect };
 type Box = Pick<DOMRect, "top" | "bottom" | "left" | "width" | "height">;
 type BarSize = { width: number; height: number };
 
 /** The gap between the selection and the bar, so the bar never sits on the neighbouring line. */
 export const TOOLBAR_GAP = 10;
 /** Where the bar sits before it has been measured (the first paint corrects it). */
-const DEFAULT_BAR: BarSize = { width: 296, height: 44 };
+const DEFAULT_BAR: BarSize = { width: 330, height: 44 };
 const EDGE = 4;
 
 /**
@@ -35,10 +36,10 @@ export function placeToolbar(rect: Box, box: Box, bar: BarSize): { top: number; 
 
 /**
  * Floats next to a text selection inside the article: pick a colour to highlight, add a note, copy a
- * citation, or ask the agent about it. Nothing is stored until a button is pressed. The bar stands
+ * citation, ask the agent about it, or report that it rendered wrong. Nothing is stored until a button is pressed. The bar stands
  * above the selection with a gap (never over the line before it); on the first lines it drops below.
  */
-export function SelectionToolbar({ root, viewport, capture, onHighlight, onNote, onCopy, onAsk }: {
+export function SelectionToolbar({ root, viewport, capture, onHighlight, onNote, onCopy, onAsk, onReport }: {
   root: HTMLElement | null;
   viewport: HTMLElement | null;
   /** Turns the live selection into a locator + quote, or undefined when it cannot be anchored (cross-page, outside the text). */
@@ -48,6 +49,8 @@ export function SelectionToolbar({ root, viewport, capture, onHighlight, onNote,
   onCopy: (capture: SelectionCapture) => void;
   /** "Ask about this": the reader makes the selection the agent's context and opens the panel. */
   onAsk: (capture: SelectionCapture) => void;
+  /** "Report": the reader opens the report panel with this passage attached; `rect` is its box in window CSS pixels. */
+  onReport: (capture: SelectionCapture, rect: DOMRect) => void;
 }) {
   const [placement, setPlacement] = useState<Placement | null>(null);
   const barRef = useRef<HTMLDivElement>(null);
@@ -67,8 +70,9 @@ export function SelectionToolbar({ root, viewport, capture, onHighlight, onNote,
       if (!captured) { setPlacement(null); return; }
       // Positioned inside the reader frame (not the scrolled content), so viewport-relative
       // coordinates are what the absolute box needs; scrolling re-runs this handler.
-      const placed = placeToolbar(range.getBoundingClientRect(), viewport.getBoundingClientRect(), sizeRef.current);
-      setPlacement(placed ? { ...placed, capture: captured } : null);
+      const rect = range.getBoundingClientRect();
+      const placed = placeToolbar(rect, viewport.getBoundingClientRect(), sizeRef.current);
+      setPlacement(placed ? { ...placed, capture: captured, rect } : null);
     };
     const update = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(place); };
     updateRef.current = update;
@@ -126,6 +130,7 @@ export function SelectionToolbar({ root, viewport, capture, onHighlight, onNote,
       <Button variant="quiet" size="sm" aria-label="Add a note" className="size-8 shrink-0" onPress={() => { onNote(placement.capture); done(); }}><MessageSquarePlus /></Button>
       <Button variant="quiet" size="sm" aria-label="Copy citation" className="size-8 shrink-0" onPress={() => { onCopy(placement.capture); done(); }}><Copy /></Button>
       <Button variant="quiet" size="sm" aria-label="Ask about this" className="size-8 shrink-0" onPress={() => { onAsk(placement.capture); done(); }}><Sparkles /></Button>
+      <Button variant="quiet" size="sm" aria-label="Report" className="size-8 shrink-0" onPress={() => { onReport(placement.capture, placement.rect); done(); }}><Icon of={Flag} /></Button>
     </div>
   );
 }

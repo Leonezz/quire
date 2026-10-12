@@ -4,6 +4,7 @@ import { Button, Chip, ConfirmSheet } from "@read/ui";
 import type { RenderingFeedback } from "../../shared/contracts";
 import { read } from "./api";
 import { PROBLEM_KIND_LABELS } from "./feedbackKinds";
+import { bytesLabel } from "./InfoFacts";
 
 // Settings › Feedback: every rendering report saved on this Mac, newest first, with the way to its issue
 // and its bundle. The list follows the bridge's change notice, so a report saved from the reader shows up
@@ -23,11 +24,13 @@ function ReportRow({ report, onOpenLink, onError, onDelete }: { report: Renderin
     try { await action(); } catch (cause: unknown) { onError(message(cause, fallback)); }
   };
   const issueUrl = report.issueUrl;
+  // A one-step report is a zip (feedbackReveal selects it in Finder); an older one is a bundle folder.
+  const zip = report.package;
   return (
     <li className="grid gap-1.5 border-t border-separator-soft py-2.5 first:border-t-0 first:pt-0">
       <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 text-[13px]">
         <strong className="min-w-0 truncate font-semibold text-label">{report.title}</strong>
-        <span className="text-[12px] text-label-3">{hostOf(report.url)} · {report.view} · {dateOf(report.createdAt)}</span>
+        <span className="text-[12px] text-label-3">{hostOf(report.url)} · {report.view} · {dateOf(report.createdAt)}{zip ? ` · zip ${bytesLabel(zip.zipBytes)}` : ""}</span>
       </div>
       <div className="flex flex-wrap gap-1">
         {report.kinds.map((kind) => <Chip key={kind}>{PROBLEM_KIND_LABELS[kind]}</Chip>)}
@@ -38,7 +41,9 @@ function ReportRow({ report, onOpenLink, onError, onDelete }: { report: Renderin
         {issueUrl
           ? <Button size="sm" variant="plain" className="gap-1" onPress={() => onOpenLink(issueUrl)}><ExternalLink />Open filed issue</Button>
           : <Button size="sm" variant="plain" className="gap-1" onPress={() => void run(() => read.feedbackOpenIssue(report.id), "Could not open the issue.")()}><ExternalLink />Open issue</Button>}
-        <Button size="sm" variant="quiet" className="gap-1" onPress={() => void run(() => read.feedbackReveal(report.id), "Could not reveal the bundle.")()}><FolderOpen />Reveal bundle</Button>
+        {zip
+          ? <Button size="sm" variant="quiet" className="gap-1" onPress={() => void run(() => read.feedbackReveal(report.id), "Could not show the zip.")()}><FolderOpen />Show zip</Button>
+          : <Button size="sm" variant="quiet" className="gap-1" onPress={() => void run(() => read.feedbackReveal(report.id), "Could not reveal the bundle.")()}><FolderOpen />Reveal bundle</Button>}
         <Button size="sm" variant="quiet" className="gap-1 text-red-text" onPress={onDelete}><Trash2 />Delete</Button>
       </div>
     </li>

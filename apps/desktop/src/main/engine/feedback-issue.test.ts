@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { RenderingFeedback } from "../../shared/contracts";
-import { MAX_ISSUE_URL_LENGTH, issueTitleFor, issueUrlFor, reportLineOf, versionsTextFor } from "./feedback-issue";
+import { MAX_ISSUE_URL_LENGTH, attachmentsTextFor, issueTitleFor, issueUrlFor, reportLineOf, versionsTextFor } from "./feedback-issue";
 
 const repo = { owner: "Leonezz", repo: "quire" };
 const feedback: RenderingFeedback = {
@@ -85,5 +85,42 @@ describe("issueUrlFor", () => {
     const url = issueUrlFor({ ...feedback, note: "最后一节不见了。".repeat(600) }, repo);
     expect(url.length).toBeLessThanOrEqual(MAX_ISSUE_URL_LENGTH);
     expect(fieldsOf(url).params.get("note")).toContain("最后一节不见了。");
+  });
+});
+
+describe("the attachments paragraph of a one-step report", () => {
+  const pack = {
+    zipPath: "/Users/reader/Library/Application Support/Quire/feedback/0123456789abcdef/quire-report-acoup-blog-x-0123456789abcdef.zip", zipBytes: 1_234_567,
+    screenshots: ["screenshots/reader-viewport.png"], composite: "screenshots/composite.png", issueOpened: false, revealed: false, copiedToClipboard: true, warnings: [],
+  };
+  const submitted: RenderingFeedback = { ...feedback, package: pack };
+
+  it("ends the note: paste the screenshot, then drag in the zip by name (never its path)", () => {
+    const note = fieldsOf(issueUrlFor(submitted, repo)).params.get("note")!;
+    expect(note).toBe([
+      "- Body text, sections or the ending are missing\n- Tables mangled or dropped",
+      "The logistics table near the end is gone.",
+      "**Attachments**\nThe screenshot is on your clipboard: press ⌘V here. Then drag quire-report-acoup-blog-x-0123456789abcdef.zip (shown in Finder) into this box.",
+    ].join("\n\n"));
+    expect(issueUrlFor(submitted, repo)).not.toContain(encodeURIComponent("Application Support"));
+  });
+
+  it("only asks for the zip when the screenshot is not on the clipboard, and speaks the platform's keys", () => {
+    expect(attachmentsTextFor({ ...submitted, package: { ...pack, copiedToClipboard: false } })).toBe("**Attachments**\nDrag quire-report-acoup-blog-x-0123456789abcdef.zip (shown in Finder) into this box.");
+    expect(attachmentsTextFor({ ...submitted, app: { ...submitted.app, platform: "win32" } })).toContain("press Ctrl+V here. Then drag quire-report-acoup-blog-x-0123456789abcdef.zip (shown in your file manager)");
+    expect(attachmentsTextFor(feedback)).toBeUndefined();
+  });
+
+  it("works without kinds or a note", () => {
+    const note = fieldsOf(issueUrlFor({ ...submitted, kinds: [], note: "" }, repo)).params.get("note");
+    expect(note).toBe(attachmentsTextFor(submitted));
+  });
+
+  it("is kept whole when a long note is cut to fit the URL", () => {
+    const url = issueUrlFor({ ...submitted, note: "Detail. ".repeat(2_000) }, repo);
+    expect(url.length).toBeLessThanOrEqual(MAX_ISSUE_URL_LENGTH);
+    const note = fieldsOf(url).params.get("note")!;
+    expect(note.endsWith(attachmentsTextFor(submitted)!)).toBe(true);
+    expect(note).toContain("…\n\n**Attachments**");
   });
 });

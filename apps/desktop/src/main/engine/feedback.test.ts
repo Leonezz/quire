@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { MaterialViewContent, MaterialViewId, RenderingFeedbackDraft, TextViewReport } from "../../shared/contracts";
-import { FeedbackStore, extractedTextOf, slugForUrl, type CorpusMeta, type FeedbackMaterialRecord, type FeedbackMaterials } from "./feedback";
+import { FeedbackStore, extractedTextOf, readerDocumentFileOf, slugForUrl, type CorpusMeta, type FeedbackMaterialRecord, type FeedbackMaterials, type SubmitDraft } from "./feedback";
 
 let root = "";
 beforeEach(async () => { root = await mkdtemp(join(tmpdir(), "read-feedback-")); });
@@ -16,6 +16,8 @@ const PLAIN_ID = "aaaaaaaaaaaaaaaa";
 const quality: MaterialViewContent["quality"] = { completeness: "declared_full", conformance: "conformant", identityConfidence: "strong", safety: "safe", warnings: [] };
 const problems: MaterialViewContent["problems"] = [{ code: "MAIN_CANDIDATE_AMBIGUOUS", recoverBy: "none", scope: "candidate", severity: "warning" }];
 const html = new TextEncoder().encode("<!doctype html><html><body><article><h1>Gondor</h1><p>The siege.</p></article></body></html>");
+const pdfBytes = new TextEncoder().encode("%PDF-1.7\n% fake\n%%EOF");
+const readerDoc = { type: "root", children: [{ type: "paragraph", children: [{ type: "text", value: "The siege." }] }], losses: [] };
 const report: TextViewReport = { pages: 2, columns: 1, furnitureLines: 4, headings: 3, paragraphs: 20, figures: 1, degradedPages: [] };
 
 const page: FeedbackMaterialRecord = {
@@ -31,7 +33,7 @@ const content = (view: MaterialViewId, extra: Partial<MaterialViewContent> = {})
 function fakeMaterials(overrides: Partial<FeedbackMaterials> = {}): FeedbackMaterials {
   const records = new Map([[PAGE_ID, page], [PDF_ID, pdf], [PLAIN_ID, plainOnly]]);
   const views = new Map<string, MaterialViewContent>([
-    [`${PAGE_ID}:web`, content("web", { markdown: "# Gondor\n\nThe siege.", plain: "Gondor\nThe siege." })],
+    [`${PAGE_ID}:web`, content("web", { markdown: "# Gondor\n\nThe siege.", plain: "Gondor\nThe siege.", reader: { schema: "reader.document.v2", payload: JSON.stringify(readerDoc) } })],
     [`${PAGE_ID}:markdown`, content("markdown", { mediaType: "text/markdown", markdown: "# Gondor (md)" })],
     [`${PDF_ID}:pdf`, content("pdf", { mediaType: "application/pdf", pdf: pdf.pdf!, problems: [] })],
     [`${PDF_ID}:text`, content("text", { mediaType: "text/x-quire-reflow", plain: "Retrieval Without Regret\n\nAbstract…", report, problems: [] })],
@@ -41,6 +43,7 @@ function fakeMaterials(overrides: Partial<FeedbackMaterials> = {}): FeedbackMate
     get: async (id) => records.get(id),
     getView: async (id, view) => views.get(`${id}:${view}`),
     captureBytes: async (id) => (id === PAGE_ID ? html : undefined),
+    bytes: async (id, view) => (id === PDF_ID && (view === undefined || view === "pdf") ? pdfBytes : undefined),
     ...overrides,
   };
 }
@@ -93,10 +96,23 @@ describe("FeedbackStore.create", () => {
 
   it("refuses to include a capture the material does not have, and says why", async () => {
     const store = storeOf();
-    await expect(store.create(draft({ materialId: PDF_ID, view: "pdf" }))).rejects.toThrow(/no saved original page/);
+    await expect(store.create(draft({ materialId: PLAIN_ID }))).rejects.toThrow(/no saved original page/);
     expect(await readdir(join(root, "feedback")).catch(() => [])).toEqual([]);
     const missingFile = storeOf(fakeMaterials({ captureBytes: async () => undefined }));
     await expect(missingFile.create(draft())).rejects.toThrow(/its file is missing/);
+    const missingPdf = storeOf(fakeMaterials({ bytes: async () => undefined }));
+    await expect(missingPdf.create(draft({ materialId: PDF_ID, view: "pdf" }))).rejects.toThrow(/PDF of "Retrieval Without Regret" is not stored/);
+  });
+
+  it("carries the PDF itself as the original of the pdf and text views", async () => {
+    for (const view of ["pdf", "text"] as const) {
+      const record = await storeOf().create(draft({ materialId: PDF_ID, view }));
+      expect((await readdir(record.bundleDir)).sort()).toEqual(["extracted.md", "meta.json", "original.pdf", "report.json"]);
+      expect(new Uint8Array(await readFile(join(record.bundleDir, "original.pdf")))).toEqual(pdfBytes);
+      expect(record.capture).toEqual({ included: true, byteLength: pdfBytes.byteLength, mediaType: "application/pdf" });
+      const meta = JSON.parse(await readFile(join(record.bundleDir, "meta.json"), "utf8")) as CorpusMeta;
+      expect(meta).toMatchObject({ contentType: "application/pdf", bytes: pdfBytes.byteLength });
+    }
   });
 
   it("copies the text view's report and its plain text, and takes bytes and type from the PDF", async () => {
@@ -197,5 +213,60 @@ describe("slugForUrl", () => {
     expect(slugForUrl("https://example.test/" + "a".repeat(200), "x")).toHaveLength(80);
     expect(slugForUrl("quire://artifact/0123456789abcdef", "x")).toBe("artifact-0123456789abcdef");
     expect(slugForUrl("not a url", "fallback")).toBe("fallback");
+  });
+});
+
+const submitDraft = (overrides: Partial<SubmitDraft> = {}): SubmitDraft => ({
+  ...draft(), prefs: { fontSize: 18, theme: "sepia" },
+  viewport: { x: 240, y: 52, width: 760, height: 800, scrollFraction: 0.42 },
+  selection: { quote: "The siege.", prefix: "Gondor ", suffix: "", rect: { x: 300, y: 400, width: 120, height: 20 } },
+  ...overrides,
+});
+
+describe("FeedbackStore.createSubmission", () => {
+  it("adds the reader document, the selection and the reader's state to the bundle", async () => {
+    const store = storeOf();
+    const { record, slug, original, warnings, content } = await store.createSubmission(submitDraft());
+    expect((await readdir(record.bundleDir)).sort()).toEqual(["extracted.md", "meta.json", "page.html.gz", "reader-document.json", "report.json"]);
+    expect(JSON.parse(await readFile(join(record.bundleDir, "reader-document.json"), "utf8"))).toEqual({ schema: "reader.document.v2", document: readerDoc });
+    expect(record.selection).toEqual({ quote: "The siege.", prefix: "Gondor ", suffix: "" });
+    expect(record.readerState).toEqual({ scrollFraction: 0.42, prefs: { fontSize: 18, theme: "sepia" } });
+    expect(JSON.parse(await readFile(join(record.bundleDir, "report.json"), "utf8"))).toEqual(record);
+    expect(slug).toBe("acoup-blog-2019-05-10-collections-the-siege-of-gondor");
+    expect(original).toEqual({ kind: "page", bytes: html });
+    expect(content.view).toBe("web");
+    expect(warnings).toEqual([]);
+  });
+
+  it("makes kinds optional, starts the reader at the top without a viewport, and checks prefs", async () => {
+    const store = storeOf();
+    const { record } = await store.createSubmission(submitDraft({ kinds: [], viewport: undefined, selection: undefined, includeCapture: false }));
+    expect(record.kinds).toEqual([]);
+    expect(record.selection).toBeUndefined();
+    expect(record.readerState).toEqual({ scrollFraction: 0, prefs: { fontSize: 18, theme: "sepia" } });
+    await expect(store.createSubmission(submitDraft({ prefs: [] as never }))).rejects.toThrow("prefs must be an object");
+    await expect(store.createSubmission(submitDraft({ prefs: undefined as never }))).rejects.toThrow("prefs must be an object");
+  });
+
+  it("writes no reader document for a PDF, and the PDF instead of the page", async () => {
+    const { record, original } = await storeOf().createSubmission(submitDraft({ materialId: PDF_ID, view: "pdf" }));
+    expect((await readdir(record.bundleDir)).sort()).toEqual(["extracted.md", "meta.json", "original.pdf", "report.json"]);
+    expect(original?.kind).toBe("pdf");
+  });
+
+  it("keeps a reader payload that is not JSON as text, with a warning", () => {
+    const kept = readerDocumentFileOf({ schema: "reader.document.v1", payload: "{oops" });
+    expect(JSON.parse(kept.text)).toEqual({ schema: "reader.document.v1", payload: "{oops" });
+    expect(kept.warning).toMatch(/not valid JSON/);
+  });
+
+  it("saves a changed record of an existing bundle, and refuses unknown ones", async () => {
+    const store = storeOf();
+    const { record } = await store.createSubmission(submitDraft());
+    const next = { ...record, note: "changed" };
+    expect(await store.save(next)).toEqual(next);
+    expect(await store.get(record.id)).toEqual(next);
+    await expect(store.save({ ...record, id: "cccccccccccccccc" })).rejects.toThrow("does not exist");
+    await expect(store.save({ ...record, bundleDir: "/elsewhere" })).rejects.toThrow(/lives in/);
   });
 });

@@ -84,6 +84,14 @@ function applyEvent(run: RunState, event: AgentEvent): RunState {
   }
 }
 
+/**
+ * The agent needs a ChatGPT sign-in. The main process reports a running Codex without an account as
+ * available with a sign-in reason; a status that is unavailable for the same reason counts too.
+ */
+export function needsSignIn(status: AgentStatus | undefined): boolean {
+  return status !== undefined && status.account === undefined && /sign[ -]?in|log ?in/i.test(status.reason ?? "");
+}
+
 export function createAgentStore(api: AgentStoreApi) {
   let state: AgentStoreState = { runs: new Map(), adopted: new Map() };
   const listeners = new Set<() => void>();

@@ -85,6 +85,25 @@ judge（visual 模式）: SOURCE + EXTRACTED 文本 + 渲染截图 + 原页截�
 - **两个后端都看图**：Claude Code 用 `--input-format stream-json --output-format stream-json`，消息里带 base64 图片块；Codex 用 `codex exec -i <png>…`。2026-10-08 实测两者都能读图并按 schema 回答。
 - **命令**：`pnpm --filter @read/eval render [slug…] [--force] [--max-tiles N]` 先采集；`judge` 默认 visual 模式，缺采集即报错并给出命令，`--mode text` 回到纯文本。
 
+## E. 一步上报（2026-10-13）
+
+目标：阅读中随时能报；报告足够详细（原文快照、实际抽取、实际渲染）；一个流程一次搞定。去向：**本地一键打包**（不自建服务、不需要读者的 GitHub 账号）。
+
+**入口**（随时）：快捷键（在 Settings › Keyboard 列出）；选区工具栏的 "Report"（选中坏掉的那段，报告精确指向它）；质量徽章菜单、Info 面板 Quality 行、低质量横幅照旧。
+
+**流程**：紧凑的上报面板，问题类型和备注都是可选的，"附上原文"默认勾选（私密页面可取消）→ 按 Report → 进度（"正在截取阅读器…""正在渲染原页…""正在打包…"，几秒）→ 完成：浏览器打开预填好的 GitHub issue、Finder 里选中 zip、并排截图已复制到剪贴板。面板只剩一句话：在 issue 里按 ⌘V 粘贴截图，再把 zip 拖进去。
+
+**自动收集的内容**（zip，≤ 25 MB）：
+
+- 原文快照：`page.html.gz`（网页）或原 PDF；`meta.json`（评测语料条目）
+- 实际抽取：`reader-document.json`（reader.document.v2）、`extracted.md`、质量报告与问题
+- 实际渲染：读者当前视口的像素级截图（Electron `capturePage`）、有选区时选区附近的截图、整篇文章的截图（隐藏窗口加载渲染器的 `?render=` 页面，按当前阅读设置）
+- 原页：隐藏窗口（独立 session、关 JavaScript、开网络）加载快照，截取页顶与选区文字所在处（`findInPage` 定位）
+- `composite.png`：阅读器 | 原页 并排，复制到剪贴板
+- 上下文：应用与抽取器版本、视图、阅读设置、滚动位置、选区（引文与前后文）
+
+**评测侧**：`pnpm --filter @read/eval import-feedback <zip>` 照旧导入网页报告；PDF 报告导入 `eval/pdf` 语料。
+
 ## 不做的
 
 - 不做自动上传 / 遥测端点。等有了自己的收集服务再加 `Settings.feedbackEndpoint`，bundle 的 JSON 信封已经定好。

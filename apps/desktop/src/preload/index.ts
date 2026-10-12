@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AgentEvent, ReadApi, UpdateState } from "../shared/contracts";
+import type { AgentEvent, ReadApi, ReadApiFeedback, UpdateState } from "../shared/contracts";
+
+type FeedbackProgress = Parameters<Parameters<ReadApiFeedback["onFeedbackProgress"]>[0]>[0];
 
 // The only bridge. Method names mirror the main-process handlers one to one.
 // Passed by the main process through additionalArguments (see the BrowserWindow in main/index.ts).
@@ -102,6 +104,14 @@ const api: ReadApi = {
     return () => ipcRenderer.removeListener("update:state", handler);
   },
   // Rendering feedback: local bundles; the issue is opened in the browser, the bundle revealed in Finder.
+  // feedbackSubmit is the one-step report; its steps arrive on feedback:progress while it runs.
+  feedbackSubmit: (draft) => ipcRenderer.invoke("feedback:submit", draft),
+  onFeedbackProgress: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, progress: FeedbackProgress) => listener(progress);
+    ipcRenderer.on("feedback:progress", handler);
+    return () => ipcRenderer.removeListener("feedback:progress", handler);
+  },
+  feedbackCopyScreenshot: (id) => ipcRenderer.invoke("feedback:copyScreenshot", id),
   feedbackCreate: (draft) => ipcRenderer.invoke("feedback:create", draft),
   feedbackList: () => ipcRenderer.invoke("feedback:list"),
   feedbackDelete: (id) => ipcRenderer.invoke("feedback:delete", id),

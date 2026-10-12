@@ -21,3 +21,6 @@ eval/judge/out/
 eval/render/out/
 # The interactive judge report embeds those quotes too.
 eval/judge/report.html
+
+# Screenshots from imported reader reports (scripts/import-feedback.mjs): show third-party pages, local only.
+eval/feedback-screenshots/

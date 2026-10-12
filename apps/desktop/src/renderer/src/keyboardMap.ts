@@ -2,6 +2,16 @@
 // and the views that bind the keys keep their hint copy in step with it.
 
 export interface Shortcut { keys: string; action: string }
+
+/**
+ * "Report a problem" from any reader view: ⌥⌘R (Ctrl+Alt+R elsewhere). R for report; ⌘⇧R is taken by the
+ * View menu's force reload (and ⌘R by reload), ⌥⌘I by the developer tools, and no reader or shell handler
+ * binds ⌥ with R. Matched on the physical key, since ⌥R types "®" on a Mac and `event.key` says so.
+ */
+export const REPORT_SHORTCUT = "⌥⌘R";
+export function isReportShortcut(event: Pick<KeyboardEvent, "metaKey" | "ctrlKey" | "altKey" | "shiftKey" | "code">): boolean {
+  return (event.metaKey || event.ctrlKey) && event.altKey && !event.shiftKey && event.code === "KeyR";
+}
 export interface ShortcutGroup { title: string; shortcuts: Shortcut[] }
 
 export const KEYBOARD_MAP: ShortcutGroup[] = [
@@ -41,5 +51,6 @@ export const KEYBOARD_MAP: ShortcutGroup[] = [
     { keys: "n", action: "Notes panel; n again closes it" },
     { keys: "⌘F", action: "Find in page" },
     { keys: "⌘J", action: "Agent panel: ask about this material" },
+    { keys: REPORT_SHORTCUT, action: "Report a rendering problem; the selected passage, if any, is attached" },
   ] },
 ];

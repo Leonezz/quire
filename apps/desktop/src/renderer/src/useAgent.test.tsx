@@ -75,6 +75,22 @@ describe("mergeTurns", () => {
 });
 
 describe("useAgent", () => {
+  it("asks for a sign-in when Codex runs but no account is signed in (the main process reports that as available with a reason)", async () => {
+    setup({ agentStatus: vi.fn(async () => ({ available: true, version: "0.157.0", running: 0, reason: "Sign in to ChatGPT to use the agent." })) });
+    await act(() => agentStore.start());
+    const { result } = mount();
+    await act(flush);
+    expect(result.current.authRequired).toBe(true);
+  });
+
+  it("does not ask for a sign-in once an account is there", async () => {
+    setup({ agentStatus: vi.fn(async () => ({ available: true, version: "0.157.0", running: 0, account: "me@example.org" })) });
+    await act(() => agentStore.start());
+    const { result } = mount();
+    await act(flush);
+    expect(result.current.authRequired).toBe(false);
+  });
+
   it("asks through the store and streams the run of its session, ignoring other sessions", async () => {
     const { emit } = setup();
     await act(() => agentStore.start());

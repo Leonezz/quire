@@ -1,4 +1,5 @@
-import { app, BrowserWindow, Menu, Notification, ipcMain, nativeTheme, safeStorage, shell } from "electron";
+import { app, BrowserWindow, ClipboardItem, Menu, Notification, clipboard, ipcMain, nativeImage, nativeTheme, safeStorage, shell } from "electron";
+import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { MaterialStore } from "./engine/materials";
@@ -29,6 +30,8 @@ import { UpdateService } from "./engine/updates";
 import { createElectronInstaller } from "./update-installer";
 import { FeedbackStore } from "./engine/feedback";
 import { registerFeedbackHandlers } from "./ipc-feedback";
+import type { FeedbackProgress } from "./engine/feedback-submit";
+import { createElectronCapturer, type RendererTarget } from "./feedback-capturer";
 import normalizePackage from "../../../../packages/normalize/package.json";
 
 const userData = app.getPath("userData");
@@ -63,7 +66,7 @@ function annotationView(value: unknown) {
   return value;
 }
 
-function broadcast(channel: "library:changed" | "sources:changed" | "agent:event" | "agent:sessions:changed" | "agent:status:changed" | "update:state" | "feedback:changed", payload?: AgentEvent | UpdateState) {
+function broadcast(channel: "library:changed" | "sources:changed" | "agent:event" | "agent:sessions:changed" | "agent:status:changed" | "update:state" | "feedback:changed" | "feedback:progress", payload?: AgentEvent | UpdateState | FeedbackProgress) {
   for (const win of BrowserWindow.getAllWindows()) win.webContents.send(channel, payload);
 }
 
@@ -324,10 +327,31 @@ const feedback = new FeedbackStore(join(userData, "feedback"), {
   app: { version: app.getVersion(), platform: process.platform, normalize: normalizePackage.version },
   warn: (message) => console.warn(message),
 });
+// The app's renderer: the dev server in development, the built page otherwise. The main window and the
+// feedback render harness (?render=<id>) both load it.
+function rendererTarget(): RendererTarget {
+  return process.env.ELECTRON_RENDERER_URL ? { url: process.env.ELECTRON_RENDERER_URL } : { file: join(__dirname, "../renderer/index.html") };
+}
+const PRELOAD = join(__dirname, "../preload/index.js");
+
+// Electron 44's clipboard is the W3C-shaped async one: the PNG goes on it as an image/png item.
+async function copyImageToClipboard(path: string): Promise<void> {
+  if (nativeImage.createFromPath(path).isEmpty()) throw new Error(`${path} is not an image that can be put on the clipboard.`);
+  const png = await readFile(path);
+  await clipboard.write([new ClipboardItem({ "image/png": new Blob([png], { type: "image/png" }) })]);
+}
+
 registerFeedbackHandlers({
   feedback, repo: UPDATE_FEED, broadcast,
   openExternal: (url) => shell.openExternal(url),
   showItemInFolder: (path) => shell.showItemInFolder(path),
+  capturerFor: (sender) => {
+    const window = BrowserWindow.fromWebContents(sender);
+    if (!window) throw new Error("The report did not come from a window, so there is nothing to screenshot.");
+    return createElectronCapturer({ window, renderer: rendererTarget(), preload: PRELOAD, appVersion: app.getVersion() });
+  },
+  progress: (progress) => broadcast("feedback:progress", progress),
+  copyImageToClipboard,
 });
 
 // One window. Native vibrancy behind a transparent page so the glass panels
@@ -345,7 +369,7 @@ function createWindow(): BrowserWindow {
     visualEffectState: "active",
     backgroundColor: "#00000000",
     webPreferences: {
-      preload: join(__dirname, "../preload/index.js"),
+      preload: PRELOAD,
       // The preload reads the app version from here; it cannot ask `app` itself in the sandbox.
       additionalArguments: [`--quire-version=${app.getVersion()}`],
       sandbox: true,
@@ -358,8 +382,9 @@ function createWindow(): BrowserWindow {
     if (/^https?:/.test(url)) void shell.openExternal(url);
     return { action: "deny" };
   });
-  if (process.env.ELECTRON_RENDERER_URL) void win.loadURL(process.env.ELECTRON_RENDERER_URL);
-  else void win.loadFile(join(__dirname, "../renderer/index.html"));
+  const renderer = rendererTarget();
+  if ("url" in renderer) void win.loadURL(renderer.url);
+  else void win.loadFile(renderer.file);
   return win;
 }
 

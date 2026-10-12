@@ -78,6 +78,8 @@ files:
       - node_modules/@xmldom/xmldom/**
       # temml
       - node_modules/temml/**
+      # fflate (zips feedback reports; no dependencies)
+      - node_modules/fflate/**
       # pdfjs-dist; @napi-rs/canvas is its optional native canvas. The main process only reads text
       # and metadata, so pdfjs merely warns when the binary for the target arch is not installed
       # (x64 builds made on an arm64 runner).

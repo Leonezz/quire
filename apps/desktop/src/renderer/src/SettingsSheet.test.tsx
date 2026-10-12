@@ -10,6 +10,7 @@ vi.mock("./api", () => ({ get read() { return api.read; }, isPreview: true }));
 import { agentStore } from "./agentStore";
 import { FEEDBACK_EMPTY_MESSAGE } from "./FeedbackSection";
 import { JEV_PRIVACY_NOTE, SettingsSheet } from "./SettingsSheet";
+import { REPORT_SHORTCUT } from "./keyboardMap";
 import { textViewReportText } from "./TextViewBanner";
 
 const base: Settings = { syncIntervalMinutes: 30, keepCapture: true, codexPath: "", agentModel: "", agentReasoningEffort: "", dataDirectory: "/data", checkUpdatesAutomatically: false, reflowJudge: "rules", typesafeApiKeySet: false };
@@ -72,6 +73,17 @@ describe("SettingsSheet › Agent › status", () => {
     api.read.agentStatus = vi.fn(async () => ({ available: true, running: 0, version: "0.9" }));
     await act(async () => { notify?.(); await flush(); });
     expect(screen.getByText("Codex 0.9")).toBeTruthy();
+  });
+});
+
+describe("SettingsSheet › Agent › sign-in", () => {
+  it("offers Sign in and says why when Codex runs but no account is signed in", async () => {
+    engine(base);
+    api.read.agentStatus = vi.fn(async () => ({ available: true, version: "0.157.0", running: 0, reason: "Sign in to ChatGPT to use the agent." }));
+    render(<SettingsSheet open onClose={() => undefined} section="agent" onOpenLink={() => undefined} />);
+    await act(flush);
+    expect(screen.getByText("Codex 0.157.0 · Sign in to ChatGPT to use the agent.")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "Sign in" })).toBeTruthy();
   });
 });
 
@@ -183,12 +195,39 @@ describe("SettingsSheet › Feedback", () => {
     expect(screen.getByText("Post new")).toBeTruthy();
   });
 
+  it("shows a packaged report's zip size and shows the zip through the bridge", async () => {
+    engine(base);
+    const zipped = report("zip", "2026-10-13T09:00:00.000Z", { package: { zipPath: "/data/feedback/zip/quire-report-post-zip.zip", zipBytes: 3_565_158, screenshots: [], issueOpened: true, revealed: true, copiedToClipboard: true, warnings: [] } });
+    api.read.feedbackList = vi.fn(async () => [zipped, older]);
+    api.read.feedbackReveal = vi.fn(async () => undefined);
+    render(<SettingsSheet open onClose={() => undefined} section="feedback" onOpenLink={() => undefined} />);
+    await act(flush);
+    const [zipRow, bundleRow] = within(screen.getByRole("list", { name: "Rendering reports" })).getAllByRole("listitem");
+    expect(zipRow!.textContent).toContain("zip 3.4 MB");
+    expect(within(bundleRow!).queryByText(/zip/)).toBeNull();
+    expect(within(bundleRow!).getByRole("button", { name: "Reveal bundle" })).toBeTruthy();
+    await act(async () => { fireEvent.click(within(zipRow!).getByRole("button", { name: "Show zip" })); await flush(); });
+    expect(api.read.feedbackReveal).toHaveBeenCalledWith("zip");
+  });
+
   it("shows a failed load as an alert", async () => {
     engine(base);
     api.read.feedbackList = vi.fn(async () => { throw new Error("feedback.db is locked"); });
     render(<SettingsSheet open onClose={() => undefined} section="feedback" onOpenLink={() => undefined} />);
     await act(flush);
     expect(screen.getByRole("alert").textContent).toBe("feedback.db is locked");
+  });
+});
+
+describe("SettingsSheet › Keyboard", () => {
+  it("lists the report shortcut with the reader's keys", async () => {
+    engine(base);
+    render(<SettingsSheet open onClose={() => undefined} section="keyboard" onOpenLink={() => undefined} />);
+    await act(flush);
+    const reader = screen.getAllByRole("table").find((table) => table.querySelector("caption")?.textContent === "Reader")!;
+    const row = within(reader).getAllByRole("row").find((entry) => entry.textContent?.startsWith(REPORT_SHORTCUT));
+    expect(REPORT_SHORTCUT).toBe("⌥⌘R");
+    expect(row?.textContent).toContain("Report a rendering problem");
   });
 });
 

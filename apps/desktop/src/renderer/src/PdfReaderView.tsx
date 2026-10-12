@@ -18,6 +18,8 @@ import { useTextViewContent } from "./useTextViewContent";
 import { reportQuoteJump } from "./quoteJump";
 import { revealPdfQuote } from "./pdfQuoteSearch";
 import { qualityLabel } from "./qualityLabel";
+import { isReportShortcut } from "./keyboardMap";
+import { reportSelectionOf, takeLiveSelection, viewportOf, type ReportSelection } from "./reportRequest";
 
 type Loaded = { status: "loading" } | { status: "ready"; url: string } | { status: "error"; message: string };
 
@@ -28,6 +30,8 @@ export function PdfReaderView({ material, content, views, pendingJump, onJumpDon
   const [loaded, setLoaded] = useState<Loaded>({ status: "loading" });
   const [prefs, setPrefs] = useReadingPrefs();
   const [progress, setProgress] = useState(0);
+  // The exact reading fraction, for a report's screenshot position (the state above is rounded for the bar).
+  const fractionRef = useRef(0);
   const [panel, setPanel] = useState<ReaderPanel | null>(initialPanel ?? null);
   useEffect(() => { onPanelChange?.(panel); }, [onPanelChange, panel]);
   const sizes = useSplitSizes("reader");
@@ -93,6 +97,22 @@ export function PdfReaderView({ material, content, views, pendingJump, onJumpDon
     return () => { cancelled = true; };
   }, [jumpToQuote, loaded, material.id]);
 
+  const captureSelection = useCallback((selection: Selection): SelectionCapture | undefined => {
+    if (selection.isCollapsed) return undefined;
+    const captured = viewerRef.current?.readSelection();
+    if (!captured || captured.kind !== "selection") return undefined;
+    const locator = pdfRegionLocatorForSelection(captured);
+    const quote = pdfSelectionText(captured);
+    return locator && quote ? { locator, quote } : undefined;
+  }, []);
+  // A report measures the page frame when it is submitted; a PDF passage keeps the box it had when Report was pressed.
+  const measureReport = useCallback(() => {
+    const viewport = viewportOf(mainRef.current, fractionRef.current);
+    return viewport ? { viewport } : {};
+  }, []);
+  const report = useCallback((selection?: ReportSelection) => onReport({ measure: measureReport, ...(selection ? { selection } : {}) }), [onReport, measureReport]);
+  const reportFromChrome = useCallback(() => report(), [report]);
+
   // On `document`, not `window`: the shell's own ⌘J listens on the window and yields when a reader already handled it.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -100,6 +120,8 @@ export function PdfReaderView({ material, content, views, pendingJump, onJumpDon
       const typing = target?.tagName === "INPUT" || target?.tagName === "TEXTAREA";
       // A sheet (Settings, the feedback report) has its own keys; the reader's single letters stay out of it.
       if (target?.closest("[role=dialog]")) return;
+      // ⌥⌘R reports from anywhere in the reader, a note being typed included; a selected passage goes along.
+      if (isReportShortcut(event)) { event.preventDefault(); report(takeLiveSelection(mainRef.current, captureSelection)); return; }
       if (event.key === "Escape" && !typing) { event.preventDefault(); if (panel) setPanel(null); else onBack?.(); }
       if ((event.metaKey || event.ctrlKey) && event.key === "j") { event.preventDefault(); setPanel((open) => (open === "agent" ? null : "agent")); }
       if (event.key === "n" && !typing && !event.metaKey && !event.ctrlKey) { event.preventDefault(); setPanel((open) => (open === "notes" ? null : "notes")); }
@@ -108,7 +130,7 @@ export function PdfReaderView({ material, content, views, pendingJump, onJumpDon
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [panel, onBack]);
+  }, [panel, onBack, report, captureSelection]);
 
   // The current section is the last outline entry that starts on or before the visible page.
   const activeEntry = useMemo(() => outline.filter((entry) => entry.page <= page).at(-1)?.id, [outline, page]);
@@ -118,18 +140,10 @@ export function PdfReaderView({ material, content, views, pendingJump, onJumpDon
     remember(state);
     setPage(state.page);
     const fraction = pdfReadingProgress(state, pdf?.pages);
-    if (fraction !== undefined) { setProgress(Math.round(fraction * 100)); onProgress?.(fraction); }
+    if (fraction !== undefined) { fractionRef.current = fraction; setProgress(Math.round(fraction * 100)); onProgress?.(fraction); }
   };
 
   const regions = useMemo<PdfRegionOverlay[]>(() => viewAnnotations.map((annotation) => ({ id: annotation.id, locator: annotation.locator, color: annotation.color, kind: annotation.kind })), [viewAnnotations]);
-  const captureSelection = useCallback((selection: Selection): SelectionCapture | undefined => {
-    if (selection.isCollapsed) return undefined;
-    const captured = viewerRef.current?.readSelection();
-    if (!captured || captured.kind !== "selection") return undefined;
-    const locator = pdfRegionLocatorForSelection(captured);
-    const quote = pdfSelectionText(captured);
-    return locator && quote ? { locator, quote } : undefined;
-  }, []);
   const jumpTo = (annotation: Annotation) => { viewerRef.current?.goToLocator(annotation.locator); setActiveAnnotation(annotation.id); };
   const sectionFor = (annotation: Annotation) => { const shown = shownAnnotation(annotation); const page = shown ? parsePdfRegionsLocator(shown.locator)[0]?.page : undefined; return page ? `p. ${page}` : undefined; };
   const onNote = async (capture: SelectionCapture) => {
@@ -145,13 +159,13 @@ export function PdfReaderView({ material, content, views, pendingJump, onJumpDon
 
   return (
     <div className="grid h-full grid-cols-[minmax(0,1fr)] grid-rows-[52px_minmax(0,1fr)]">
-      <ReaderToolbar title={material.title} subtitle={subtitle} badge={badge} onReport={onReport} tocPinned={tocPinned} tocDisabled={outline.length === 0} onTocChange={setTocPinned} panel={panel} onPanelChange={setPanel} prefs={prefs} onPrefsChange={setPrefs} trailing={trailing} views={viewSwitch} />
+      <ReaderToolbar title={material.title} subtitle={subtitle} badge={badge} onReport={reportFromChrome} tocPinned={tocPinned} tocDisabled={outline.length === 0} onTocChange={setTocPinned} panel={panel} onPanelChange={setPanel} prefs={prefs} onPrefsChange={setPrefs} trailing={trailing} views={viewSwitch} />
 
       <SplitGroup id="reader" aria-label="Reader and panel" className="h-full">
       <SplitPanel id="page" minSize={PAGE_MIN}>
       <main ref={mainRef} key={material.id} className="reader-enter relative grid h-full min-h-0 grid-rows-[2px_minmax(0,1fr)] overflow-hidden bg-content">
         <div className="bg-separator-soft"><i className="block h-full bg-accent opacity-80" style={{ width: `${progress}%` }} /></div>
-        <SelectionToolbar root={mainRef.current} viewport={mainRef.current} capture={captureSelection} onHighlight={(capture, color) => void add({ ...capture, kind: "highlight", color, view })} onNote={(capture) => void onNote(capture)} onCopy={(capture) => void navigator.clipboard.writeText(citationFor(material, { quote: capture.quote }))} onAsk={(capture) => { setAsked(capture); setPanel("agent"); }} />
+        <SelectionToolbar root={mainRef.current} viewport={mainRef.current} capture={captureSelection} onHighlight={(capture, color) => void add({ ...capture, kind: "highlight", color, view })} onNote={(capture) => void onNote(capture)} onCopy={(capture) => void navigator.clipboard.writeText(citationFor(material, { quote: capture.quote }))} onAsk={(capture) => { setAsked(capture); setPanel("agent"); }} onReport={(capture, rect) => report(reportSelectionOf(capture, rect))} />
         {outline.length > 1 ? (
           <div className="pointer-events-none absolute inset-y-6 right-1.5 z-10 flex items-center">
             <TocRail aria-label="Contents" entries={tocEntries} activeId={activeEntry} pinned={tocPinned} resting="hidden" onSelect={(id) => { const entry = outline.find((item) => item.id === id); if (entry) viewerRef.current?.goToPage(entry.page); }} />
@@ -187,7 +201,7 @@ export function PdfReaderView({ material, content, views, pendingJump, onJumpDon
         <>
           <ColumnSeparator label="Resize panel" />
           <SplitPanel id="inspector" defaultSize={sizes.sizeOf("inspector", PANEL_DEFAULT)} minSize={PANEL_MIN} maxSize={PANEL_MAX} onResize={sizes.onResize("inspector")}>
-            <ReaderInspector material={material} views={views} panel={panel} onClose={() => setPanel(null)} subject={material.title} agentContext={agentContext} onClearSelection={() => setAsked(null)} onReport={onReport}
+            <ReaderInspector material={material} views={views} panel={panel} onClose={() => setPanel(null)} subject={material.title} agentContext={agentContext} onClearSelection={() => setAsked(null)} onReport={reportFromChrome}
               annotations={annotations} annotationsError={annotationsError} mirroredViews={mirroredViews(view, textContent)} activeAnnotation={activeAnnotation} noteDraft={noteDraft} onNoteDraftChange={setNoteDraft}
               onJump={(annotation) => { const shown = shownAnnotation(annotation); if (shown) jumpTo(shown); else onJumpAcross(annotation); }} onUpdateNote={(id, note) => void update(id, { note })} onDeleteAnnotation={(id) => void remove(id)} sectionFor={sectionFor}
               onMaterialSaved={onMaterialSaved} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onOpenSettings={onOpenSettings} />
