@@ -23,6 +23,7 @@ function groupByDay(items: ItemRecord[]): Group[] {
   return [...groups.values()];
 }
 
+/** Letter keys are reserved for decisions here, so the list turns typeahead off: it would take them first and jump to a row. */
 const shortcuts = { q: "queue", e: "dismiss" } as const;
 
 export interface ItemViewProps {
@@ -50,7 +51,7 @@ export function InboxView({ items, selectedId, onSelect, refresh, onOpenLink, on
       <ListColumn family="items" toolbar={shell.listToolbar} listRef={listRef}>
         {error ? <div className="p-3"><InlineError title="The lists could not be loaded." message={error} /></div> : null}
         {items.length ? (
-          <ItemList aria-label="Inbox" items={groups} selectionMode="single" selectionBehavior="replace" disallowEmptySelection selectedKeys={selectedId ? new Set([selectedId]) : new Set()}
+          <ItemList aria-label="Inbox" items={groups} disallowTypeAhead selectionMode="single" selectionBehavior="replace" disallowEmptySelection selectedKeys={selectedId ? new Set([selectedId]) : new Set()}
             onSelectionChange={(keys) => { const key = keys === "all" ? undefined : [...keys][0]; if (key !== undefined && String(key) !== selectedId) select(String(key)); }}
             onAction={(key) => void readNow(String(key))} className="flex-1">
             {(group) => (

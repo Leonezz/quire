@@ -12,6 +12,7 @@ import { signalsOf, timeOf } from "./format";
 import { useItemReader } from "./useItemReader";
 import { useQueueOrder, type Reorder } from "./useQueueOrder";
 
+/** Letter keys are reserved for decisions here, so the list turns typeahead off: it would take them first and jump to a row. */
 const shortcuts = { e: "unqueue" } as const;
 
 /**
@@ -26,7 +27,7 @@ function QueueGroup({ title, items, selectedId, onSelect, onAction, onReorder }:
   return (
     <>
       <ItemGroup>{title}</ItemGroup>
-      <ItemList aria-label={title} items={items} selectionMode="single" selectionBehavior="replace" disallowEmptySelection selectedKeys={selectedId ? new Set([selectedId]) : new Set()}
+      <ItemList aria-label={title} items={items} disallowTypeAhead selectionMode="single" selectionBehavior="replace" disallowEmptySelection selectedKeys={selectedId ? new Set([selectedId]) : new Set()}
         onSelectionChange={(keys) => { const key = keys === "all" ? undefined : [...keys][0]; if (key !== undefined && String(key) !== selectedId) onSelect(String(key)); }}
         onAction={(key) => onAction(String(key))} dragAndDropHooks={dragAndDropHooks} className="shrink-0 py-0">
         {(item) => (
