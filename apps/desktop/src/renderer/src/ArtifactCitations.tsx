@@ -52,7 +52,7 @@ function CitationMark({ sources, quote, loaded, onOpenMaterial }: { sources: Res
             {index > 0 ? ", " : null}
             <button
               type="button"
-              className={`cursor-default border-0 bg-transparent p-0 font-[inherit] hover:underline focus-visible:rounded-[3px] focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-accent-ring ${ok ? "text-accent-text" : "text-label-3 underline decoration-dashed underline-offset-2"}`}
+              className={`cursor-default border-0 bg-transparent p-0 font-[inherit] transition-colors duration-[var(--duration-quick)] ease-[var(--ease-out)] hover:underline focus-visible:rounded-[3px] focus-visible:outline-none focus-visible:ring-[3px] focus-visible:ring-accent-ring ${ok ? "text-accent-text" : "text-label-3 underline decoration-dashed underline-offset-2"}`}
               title={markTitle(source, loaded, carried)}
               aria-label={`Source ${source.number}: ${sourceTitle(source, loaded)}${ok ? "" : " (unverified citation)"}`}
               data-source={source.id}
@@ -84,7 +84,7 @@ export function ArtifactSources({ sources, loaded, onOpenMaterial }: { sources: 
             <li key={source.id} id={`artifact-source-${source.number}`} className="m-0 grid grid-cols-[2.2em_1fr] p-0">
               <span className="font-mono text-[12px] text-label-3">[{source.number}]</span>
               <span className="min-w-0">
-                <button type="button" className="cursor-default border-0 bg-transparent p-0 text-left font-[inherit] text-label hover:text-accent-text disabled:text-label-3" disabled={loaded && !source.summary} onClick={() => onOpenMaterial(source.id)}>
+                <button type="button" className="cursor-default border-0 bg-transparent p-0 text-left font-[inherit] text-label transition-colors duration-[var(--duration-quick)] ease-[var(--ease-out)] hover:text-accent-text disabled:text-label-3" disabled={loaded && !source.summary} onClick={() => onOpenMaterial(source.id)}>
                   {sourceTitle(source, loaded)}
                 </button>
                 {detail || notes.length > 0 ? <span className="block text-[12px] text-label-3">{[detail, ...notes].filter(Boolean).join(" · ")}</span> : null}
