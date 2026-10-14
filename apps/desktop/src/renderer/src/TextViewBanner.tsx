@@ -17,7 +17,7 @@ export function TextViewBanner({ report, onOpenPdf }: { report: TextViewReport; 
   const count = report.degradedPages.length;
   if (count === 0) return null;
   return (
-    <div role="status" className="mb-6 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-card bg-orange-soft p-4 text-[13px] text-label-2">
+    <div role="status" className="t-toast mb-6 flex flex-wrap items-center gap-x-2 gap-y-1 rounded-card bg-orange-soft p-4 text-[13px] text-label-2">
       <strong className="text-[14px] text-label">{count} {count === 1 ? "page" : "pages"} could not be reflowed</strong>
       <span>(p. {report.degradedPages.join(", ")}) ·</span>
       <Button size="sm" variant="plain" className="h-6 px-1.5" onPress={onOpenPdf}>Open the PDF view</Button>

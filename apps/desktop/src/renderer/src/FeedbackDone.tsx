@@ -48,7 +48,7 @@ export function ReportPackaged({ record, onClose }: { record: RenderingFeedback;
   return (
     <SheetDialog title="Report packaged" className="max-h-[84vh]">
       {pkg ? <p className="m-0 text-[13.5px] leading-[19px] text-label">{finishSentence(pkg)}</p> : (
-        <p role="alert" className="m-0 rounded-card bg-red-soft px-3 py-2 text-[12.5px] text-red-text">The report was saved, but the app did not say where its zip is. Reveal the bundle from Settings › Feedback.</p>
+        <p role="alert" className="t-text-in m-0 rounded-card bg-red-soft px-3 py-2 text-[12.5px] text-red-text">The report was saved, but the app did not say where its zip is. Reveal the bundle from Settings › Feedback.</p>
       )}
       {pkg && pkg.warnings.length > 0 ? (
         <div className="grid gap-1 rounded-card bg-orange-soft px-3 py-2 text-[12.5px] text-orange-text">
@@ -61,8 +61,8 @@ export function ReportPackaged({ record, onClose }: { record: RenderingFeedback;
         <Button onPress={() => void run(() => read.feedbackOpenIssue(record.id), "Could not open the issue.")()}><Icon of={ExternalLink} />Open issue again</Button>
         <Button onPress={() => void run(() => read.feedbackReveal(record.id), "Could not show the zip.")()}><Icon of={FolderOpen} />Show zip</Button>
       </div>
-      {copied ? <p role="status" className="m-0 text-[12px] text-label-3">The screenshot is on the clipboard.</p> : null}
-      {error ? <p role="alert" className="m-0 rounded-card bg-red-soft px-3 py-2 text-[12.5px] text-red-text">{error}</p> : null}
+      {copied ? <p role="status" className="t-text-in m-0 text-[12px] text-label-3">The screenshot is on the clipboard.</p> : null}
+      {error ? <p role="alert" className="t-text-in m-0 rounded-card bg-red-soft px-3 py-2 text-[12.5px] text-red-text">{error}</p> : null}
       <IssueLinkField id={record.id} />
       <SheetFooter>
         <Button variant="primary" onPress={onClose}>Done</Button>

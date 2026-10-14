@@ -1,5 +1,5 @@
 import { X } from "lucide-react";
-import { Button, Icon } from "@read/ui";
+import { Button, Icon, Presence } from "@read/ui";
 import { latestOf, updateStore, useUpdateStore } from "./updateStore";
 
 // A quiet line in the sidebar footer while a newer release is available or downloaded. One next
@@ -8,12 +8,17 @@ import { latestOf, updateStore, useUpdateStore } from "./updateStore";
 export function UpdateBanner() {
   const { state, dismissed } = useUpdateStore();
   const latest = latestOf(state);
-  if (!state || latest === undefined || latest === dismissed) return null;
+  // It rises in when a release turns up and sinks away when dismissed (toast open / close).
+  const show = state !== undefined && latest !== undefined && latest !== dismissed;
+  return <Presence show={show}>{show ? <UpdateNotice state={state} latest={latest} /> : null}</Presence>;
+}
+
+function UpdateNotice({ state, latest }: { state: NonNullable<ReturnType<typeof useUpdateStore>["state"]>; latest: string }) {
   const ready = state.phase === "ready";
   const installs = ready || (state.phase === "available" && state.canInstall);
   const act = () => { void (installs ? updateStore.install() : updateStore.openReleasePage()); };
   return (
-    <div role="status" aria-label={`Update v${latest}`} className="mx-2.5 mb-1 grid gap-1.5 rounded-card bg-accent-soft px-2.5 py-2 text-[12.5px] text-label">
+    <div role="status" aria-label={`Update v${latest}`} className="t-toast mx-2.5 mb-1 grid gap-1.5 rounded-card bg-accent-soft px-2.5 py-2 text-[12.5px] text-label">
       <div className="flex items-center gap-1">
         <span className="min-w-0 flex-1 truncate font-medium">v{latest} {ready ? "downloaded" : "available"}</span>
         <Button size="sm" variant="quiet" aria-label="Dismiss update notice" className="-mr-1.5" onPress={() => updateStore.dismiss()}><Icon of={X} size="sm" /></Button>

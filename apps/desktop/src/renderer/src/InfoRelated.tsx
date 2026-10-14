@@ -59,8 +59,8 @@ export function InfoRelated({ editor, selfId, onOpenMaterial }: { editor: Materi
         })}
         <Button size="sm" variant="plain" className="h-[22px] gap-0.5 px-1.5" isDisabled={disabled} onPress={() => setOpen(true)}><Plus />Add</Button>
       </div>
-      {titlesError ? <p role="alert" className="m-0 text-[12px] text-red">{titlesError}</p> : null}
-      {editor.errors.related ? <p role="alert" className="m-0 text-[12px] text-red">{editor.errors.related}</p> : null}
+      {titlesError ? <p role="alert" className="t-text-in m-0 text-[12px] text-red">{titlesError}</p> : null}
+      {editor.errors.related ? <p role="alert" className="t-text-in m-0 text-[12px] text-red">{editor.errors.related}</p> : null}
       <ExtractedLine editor={editor} field="related" />
       <CommandPalette aria-label="Add a related material" isOpen={open} onOpenChange={setOpen} placeholder="Find a material in the library…" query={query} onQueryChange={setQuery} items={items}
         status={loadError ?? (library.length ? `${candidates.length} ${candidates.length === 1 ? "material" : "materials"}` : "Loading…")} statusIsError={loadError !== undefined}

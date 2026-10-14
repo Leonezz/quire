@@ -1,5 +1,6 @@
 import { Button, Collection, GridList, GridListHeader, GridListItem, GridListSection, composeRenderProps, type GridListItemProps, type GridListProps, type GridListSectionProps } from "react-aria-components";
 import { Bookmark, GripVertical } from "lucide-react";
+import { useLayoutEffect, useRef } from "react";
 import { Icon } from "./Icon";
 import { cx } from "../cx";
 
@@ -9,11 +10,72 @@ import { cx } from "../cx";
  * `dragAndDropHooks` is passed — keyboard-accessible reordering.
  */
 export function ItemList<T extends object>({ className, ...props }: GridListProps<T>) {
+  const listRef = useRef<HTMLDivElement>(null);
+  useGlide(listRef);
   return (
     <GridList
       {...props}
+      ref={listRef}
       className={composeRenderProps(className, (cls) => cx("flex flex-col gap-px overflow-y-auto overflow-x-hidden px-2 py-2.5 outline-none", cls))}
     />
+  );
+}
+
+/**
+ * When rows come or go (an Inbox decision, a reorder), the rows that stay glide from where they were to where they
+ * now are instead of jumping (card resize, as a position change). Positions are kept relative to the list's content,
+ * so scrolling never reads as movement; a resize only re-reads them.
+ */
+function useGlide(listRef: React.RefObject<HTMLDivElement | null>) {
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list || typeof MutationObserver === "undefined" || typeof ResizeObserver === "undefined") return;
+    const rows = () => [...list.querySelectorAll<HTMLElement>('[role="row"][data-key]')];
+    const measure = () => {
+      const top = list.getBoundingClientRect().top - list.scrollTop;
+      return new Map(rows().map((row) => [row.dataset.key!, row.getBoundingClientRect().top - top]));
+    };
+    let before = measure();
+    const glide = () => {
+      const after = measure();
+      if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        for (const row of rows()) {
+          const was = before.get(row.dataset.key!);
+          const now = after.get(row.dataset.key!);
+          if (was === undefined || now === undefined || Math.abs(was - now) < 1) continue;
+          row.classList.remove("t-glide");
+          row.style.transform = `translateY(${was - now}px)`;
+          void row.offsetHeight;
+          // The glide's transition stands in for the row's own only while it runs.
+          row.classList.add("t-glide");
+          row.style.transform = "";
+          row.addEventListener("transitionend", () => row.classList.remove("t-glide"), { once: true });
+        }
+      }
+      before = after;
+    };
+    const mutations = new MutationObserver(glide);
+    mutations.observe(list, { childList: true, subtree: true });
+    const sizes = new ResizeObserver(() => { before = measure(); });
+    sizes.observe(list);
+    return () => { mutations.disconnect(); sizes.disconnect(); };
+  }, [listRef]);
+}
+
+/** Placeholder rows while a list loads (skeleton loader); the list that replaces them reveals itself (`t-reveal`). */
+export function ItemListSkeleton({ rows = 6, label = "Loading" }: { rows?: number; label?: string }) {
+  return (
+    <div role="status" aria-label={label} className="flex flex-col gap-px px-2 py-2.5">
+      {Array.from({ length: rows }, (_, index) => (
+        <div key={index} aria-hidden="true" className="t-skel grid grid-cols-[16px_minmax(0,1fr)] gap-x-2.5 py-[11px] pl-2.5 pr-3">
+          <i className="mt-1.5 block size-1.5 rounded-full bg-fill-2" />
+          <span className="grid gap-2">
+            <i className="block h-3 rounded-full bg-fill-2" style={{ width: `${88 - (index % 3) * 14}%` }} />
+            <i className="block h-2.5 w-2/5 rounded-full bg-fill" />
+          </span>
+        </div>
+      ))}
+    </div>
   );
 }
 

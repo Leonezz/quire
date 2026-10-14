@@ -191,9 +191,9 @@ export function PdfReaderView({ material, content, views, pendingJump, onJumpDon
           <div className="grid place-items-center text-[13px] text-label-3">Opening…</div>
         )}
         {textView.status === "error" ? (
-          <div role="alert" className="absolute bottom-3 left-1/2 max-w-[min(640px,90%)] -translate-x-1/2 truncate rounded-pill bg-red-soft px-3.5 py-1.5 text-[12.5px] text-red-text shadow-float">Notes from the Text view cannot be shown — {textView.message}</div>
+          <div role="alert" className="t-toast absolute bottom-3 left-1/2 max-w-[min(640px,90%)] -translate-x-1/2 truncate rounded-pill bg-red-soft px-3.5 py-1.5 text-[12.5px] text-red-text shadow-float">Notes from the Text view cannot be shown — {textView.message}</div>
         ) : jumpError ? (
-          <div role="alert" className="absolute bottom-3 left-1/2 max-w-[min(640px,90%)] -translate-x-1/2 truncate rounded-pill bg-red-soft px-3.5 py-1.5 text-[12.5px] text-red-text shadow-float">{jumpError}</div>
+          <div role="alert" className="t-toast absolute bottom-3 left-1/2 max-w-[min(640px,90%)] -translate-x-1/2 truncate rounded-pill bg-red-soft px-3.5 py-1.5 text-[12.5px] text-red-text shadow-float">{jumpError}</div>
         ) : null}
       </main>
       </SplitPanel>

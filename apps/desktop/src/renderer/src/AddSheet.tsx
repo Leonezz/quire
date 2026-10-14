@@ -72,7 +72,7 @@ export function AddSheet({ open, busy, error, onClose, onSubmit, onSubscribed }:
           <TextField autoFocus aria-label="Paste a URL or an arXiv category" placeholder="Paste a page URL, a feed, or an arXiv category like cs.CL…" value={value} onChange={onChange} isReadOnly={working}
             {...(message ? { errorMessage: message, isInvalid: true } : {})}
             {...(known ? {} : { description: "Pages are fetched once, extracted, and kept for offline reading. Feeds and arXiv categories become sources. Or drop a PDF, Markdown, HTML or text file anywhere in the window." })} />
-          {known ? <p role="status" className="m-0 -mt-2 text-[12.5px] text-label-2"><span className="rounded-pill bg-accent-soft px-2 py-px text-[11.5px] font-medium text-accent-text">recognised</span> <span className="ml-1">{describe(known).line}</span></p> : null}
+          {known ? <p role="status" className="t-text-in m-0 -mt-2 text-[12.5px] text-label-2"><span className="rounded-pill bg-accent-soft px-2 py-px text-[11.5px] font-medium text-accent-text">recognised</span> <span className="ml-1">{describe(known).line}</span></p> : null}
           <SheetFooter>
             <Button variant="quiet" onPress={close} isDisabled={working}>Cancel</Button>
             <Button variant="primary" type="submit" isDisabled={working || !input}>{label}</Button>

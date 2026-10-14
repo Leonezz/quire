@@ -130,11 +130,11 @@ function ReportForm({ material, view, request, running, onRunning, onPackaged, o
       {/* Outside the scrolling body, so the progress and a refusal show however far the details are open. */}
       {running ? (
         <div className="grid gap-1 text-[12.5px]">
-          <p role="status" className="m-0 font-medium text-label">{running.text}</p>
+          <p key={running.text} role="status" className="t-text-in m-0 font-medium text-label">{running.text}</p>
           <p className="m-0 text-label-3">{RUNNING_NOTE}</p>
         </div>
       ) : null}
-      {error ? <p role="alert" className="m-0 rounded-card bg-red-soft px-3 py-2 text-[12.5px] text-red-text">{error}</p> : null}
+      {error ? <p role="alert" className="t-text-in m-0 rounded-card bg-red-soft px-3 py-2 text-[12.5px] text-red-text">{error}</p> : null}
       <SheetFooter>
         <Button variant="quiet" onPress={onClose} isDisabled={busy}>Cancel</Button>
         <Button variant="primary" onPress={() => void submit()} isDisabled={busy}>{busy ? "Reporting…" : "Report"}</Button>

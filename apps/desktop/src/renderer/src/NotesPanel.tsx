@@ -87,7 +87,7 @@ export function NotesPanel({ material, view, mirroredViews = [], annotations, er
   );
   return (
     <InspectorSection title={annotations.length ? `${annotations.length} ${annotations.length === 1 ? "note" : "notes"}` : "Notes"}>
-      {error ? <p role="alert" className="text-[13px] text-red">{error}</p> : null}
+      {error ? <p role="alert" className="t-text-in text-[13px] text-red">{error}</p> : null}
       {annotations.length === 0 && !error ? <p className="text-[13px] text-label-2">Select text to highlight it or add a note. Highlights are kept with this material.</p> : null}
       {grouped ? groups.map((group) => (
         <section key={group.view} className="mb-3" aria-label={`${viewLabel(group.view)} notes`}>

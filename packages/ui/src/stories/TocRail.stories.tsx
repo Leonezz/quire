@@ -49,14 +49,15 @@ export const Rail: Story = {
     // Hovering a tick magnifies locally and shows only that heading's label.
     await userEvent.hover(buttons[10]!);
     await expect(nav).toHaveAttribute("data-magnified", "true");
-    await expect(within(nav).getByText("Training")).toBeVisible();
+    // The label is a tooltip: it fades in after a short intent delay.
+    await waitFor(() => expect(within(nav).getByText("Training")).toBeVisible());
     await expect(within(nav).queryByText("Results")).toBeNull();
     await userEvent.unhover(buttons[10]!);
     await expect(within(nav).queryByText("Training")).toBeNull();
     // Keyboard: focus magnifies the focused entry; arrows move; Enter selects.
     await userEvent.tab();
     await expect(buttons[0]).toHaveFocus();
-    await expect(within(nav).getByText("Introduction")).toBeVisible();
+    await waitFor(() => expect(within(nav).getByText("Introduction")).toBeVisible());
     await userEvent.keyboard("{ArrowDown}{ArrowDown}{Enter}");
     await expect(canvas.getByText("Current section: Model architecture")).toBeInTheDocument();
     await expect(within(nav).getByRole("button", { name: "Model architecture" })).toHaveAttribute("aria-current", "location");

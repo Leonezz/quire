@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Copy, Trash2 } from "lucide-react";
-import { Button, ConfirmSheet, ItemList, ItemRow, Kbd, type Selection } from "@read/ui";
+import { Button, ConfirmSheet, ItemList, ItemListSkeleton, ItemRow, Kbd, type Selection } from "@read/ui";
 import type { MaterialSummary } from "../../shared/contracts";
 import { read } from "./api";
 import { ContentToolbar } from "./AppToolbar";
@@ -108,12 +108,12 @@ export function LibraryView({ library, selected, onSelectionChange, onOpenLink, 
       <ListColumn family="library" toolbar={shell.listToolbar} footer={actionBar}>
         {error ? <div className="p-3"><InlineError title="The library could not be loaded." message={error} /></div> : null}
         {materials.length ? (
-          <ItemList aria-label="Library" items={materials} selectionMode="multiple" selectionBehavior="replace" selectedKeys={selected} onSelectionChange={onSelectionChange} className="flex-1">
+          <ItemList aria-label="Library" items={materials} selectionMode="multiple" selectionBehavior="replace" selectedKeys={selected} onSelectionChange={onSelectionChange} className="t-reveal flex-1">
             {(item) => <ItemRow id={item.id} title={item.title} source={rowSource(item)} time={timeOf(item.fetchedAt)} minutes={item.readingMinutes} state="read" signals={item.mediaType === "application/pdf" ? ["pdf"] : []} chips={item.tags}
               {...rowTag(item)} {...(item.origin === "agent" && item.lineage?.length ? { detail: <span className="text-label-3">from {item.lineage.length} {item.lineage.length === 1 ? "material" : "materials"}</span> } : {})} />}
           </ItemList>
         ) : loading && !error ? (
-          <EmptySentence>Loading…</EmptySentence>
+          <ItemListSkeleton label="Loading the library" />
         ) : !error ? (
           <EmptySentence>{empty}</EmptySentence>
         ) : null}

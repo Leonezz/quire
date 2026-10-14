@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Plus, Trash2 } from "lucide-react";
-import { Button, ItemList, ItemRow, Kbd } from "@read/ui";
+import { Button, ItemList, ItemRow, Kbd, ShimmerText } from "@read/ui";
 import type { AgentContext, AgentSessionSummary } from "../../shared/contracts";
 import { AgentPanel } from "./AgentPanel";
 import { DeleteSessionSheet, sessionMeta } from "./AgentSessions";
@@ -104,7 +104,7 @@ export function AgentView({ sessions, requestedSession, onOpenMaterial, onOpenLi
             onSelectionChange={(keys) => { const key = keys === "all" ? undefined : [...keys][0]; const session = key === undefined ? undefined : byId.get(String(key)); if (session && session.id !== selected) show(session); }} className="flex-1">
             {(session) => (
               <ItemRow id={session.id} title={session.title} source={sessionContextLabel(session.context, titleOf)} time={relativeTime(session.updatedAt)} state="read" signals={[`${session.turnCount} ${session.turnCount === 1 ? "turn" : "turns"}`]}
-                detail={running.has(session.id) ? <span role="status" className="inline-flex items-center gap-1.5 text-[12px] text-purple-text"><i className="block size-3 animate-spin rounded-full border-[1.5px] border-label-4 border-t-purple-text" />answering…</span> : undefined} />
+                detail={running.has(session.id) ? <span role="status" className="t-text-in text-[12px] [--shimmer-base:var(--purple-text)]"><ShimmerText>answering…</ShimmerText></span> : undefined} />
             )}
           </ItemList>
         ) : sessions.loaded && !sessions.error ? (
