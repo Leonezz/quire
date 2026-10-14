@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Sparkles } from "lucide-react";
+import { Button } from "@read/ui";
 import type { MaterialRecord, MaterialViewContent } from "../../shared/contracts";
 import { ArtifactSources, useArtifactCitations } from "./ArtifactCitations";
 
-// An agent artifact that is not a text document. HTML runs in the sandbox main serves on
-// quire-artifact:// (artifact-protocol.ts): an opaque-origin frame whose only way out is
+// An agent artifact that is not a text document. HTML, React and Mermaid run in the sandbox main
+// serves on quire-artifact:// (artifact-protocol.ts): an opaque-origin frame whose only way out is
 // postMessage. This side answers that bridge: the frame's height, the reader's theme as CSS
-// variables, and links and citations, which open here only after they are checked. SVG is drawn
-// as an image, which runs no scripts and loads nothing.
+// variables, links and citations, which open here only after they are checked, and the errors the
+// artifact hits, which the reader can hand to the agent to fix. SVG is drawn as an image, which runs
+// no scripts and loads nothing.
 
 const MIN_HEIGHT = 160;
 const MAX_HEIGHT = 40_000;
@@ -35,20 +38,20 @@ export function artifactTheme(): { scheme: "dark" | "light"; vars: Record<string
   return { scheme: isDark() ? "dark" : "light", vars: Object.fromEntries(Object.entries(vars).filter(([, value]) => value)) };
 }
 
-interface BridgeMessage { quire: 1; type: string; height?: unknown; id?: unknown; quote?: unknown; url?: unknown }
+interface BridgeMessage { quire: 1; type: string; height?: unknown; id?: unknown; quote?: unknown; url?: unknown; message?: unknown }
 
 function isBridgeMessage(data: unknown): data is BridgeMessage {
   return typeof data === "object" && data !== null && (data as { quire?: unknown }).quire === 1 && typeof (data as { type?: unknown }).type === "string";
 }
 
-/** An HTML artifact in its sandbox, as tall as its content. */
-export function ArtifactFrame({ id, version, title, onOpenLink, onOpenMaterial }: { id: string; version: number; title: string; onOpenLink: (url: string) => void; onOpenMaterial: OpenMaterial }) {
+/** An HTML, React or Mermaid artifact in its sandbox, as tall as its content. */
+export function ArtifactFrame({ id, version, title, onOpenLink, onOpenMaterial, onError }: { id: string; version: number; title: string; onOpenLink: (url: string) => void; onOpenMaterial: OpenMaterial; onError?: ((message: string) => void) | undefined }) {
   const frame = useRef<HTMLIFrameElement>(null);
   const [height, setHeight] = useState(480);
   // The first paint takes the app's scheme from the URL; later theme changes arrive as a message, without a reload.
   const src = useMemo(() => `quire-artifact://artifact/${id}?v=${version}&scheme=${isDark() ? "dark" : "light"}`, [id, version]);
-  const handlers = useRef({ onOpenLink, onOpenMaterial });
-  handlers.current = { onOpenLink, onOpenMaterial };
+  const handlers = useRef({ onOpenLink, onOpenMaterial, onError });
+  handlers.current = { onOpenLink, onOpenMaterial, onError };
 
   useEffect(() => {
     const sendTheme = () => frame.current?.contentWindow?.postMessage({ quire: 1, type: "theme", ...artifactTheme() }, "*");
@@ -61,6 +64,7 @@ export function ArtifactFrame({ id, version, title, onOpenLink, onOpenMaterial }
         const quote = typeof message.quote === "string" && message.quote.trim() ? message.quote.trim().slice(0, 2000) : undefined;
         if (quote) handlers.current.onOpenMaterial(message.id, quote); else handlers.current.onOpenMaterial(message.id);
       } else if (message.type === "open-link" && typeof message.url === "string" && EXTERNAL.test(message.url)) handlers.current.onOpenLink(message.url);
+      else if (message.type === "error" && typeof message.message === "string" && message.message.trim()) handlers.current.onError?.(message.message.trim().slice(0, 4000));
     };
     window.addEventListener("message", onMessage);
     // The reader's theme can change while the artifact is open: an explicit choice, or the system's.
@@ -85,17 +89,38 @@ export function ArtifactFrame({ id, version, title, onOpenLink, onOpenMaterial }
   );
 }
 
+/** An error the artifact hit, and the way to hand it to the agent. */
+export function ArtifactError({ message, onFix }: { message: string; onFix?: ((message: string) => void) | undefined }) {
+  const [asked, setAsked] = useState(false);
+  return (
+    <div role="alert" className="t-text-in mb-3 grid gap-1.5 rounded-card bg-orange-soft p-3 text-[13px] text-label-2">
+      <strong className="text-[13px] text-label">This artifact hit an error.</strong>
+      <code className="line-clamp-3 whitespace-pre-wrap break-words text-[12px]">{message}</code>
+      {onFix ? (asked
+        ? <span className="t-text-in">Asked the agent to fix it; follow along in the Agent panel.</span>
+        : <span><Button size="sm" className="gap-1" onPress={() => { setAsked(true); onFix(message); }}><Sparkles />Ask the agent to fix it</Button></span>) : null}
+    </div>
+  );
+}
+
 /**
- * The body of an HTML or SVG artifact in the reader: the artifact itself at the column's full width,
- * then its sources. Text artifacts (Markdown, code) render through the reader instead (ArtifactCitations).
+ * The body of an artifact that renders outside the reader, in the reader: the artifact itself at the
+ * column's full width, then its sources. Text artifacts (Markdown, code) render through the reader
+ * instead (ArtifactCitations).
  */
-export function ArtifactCanvas({ material, artifact, onOpenLink, onOpenMaterial }: { material: Pick<MaterialRecord, "id" | "title" | "lineage">; artifact: NonNullable<MaterialViewContent["artifactBody"]>; onOpenLink: (url: string) => void; onOpenMaterial: OpenMaterial }) {
-  const { sources, loaded } = useArtifactCitations(material, undefined, onOpenMaterial);
+export function ArtifactCanvas({ material, artifact, onOpenLink, onOpenMaterial, onFix }: { material: Pick<MaterialRecord, "id" | "title" | "lineage">; artifact: NonNullable<MaterialViewContent["artifactBody"]>; onOpenLink: (url: string) => void; onOpenMaterial: OpenMaterial; onFix?: ((message: string) => void) | undefined }) {
+  // The materials the artifact links to (quire:material/<id>) are its citations, numbered in the order they first appear.
+  const cited = useMemo(() => [...artifact.source.matchAll(/quire:material\/([a-f0-9]{16})/g)].map((match) => `[${match[1]}]`).join(" "), [artifact.source]);
+  const { sources, loaded } = useArtifactCitations(material, cited, onOpenMaterial);
+  const [error, setError] = useState<{ version: number; message: string } | undefined>(undefined);
+  // An error belongs to the version that hit it; a new version starts clean.
+  const shown = error?.version === artifact.version ? error.message : undefined;
   return (
     <div className="artifact-canvas" data-artifact-type={artifact.type}>
-      {artifact.type === "html"
-        ? <ArtifactFrame id={material.id} version={artifact.version} title={material.title} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} />
-        : <img className="mx-auto block h-auto max-w-full" alt={material.title} src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(artifact.source)}`} />}
+      {shown ? <ArtifactError key={`${material.id}:${artifact.version}`} message={shown} onFix={onFix} /> : null}
+      {artifact.type === "svg"
+        ? <img className="mx-auto block h-auto max-w-full" alt={material.title} src={`data:image/svg+xml;charset=utf-8,${encodeURIComponent(artifact.source)}`} />
+        : <ArtifactFrame id={material.id} version={artifact.version} title={material.title} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onError={(message) => setError({ version: artifact.version, message })} />}
       <div className="reader-body">
         <ArtifactSources sources={sources} loaded={loaded} onOpenMaterial={onOpenMaterial} />
       </div>

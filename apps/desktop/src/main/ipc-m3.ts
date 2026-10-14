@@ -43,6 +43,11 @@ const SETTING_KEYS = ["syncIntervalMinutes", "keepCapture", "codexPath", "agentM
 /** The settings the agent's status depends on. */
 const AGENT_SETTING_KEYS = ["codexPath", "agentModel", "agentReasoningEffort"] as const;
 
+function artifactVersion(value: unknown): number {
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) throw new Error("Invalid artifact version.");
+  return value;
+}
+
 function materialId(value: unknown): string {
   if (typeof value !== "string" || !/^[a-f0-9]{16}$/.test(value)) throw new Error("IPC_INVALID_ID");
   return value;
@@ -155,6 +160,13 @@ export function registerM3Handlers(deps: M3Deps): void {
     return result;
   });
   ipcMain.handle("material:getView", (_event, id: unknown, view: unknown) => store.getView(materialId(id), viewId(view)));
+  // Artifact versions: an earlier one to look at, or to restore as the newest.
+  ipcMain.handle("artifact:version", (_event, id: unknown, version: unknown) => store.artifactVersionContent(materialId(id), artifactVersion(version)));
+  ipcMain.handle("artifact:restore", async (_event, id: unknown, version: unknown) => {
+    const updated = await store.restoreArtifact(materialId(id), artifactVersion(version));
+    broadcast("library:changed");
+    return updated;
+  });
   ipcMain.handle("material:setPrimaryView", async (_event, id: unknown, view: unknown) => {
     const updated = await store.setPrimaryView(materialId(id), viewId(view));
     broadcast("library:changed");

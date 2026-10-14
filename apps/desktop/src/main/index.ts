@@ -427,9 +427,14 @@ function installMenu() {
 }
 
 app.whenReady().then(() => {
-  protocol.handle(ARTIFACT_SCHEME, (request) => artifactResponse(request.url, async (id) => {
-    const record = await store.get(id);
-    return record?.origin === "agent" && record.artifact?.type === "html" ? record.artifactSource : undefined;
+  protocol.handle(ARTIFACT_SCHEME, (request) => artifactResponse(request.url, {
+    artifact: async (id, version) => {
+      const at = await store.artifactAt(id, version);
+      const type = at?.info.type;
+      return at && (type === "html" || type === "react" || type === "mermaid") ? { type, source: at.source } : undefined;
+    },
+    // Built by scripts/build-artifact-runtime.mjs next to main, renderer and preload.
+    runtime: (file) => readFile(join(__dirname, "../artifact-runtime", `${file}.js`), "utf8").catch(() => undefined),
   }));
   installMenu();
   createWindow();

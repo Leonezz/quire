@@ -23,8 +23,8 @@ export function annotationView(annotation: Pick<Annotation, "view">, primaryView
 /** The record's own content as a view: the primary view's content travels on the record itself. */
 export function contentOfRecord(material: MaterialRecord): MaterialViewContent {
   const { primaryView, mediaType, pdf, reader, markdown, plain, readingMinutes, quality, problems, artifact, artifactSource } = material;
-  // An HTML or SVG artifact renders from its source (ArtifactFrame), as the engine's artifact view does.
-  const body = (artifact?.type === "html" || artifact?.type === "svg") && artifactSource !== undefined ? { type: artifact.type, source: artifactSource, version: artifact.version } : undefined;
+  // An artifact that renders outside the reader (ArtifactFrame) does so from its source, as the engine's artifact view does.
+  const body = artifact && artifact.type !== "markdown" && artifact.type !== "code" && artifactSource !== undefined ? { type: artifact.type, source: artifactSource, version: artifact.version } : undefined;
   return {
     view: primaryView, mediaType, readingMinutes, quality, problems,
     ...(pdf ? { pdf } : {}),

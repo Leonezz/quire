@@ -45,3 +45,20 @@ describe("ArtifactFrame", () => {
     expect(onOpenLink.mock.calls).toEqual([["https://example.org/a"]]);
   });
 });
+
+describe("ArtifactCanvas errors", () => {
+  it("shows the error an artifact reports and hands it to the agent", async () => {
+    const { ArtifactCanvas } = await import("./ArtifactFrame");
+    const onFix = vi.fn();
+    const view = render(<ArtifactCanvas material={{ id: ID, title: "Chart", lineage: [] }} artifact={{ type: "react", source: "", version: 3 }} onOpenLink={vi.fn()} onOpenMaterial={vi.fn()} onFix={onFix} />);
+    const frame = document.querySelector("iframe")!;
+    act(() => { window.dispatchEvent(new MessageEvent("message", { data: { quire: 1, type: "error", message: "items is undefined" }, source: frame.contentWindow })); });
+    expect(view.getByRole("alert").textContent).toContain("items is undefined");
+    act(() => { view.getByRole("button", { name: /Ask the agent to fix it/ }).click(); });
+    expect(onFix).toHaveBeenCalledWith("items is undefined");
+    expect(view.getByRole("alert").textContent).toContain("Agent panel");
+    // A new version starts without the old error.
+    view.rerender(<ArtifactCanvas material={{ id: ID, title: "Chart", lineage: [] }} artifact={{ type: "react", source: "", version: 4 }} onOpenLink={vi.fn()} onOpenMaterial={vi.fn()} onFix={onFix} />);
+    expect(view.queryByRole("alert")).toBeNull();
+  });
+});

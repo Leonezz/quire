@@ -31,7 +31,9 @@ export interface MaterialSummary {
  * What an agent artifact is. Markdown and code render in the reader; HTML runs in a sandboxed frame
  * (scripts allowed, no network, no access to the app); SVG is drawn as an image.
  */
-export type ArtifactType = "markdown" | "code" | "html" | "svg";
+export type ArtifactType = "markdown" | "code" | "html" | "svg" | "react" | "mermaid";
+/** The artifact types that render outside the reader: in the sandbox (html, react, mermaid) or as an image (svg). */
+export type CanvasArtifactType = Exclude<ArtifactType, "markdown" | "code">;
 
 export interface ArtifactInfo {
   type: ArtifactType;
@@ -607,7 +609,7 @@ export interface MaterialViewContent {
   /** text view only: line anchors back into the PDF, in `plain` order. */
   anchors?: TextViewAnchor[];
   /** artifact view only: the artifact's type, source and revision, rendered in a sandbox (HTML) or as an image (SVG). */
-  artifactBody?: { type: "html" | "svg"; source: string; version: number };
+  artifactBody?: { type: CanvasArtifactType; source: string; version: number };
   report?: TextViewReport;
 }
 
@@ -616,6 +618,10 @@ export interface ReadApiViews {
   fetchMaterialView: (id: string, view: MaterialViewId) => Promise<OpenUrlResult>;
   /** Content of a ready view; undefined when the view is not stored. The primary view's content is also on the record itself. */
   getMaterialView: (id: string, view: MaterialViewId) => Promise<MaterialViewContent | undefined>;
+  /** What an agent artifact showed at an earlier version; undefined when that version is not kept. */
+  getArtifactVersion: (id: string, version: number) => Promise<MaterialViewContent | undefined>;
+  /** Makes an earlier version of an agent artifact its newest (a new version with that content). */
+  restoreArtifactVersion: (id: string, version: number) => Promise<MaterialRecord>;
   /** Makes a ready view the one the reader opens first. */
   setPrimaryView: (id: string, view: MaterialViewId) => Promise<MaterialRecord>;
 }

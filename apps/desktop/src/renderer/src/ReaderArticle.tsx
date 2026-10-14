@@ -10,13 +10,12 @@ import { prefsStyle, type ReadingPrefs } from "./readingPrefs";
 
 const ignoreMaterial = () => undefined;
 
-const ARTIFACT_TYPE_LABELS: Record<ArtifactType, string> = { markdown: "", code: "Code", html: "HTML", svg: "SVG" };
+const ARTIFACT_TYPE_LABELS: Record<ArtifactType, string> = { markdown: "", code: "Code", html: "HTML", svg: "SVG", react: "Interactive", mermaid: "Diagram" };
 
-/** "HTML · version 3" for an artifact that is not plain Markdown or has been revised; empty otherwise. */
+/** "Interactive", "Code (python)" for an artifact that is not plain Markdown; empty otherwise. Its versions are the reader's (ArtifactVersions.tsx). */
 export function artifactLabel(artifact: ArtifactInfo | undefined): string {
   if (!artifact) return "";
-  const type = artifact.type === "code" && artifact.language ? `${ARTIFACT_TYPE_LABELS.code} (${artifact.language})` : ARTIFACT_TYPE_LABELS[artifact.type];
-  return [type, artifact.version > 1 ? `version ${artifact.version}` : ""].filter(Boolean).join(" · ");
+  return artifact.type === "code" && artifact.language ? `${ARTIFACT_TYPE_LABELS.code} (${artifact.language})` : ARTIFACT_TYPE_LABELS[artifact.type];
 }
 
 export type ImageResolver = (url: string, signal: AbortSignal) => Promise<string | undefined>;
@@ -40,13 +39,15 @@ export interface ReaderArticleProps {
   bylineExtra?: ReactNode;
   /** Between the byline and the body (the app's quality / text-view banners). */
   banner?: ReactNode;
+  /** Hands an error an artifact hit while running to the agent, to fix the artifact. */
+  onFixArtifact?: ((error: string) => void) | undefined;
 }
 
 /**
  * The article column as a reader sees it: host, title, byline and the document surface, laid out with the reading prefs.
  * ReaderView wraps it with the reader's chrome; RenderHarness.tsx renders it alone for the eval capture, so the two never drift.
  */
-export function ReaderArticle({ material, content, prefs, resolveImage, onOpenLink, onOpenMaterial, scrolls = true, viewportRef, bodyRef, onShowSources, bylineExtra, banner }: ReaderArticleProps) {
+export function ReaderArticle({ material, content, prefs, resolveImage, onOpenLink, onOpenMaterial, scrolls = true, viewportRef, bodyRef, onShowSources, bylineExtra, banner, onFixArtifact }: ReaderArticleProps) {
   const fallback = useMemo(() => (content.markdown ? { content: content.markdown, format: "gfm" as const } : { content: content.plain ?? "", format: "plain" as const }), [content]);
   const surface = { schema: content.reader?.schema ?? "none", payload: content.reader?.payload ?? "", fallback, onOpenLink, resolveImageSource: resolveImage, resolveRemoteImageSource: resolveImage, showFallbackNotice: false };
   const host = hostLabel(material);
@@ -69,8 +70,8 @@ export function ReaderArticle({ material, content, prefs, resolveImage, onOpenLi
           ? <ArtifactSurface material={material} markdown={content.markdown} onOpenMaterial={onOpenMaterial} {...surface} />
           : <ReaderDocumentSurface {...surface} />}
       </article>
-      {/* An HTML or SVG artifact takes the column's full width, not the reading measure. */}
-      {content.artifactBody ? <ArtifactCanvas material={material} artifact={content.artifactBody} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial ?? ignoreMaterial} /> : null}
+      {/* An artifact that renders outside the reader takes the column's full width, not the reading measure. */}
+      {content.artifactBody ? <ArtifactCanvas material={material} artifact={content.artifactBody} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial ?? ignoreMaterial} onFix={onFixArtifact} /> : null}
     </div>
   );
 }

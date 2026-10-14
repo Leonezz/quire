@@ -1,15 +1,23 @@
-import type { ArtifactInfo, ArtifactType, MaterialViewContent } from "../../shared/contracts";
+import type { ArtifactInfo, ArtifactType, CanvasArtifactType, MaterialViewContent } from "../../shared/contracts";
+import { compileReact } from "../artifact-runtime";
 import { markdownParts, withoutTitleHeading, type ContentFields } from "./material-content";
 import type { StoredRecord } from "./material-record";
 import { readingMinutes } from "./reading-time";
 
 // What an agent artifact is made of, apart from the store: its types and their media types, the
 // content fields each type renders from, plain text for search, and the one edit an update makes.
-// Markdown and code go through the reader pipeline; HTML and SVG keep their source and render as the
-// "artifact" view (HTML in a sandboxed frame, artifact-protocol.ts; SVG as an image).
+// Markdown and code go through the reader pipeline; the other types keep their source and render as
+// the "artifact" view: HTML, React and Mermaid in a sandboxed frame (artifact-protocol.ts), SVG as an image.
 
-export const ARTIFACT_TYPES: readonly ArtifactType[] = ["markdown", "code", "html", "svg"];
-export const ARTIFACT_MEDIA_TYPE = { html: "application/vnd.quire.artifact+html", svg: "application/vnd.quire.artifact+svg" } as const;
+export const ARTIFACT_TYPES: readonly ArtifactType[] = ["markdown", "code", "html", "svg", "react", "mermaid"];
+export const ARTIFACT_MEDIA_TYPE: Record<CanvasArtifactType, string> = {
+  html: "application/vnd.quire.artifact+html", svg: "application/vnd.quire.artifact+svg",
+  react: "application/vnd.quire.artifact+react", mermaid: "application/vnd.quire.artifact+mermaid",
+};
+
+export function isCanvasArtifactType(type: ArtifactType): type is CanvasArtifactType {
+  return type !== "markdown" && type !== "code";
+}
 export const MAX_ARTIFACT_SOURCE = 400_000;
 
 export function isArtifactType(value: unknown): value is ArtifactType {
@@ -17,7 +25,7 @@ export function isArtifactType(value: unknown): value is ArtifactType {
 }
 
 export function isArtifactMediaType(mediaType: string): boolean {
-  return mediaType === ARTIFACT_MEDIA_TYPE.html || mediaType === ARTIFACT_MEDIA_TYPE.svg;
+  return Object.values(ARTIFACT_MEDIA_TYPE).includes(mediaType);
 }
 
 /** The artifact info of a record; an artifact written before types is Markdown at version 1. */
@@ -48,6 +56,18 @@ export function textOfMarkup(source: string): string {
     .trim();
 }
 
+/** The words a React component shows: its JSX text and string literals, without the code around them. */
+export function textOfComponent(source: string): string {
+  const words: string[] = [];
+  for (const match of source.matchAll(/>([^<>{}]+)</g)) words.push(match[1]!);
+  // String literals that read as words: not import paths, keys or lists of class names.
+  for (const match of source.matchAll(/(["'`])((?:(?!\1)[^\\\n]|\\.){3,})\1/g)) {
+    const text = match[2]!;
+    if (/[\p{L}]{2}/u.test(text) && !text.split(/\s+/).every((token) => /^[a-z0-9:./@#%[\]-]*$/.test(token))) words.push(text);
+  }
+  return words.join(" ").replace(/\s+/g, " ").trim();
+}
+
 /** A fence long enough that no run of backticks in the code closes it. */
 function fenceFor(code: string): string {
   const longest = Math.max(2, ...[...code.matchAll(/`+/g)].map((match) => match[0].length));
@@ -60,6 +80,9 @@ export function artifactSourceProblem(type: ArtifactType, source: string): strin
   if (source.length > MAX_ARTIFACT_SOURCE) return `The artifact is longer than ${MAX_ARTIFACT_SOURCE} characters.`;
   if (type === "svg" && !/<svg[\s>]/i.test(source)) return "An SVG artifact must contain an <svg> element.";
   if (type === "html" && !/<[a-z][\s\S]*>/i.test(source)) return "An HTML artifact must contain HTML markup.";
+  if (type === "react") {
+    try { compileReact(source); } catch (error) { return error instanceof Error ? error.message : String(error); }
+  }
   return undefined;
 }
 
@@ -73,7 +96,7 @@ export function artifactContent(input: { type: ArtifactType; source: string; tit
     const fence = fenceFor(source);
     return { mediaType: "text/markdown", ...markdownParts(`${fence}${language ?? ""}\n${source}\n${fence}`, url), artifactSource: source };
   }
-  const plain = textOfMarkup(source);
+  const plain = type === "react" ? textOfComponent(source) : type === "mermaid" ? source.replace(/\s+/g, " ").trim() : textOfMarkup(source);
   return {
     mediaType: ARTIFACT_MEDIA_TYPE[type], artifactSource: source, readingMinutes: readingMinutes(plain), problems: [],
     ...(plain ? { plain } : {}),
@@ -81,10 +104,10 @@ export function artifactContent(input: { type: ArtifactType; source: string; tit
   };
 }
 
-/** The artifact view's content fields for a record whose type renders outside the reader (HTML, SVG); none otherwise. */
+/** The artifact view's content fields for a record whose type renders outside the reader; none otherwise. */
 export function artifactViewOf(record: Pick<StoredRecord, "origin" | "artifact" | "artifactSource" | "fetchedAt">): Pick<MaterialViewContent, "artifactBody"> {
   const info = artifactInfoOf(record);
-  if (!info || (info.type !== "html" && info.type !== "svg") || record.artifactSource === undefined) return {};
+  if (!info || !isCanvasArtifactType(info.type) || record.artifactSource === undefined) return {};
   return { artifactBody: { type: info.type, source: record.artifactSource, version: info.version } };
 }
 

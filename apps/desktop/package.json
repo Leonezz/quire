@@ -7,14 +7,14 @@
   "homepage": "https://github.com/Leonezz/quire",
   "main": "./out/main/index.js",
   "scripts": {
-    "dev": "electron-vite dev",
-    "build": "electron-vite build",
+    "dev": "node scripts/build-artifact-runtime.mjs && electron-vite dev",
+    "build": "node scripts/build-artifact-runtime.mjs && electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "test": "vitest run",
-    "package": "electron-vite build && electron-builder --mac",
-    "package:dir": "electron-vite build && electron-builder --mac --dir",
-    "release:local": "electron-vite build && CSC_NAME=\"${CSC_NAME:-Apple Development: leonez12138@gmail.com (LGNAH9RZH4)}\" electron-builder --mac --publish never && node scripts/publish-release.mjs \"${NOTES:-release-notes.md}\""
+    "package": "pnpm build && electron-builder --mac",
+    "package:dir": "pnpm build && electron-builder --mac --dir",
+    "release:local": "pnpm build && CSC_NAME=\"${CSC_NAME:-Apple Development: leonez12138@gmail.com (LGNAH9RZH4)}\" electron-builder --mac --publish never && node scripts/publish-release.mjs \"${NOTES:-release-notes.md}\""
   },
   "dependencies": {
     "@mixmark-io/domino": "2.2.0",
@@ -32,9 +32,11 @@
     "react-aria-components": "1.21.1",
     "react-dom": "19.3.0",
     "react-resizable-panels": "4.12.4",
+    "sucrase": "3.35.1",
     "temml": "0.13.5"
   },
   "devDependencies": {
+    "@tailwindcss/browser": "4.3.3",
     "@tailwindcss/vite": "4.3.3",
     "@testing-library/dom": "10.4.2",
     "@testing-library/react": "16.3.2",
@@ -42,10 +44,15 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^5",
+    "d3": "7.9.0",
     "electron": "44.4.1",
     "electron-builder": "26.16.1",
     "electron-vite": "5.0.0",
+    "esbuild": "0.25.12",
     "jsdom": "26.1.0",
+    "lodash": "4.17.21",
+    "mermaid": "12.2.0",
+    "recharts": "3.10.1",
     "tailwindcss": "4.3.3",
     "typescript": "5.9.3",
     "vite": "^7",

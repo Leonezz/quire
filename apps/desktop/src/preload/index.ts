@@ -92,6 +92,8 @@ const api: ReadApi = {
   // Views: one material, several renderings.
   fetchMaterialView: (id, view) => ipcRenderer.invoke("material:fetchView", id, view),
   getMaterialView: (id, view) => ipcRenderer.invoke("material:getView", id, view),
+  getArtifactVersion: (id, version) => ipcRenderer.invoke("artifact:version", id, version),
+  restoreArtifactVersion: (id, version) => ipcRenderer.invoke("artifact:restore", id, version),
   setPrimaryView: (id, view) => ipcRenderer.invoke("material:setPrimaryView", id, view),
   // Updates: the state is pushed on every change; `current` in it is the main process's app.getVersion().
   getUpdateState: () => ipcRenderer.invoke("update:state"),

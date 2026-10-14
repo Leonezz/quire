@@ -15,6 +15,7 @@ import type { AgentContext, Annotation } from "../../shared/contracts";
 import { FindBar } from "./FindBar";
 import { useReadingPrefs } from "./readingPrefs";
 import { ReaderArticle } from "./ReaderArticle";
+import { ArtifactVersionBar, useArtifactVersions } from "./ArtifactVersions";
 import { read } from "./api";
 import type { MaterialRecord, MaterialViewContent } from "../../shared/contracts";
 import { mirroredViews, resolveViewAnnotations } from "./mirroredAnnotations";
@@ -139,6 +140,14 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
     } catch (cause: unknown) { setRebuildPhase({ kind: "failed", error: cause instanceof Error ? cause.message : "The agent did not answer." }); }
   }, [material.id, panelSession, prefs, setPrefs]);
   const onRebuild = canRebuild(material) ? () => void startRebuild() : undefined;
+  const artifactVersions = useArtifactVersions(material, content, onMaterialSaved);
+  // An artifact that fails while running: the agent reads it, finds the cause and edits it, in the material's conversation.
+  const fixArtifact = useCallback((error: string) => {
+    setAsked(null); setPanel("agent");
+    if (prefs.focus) setPrefs({ ...prefs, focus: false });
+    const text = `This artifact fails when it runs, with the error: ${error}\nRead it with material_read, find the cause and fix it with artifact_update.`;
+    void agentStore.ask({ context: { kind: "material", materialId: material.id }, task: "ask", text, ...(panelSession ? { sessionId: panelSession } : {}) }).catch(() => undefined);
+  }, [material.id, panelSession, prefs, setPrefs]);
   const rebuildError = rebuildPhase.kind === "failed" ? rebuildPhase.error : undefined;
   // Focus mode closes the panel; an explicit request for one (button, i / n / ⌘J) leaves focus mode again.
   useEffect(() => { if (prefs.focus) setPanel(null); }, [prefs.focus]);
@@ -302,11 +311,11 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
             <TocRail aria-label="Contents" entries={outline.map((entry) => ({ id: entry.id, label: entry.label, level: entry.level - 1 }))} activeId={activeHeading} pinned={tocPinned} resting="hidden" onSelect={(id) => document.getElementById(id)?.scrollIntoView({ block: "start", behavior: "smooth" })} />
           </div>
         ) : null}
-        <ReaderArticle material={material} content={content} prefs={prefs} resolveImage={resolveImage} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} viewportRef={viewportRef} bodyRef={bodyRef} onShowSources={() => setPanel("info")}
+        <ReaderArticle material={material} content={artifactVersions.content} prefs={prefs} resolveImage={resolveImage} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} viewportRef={viewportRef} bodyRef={bodyRef} onShowSources={() => setPanel("info")} onFixArtifact={material.origin === "agent" ? fixArtifact : undefined}
           bylineExtra={material.origin === "agent" ? null : <a href={material.finalUrl} onClick={(event) => { event.preventDefault(); onOpenLink(material.finalUrl); }}>Open original ↗</a>}
           banner={content.view === "text" && content.report
             ? <TextViewBanner report={content.report} onOpenPdf={() => views.select("pdf")} />
-            : <QualityBanner material={material} low={quality.low} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onReport={reportFromChrome} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError} />} />
+            : <><ArtifactVersionBar versions={artifactVersions} /><QualityBanner material={material} low={quality.low} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onReport={reportFromChrome} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError} /></>} />
       </main>
       </SplitPanel>
       {panelOpen ? (

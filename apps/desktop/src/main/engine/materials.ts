@@ -210,6 +210,35 @@ export class MaterialStore {
     return bytes ? (JSON.parse(new TextDecoder().decode(bytes)) as ArtifactRevision) : undefined;
   }
 
+  /**
+   * The source an artifact had at a version (its current one included), with its type; undefined
+   * when the material is not an artifact or the version is not kept.
+   */
+  async artifactAt(id: string, version?: number): Promise<{ record: StoredRecord; info: ArtifactInfo; source: string; title: string } | undefined> {
+    const record = await this.read(id);
+    const info = record ? artifactInfoOf(record) : undefined;
+    const current = record ? artifactSourceOf(record) : undefined;
+    if (!record || !info || current === undefined) return undefined;
+    if (version === undefined || version === info.version) return { record, info, source: current, title: record.title };
+    const revision = version < info.version ? await this.artifactRevision(id, version) : undefined;
+    return revision ? { record, info: { ...info, version: revision.version, updatedAt: revision.updatedAt }, source: revision.source, title: revision.title } : undefined;
+  }
+
+  /** What an artifact showed at an earlier version, as a view's content; undefined when that version is not kept. */
+  async artifactVersionContent(id: string, version: number): Promise<MaterialViewContent | undefined> {
+    const at = await this.artifactAt(id, version);
+    if (!at) return undefined;
+    const { reader: _reader, markdown: _markdown, plain: _plain, artifactSource: _source, ...rest } = at.record;
+    return primaryContentOf({ ...rest, artifact: at.info, ...artifactContent({ type: at.info.type, source: at.source, title: at.title, language: at.info.language, url: at.record.url }) });
+  }
+
+  /** Makes an earlier version the artifact's newest: a new version with that source and title, so nothing is lost. */
+  async restoreArtifact(id: string, version: number): Promise<MaterialRecord> {
+    const revision = await this.artifactRevision(id, version);
+    if (!revision) throw new Error(`Version ${version} of artifact ${id} is not kept.`);
+    return this.updateArtifact(id, { source: revision.source, title: revision.title });
+  }
+
   /** The lineage ids, each once; every one must be in the library. */
   private async presentLineage(ids: readonly string[]): Promise<string[]> {
     const lineage = [...new Set(ids)];
