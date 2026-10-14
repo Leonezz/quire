@@ -6,7 +6,7 @@ export type { MenuTriggerProps };
 
 export function Menu<T extends object>({ className, ...props }: MenuProps<T>) {
   return (
-    <Popover placement="bottom end" offset={6} className="glass-strong min-w-44 rounded-card p-1.5 entering:animate-in exiting:animate-out">
+    <Popover placement="bottom end" offset={6} className="glass-strong min-w-44 rounded-card p-1.5 t-dropdown">
       <AriaMenu {...props} className={composeRenderProps(className, (cls) => cx("outline-none", cls))} />
     </Popover>
   );

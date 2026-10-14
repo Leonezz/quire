@@ -12,9 +12,9 @@ export function Sheet({ className, children, size = "md", ...props }: ModalOverl
     <ModalOverlay
       {...props}
       isDismissable
-      className={composeRenderProps(className, (cls) => cx("fixed inset-0 z-40 grid place-items-start justify-center bg-[rgba(15,17,21,.26)] pt-16 backdrop-blur-[6px] entering:animate-[fade_.15s_ease] exiting:animate-[fade_.12s_ease_reverse]", cls))}
+      className={composeRenderProps(className, (cls) => cx("fixed inset-0 z-40 grid place-items-start justify-center bg-[rgba(15,17,21,.26)] pt-16 backdrop-blur-[6px] t-scrim", cls))}
     >
-      <Modal className={cx(sizes[size], "max-w-[92vw] rounded-[22px] bg-content shadow-float outline-none")}>{children}</Modal>
+      <Modal className={cx(sizes[size], "t-modal max-w-[92vw] rounded-[22px] bg-content shadow-float outline-none")}>{children}</Modal>
     </ModalOverlay>
   );
 }

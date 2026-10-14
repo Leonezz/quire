@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, userEvent, within } from "storybook/test";
+import { expect, userEvent, waitFor, within } from "storybook/test";
 import { useState } from "react";
 import { BookOpen } from "lucide-react";
 import { Icon } from "../primitives/Icon";
@@ -39,11 +39,14 @@ export const Keyboard: Story = {
     await expect(within(menu).getAllByRole("menuitemradio")).toHaveLength(4);
     await userEvent.keyboard("{ArrowDown}{ArrowDown}{Enter}");
     await expect(canvas.getByText("Chosen: preprint")).toBeInTheDocument();
+    await waitFor(() => expect(body.queryByRole("menu")).toBeNull());
     // Escape closes without changing anything.
     await userEvent.click(canvas.getByRole("button", { name: "Type: Preprint" }));
-    await body.findByRole("menu");
+    // The menu takes focus once it has started opening; Escape closes it, and it leaves after its close transition.
+    const reopened = await body.findByRole("menu");
+    await waitFor(() => expect(reopened.contains(reopened.ownerDocument.activeElement)).toBe(true));
     await userEvent.keyboard("{Escape}");
-    await expect(body.queryByRole("menu")).toBeNull();
+    await waitFor(() => expect(body.queryByRole("menu")).toBeNull());
     await expect(canvas.getByText("Chosen: preprint")).toBeInTheDocument();
   },
 };

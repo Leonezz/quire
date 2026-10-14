@@ -75,18 +75,130 @@ svg.lucide > * { vector-effect: non-scaling-stroke; }
   box-shadow: inset 0 0 0 1px var(--glass-edge), var(--shadow-float);
 }
 
-@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+/* Motion recipes from transitions.dev (.claude/skills/transitions-dev), timed by the tokens in tokens.css.
+   react-aria marks a surface [data-entering] for its first frame and [data-exiting] until its exit transition
+   ends, so those two states are the recipes' closed rest states. Every recipe stands still for reduced motion. */
 
-/* Agent transcript: a turn or a tool line appears with a short lift; nothing moves for reduced motion. */
-@keyframes agent-pop { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+/* Menu dropdown (05): an anchored surface grows from its trigger; the close is quicker and barely shrinks. */
+@utility t-dropdown {
+  transform-origin: var(--trigger-anchor-point, top);
+  transition:
+    transform var(--dropdown-open-dur) var(--ease-smooth-out),
+    opacity   var(--dropdown-open-dur) var(--ease-smooth-out);
+  will-change: transform, opacity;
+  &[data-entering] { transform: scale(var(--dropdown-pre-scale)); opacity: 0; }
+  &[data-exiting] {
+    transform: scale(var(--dropdown-closing-scale));
+    opacity: 0;
+    transition:
+      transform var(--dropdown-close-dur) var(--ease-smooth-out),
+      opacity   var(--dropdown-close-dur) var(--ease-smooth-out);
+  }
+  @media (prefers-reduced-motion: reduce) { transition: none !important; }
+}
+
+/* Modal open / close (06): a centred sheet scales up from .96 and dips back on close; its scrim fades on the same clock. */
+@utility t-modal {
+  transform-origin: center;
+  transition:
+    transform var(--modal-open-dur) var(--ease-smooth-out),
+    opacity   var(--modal-open-dur) var(--ease-smooth-out);
+  will-change: transform, opacity;
+  &[data-entering] { transform: scale(var(--modal-scale)); opacity: 0; }
+  &[data-exiting] {
+    transform: scale(var(--modal-scale));
+    opacity: 0;
+    transition:
+      transform var(--modal-close-dur) var(--ease-smooth-out),
+      opacity   var(--modal-close-dur) var(--ease-smooth-out);
+  }
+  @media (prefers-reduced-motion: reduce) { transition: none !important; }
+}
+@utility t-scrim {
+  transition: opacity var(--modal-open-dur) var(--ease-smooth-out);
+  &[data-entering] { opacity: 0; }
+  &[data-exiting] { opacity: 0; transition: opacity var(--modal-close-dur) var(--ease-smooth-out); }
+  @media (prefers-reduced-motion: reduce) { transition: none !important; }
+}
+
+/* Texts reveal (18): an agent turn or a tool line rises into place through a soft blur. */
+@keyframes t-stagger-in { from { opacity: 0; transform: translateY(var(--stagger-distance)); filter: blur(var(--stagger-blur)); } to { opacity: 1; transform: none; filter: none; } }
 @utility agent-pop {
-  animation: agent-pop .16s cubic-bezier(.2,.7,.2,1) both;
+  animation: t-stagger-in var(--stagger-dur) var(--ease-smooth-out) both;
   @media (prefers-reduced-motion: reduce) { animation: none; }
 }
 
-/* The side panel slides in from its edge; the reader fades on a switch. Nothing moves for reduced motion. */
-@keyframes panel-slide { from { opacity: 0; transform: translateX(12px); } to { opacity: 1; transform: none; } }
+/* Panel reveal (07): the side panel slides in from its edge with a cross-blur. */
+@keyframes panel-slide { from { opacity: 0; transform: translateX(12px); filter: blur(var(--panel-blur)); } to { opacity: 1; transform: none; filter: none; } }
 @utility panel-slide {
-  animation: panel-slide .16s cubic-bezier(.2,.7,.2,1) both;
+  animation: panel-slide var(--panel-open-dur) var(--ease-smooth-out) both;
   @media (prefers-reduced-motion: reduce) { animation: none; }
+}
+
+/* Accordion expand (21) on a native <details>: the body grows from 0 to its height and back, and cross-blurs in. */
+@utility t-acc {
+  interpolate-size: allow-keywords;
+  &::details-content {
+    block-size: 0;
+    overflow: clip;
+    opacity: 0;
+    filter: blur(var(--blur-small));
+    transition:
+      block-size var(--acc-dur) var(--ease-smooth-out),
+      opacity var(--acc-dur) var(--ease-smooth-out),
+      filter var(--acc-dur) var(--ease-smooth-out),
+      content-visibility var(--acc-dur) allow-discrete;
+  }
+  &[open]::details-content { block-size: auto; opacity: 1; filter: none; }
+  @media (prefers-reduced-motion: reduce) { &::details-content { transition: none !important; } }
+}
+/* The disclosure chevron turns on the accordion's clock. */
+@utility t-acc-chevron {
+  transition: rotate var(--acc-dur) var(--ease-smooth-out);
+  @media (prefers-reduced-motion: reduce) { transition: none !important; }
+}
+
+/* Toggle (27): the thumb travels with an overshoot and settles. Its track carries [data-on]; [data-init] lands with the
+   first change so a switch never plays its bounce on mount. */
+@keyframes t-toggle-on {
+  0% { translate: 0 0; }
+  55% { translate: calc(var(--toggle-travel) + var(--toggle-ov1)) 0; }
+  80% { translate: calc(var(--toggle-travel) - var(--toggle-ov2)) 0; }
+  100% { translate: var(--toggle-travel) 0; }
+}
+@keyframes t-toggle-off {
+  0% { translate: var(--toggle-travel) 0; }
+  55% { translate: calc(0px - var(--toggle-ov1)) 0; }
+  80% { translate: var(--toggle-ov2) 0; }
+  100% { translate: 0 0; }
+}
+@utility t-toggle-thumb {
+  translate: 0 0;
+  will-change: translate;
+  :where([data-on="true"]) > & { translate: var(--toggle-travel) 0; }
+  :where([data-init][data-on="true"]) > & { animation: t-toggle-on var(--toggle-dur) var(--toggle-ease) both; }
+  :where([data-init][data-on="false"]) > & { animation: t-toggle-off var(--toggle-dur) var(--toggle-ease) both; }
+  @media (prefers-reduced-motion: reduce) { animation: none !important; }
+}
+
+/* Checkbox check (25): the box fills, then the mark draws itself; unchecking erases it quickly. The mark's <svg> carries
+   [data-on]; 15 is its path's length, rounded up. */
+@utility t-check-mark {
+  stroke-dasharray: 15;
+  stroke-dashoffset: 15;
+  transition: stroke-dashoffset var(--check-uncheck) var(--ease-smooth-out);
+  :where([data-on="true"]) > & {
+    stroke-dashoffset: 0;
+    transition: stroke-dashoffset var(--check-draw) var(--ease-smooth-out);
+  }
+  @media (prefers-reduced-motion: reduce) { transition: none !important; }
+}
+
+/* Tabs sliding (16): the segmented control's pill moves between options; Segmented.tsx writes its place. */
+@utility t-tabs-pill {
+  transition:
+    transform var(--tabs-dur) var(--ease-smooth-out),
+    width     var(--tabs-dur) var(--ease-smooth-out);
+  will-change: transform, width;
+  @media (prefers-reduced-motion: reduce) { transition: none !important; }
 }

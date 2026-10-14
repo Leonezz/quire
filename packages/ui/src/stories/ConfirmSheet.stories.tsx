@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, fn, userEvent, within } from "storybook/test";
+import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import { useState } from "react";
 import { ConfirmSheet } from "../primitives/ConfirmSheet";
 import { NumberField } from "../primitives/NumberField";
@@ -30,7 +30,8 @@ export const Confirm: Story = {
     // The confirming button takes focus, so Enter confirms; Esc cancels.
     await expect(within(dialog).getByRole("button", { name: "Delete 3" })).toHaveFocus();
     await userEvent.keyboard("{Escape}");
-    await expect(body.queryByRole("dialog")).toBeNull();
+    // The sheet leaves after its close transition.
+    await waitFor(() => expect(body.queryByRole("dialog")).toBeNull());
     await expect(onConfirm).not.toHaveBeenCalled();
     await userEvent.click(within(canvasElement).getByRole("button", { name: "Delete 3" }));
     await body.findByRole("dialog");

@@ -7,7 +7,7 @@ export function Popover({ className, children, "aria-label": ariaLabel, ...props
     <AriaPopover
       {...props}
       offset={props.offset ?? 8}
-      className={composeRenderProps(className, (cls) => cx("glass-strong rounded-[18px] p-3.5 outline-none entering:animate-[fade_.12s_ease] exiting:animate-[fade_.1s_ease_reverse]", cls))}
+      className={composeRenderProps(className, (cls) => cx("glass-strong rounded-[18px] p-3.5 t-dropdown outline-none", cls))}
     >
       <Dialog className="outline-none" {...(ariaLabel ? { "aria-label": ariaLabel } : {})}>{children}</Dialog>
     </AriaPopover>

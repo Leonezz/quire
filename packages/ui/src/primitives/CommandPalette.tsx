@@ -34,8 +34,8 @@ export interface CommandPaletteProps {
 export function CommandPalette({ isOpen, onOpenChange, placeholder, query, onQueryChange, items, onSelect, status, statusIsError = false, emptyText = "No matches.", ...props }: CommandPaletteProps) {
   const label = props["aria-label"];
   return (
-    <ModalOverlay isOpen={isOpen} onOpenChange={onOpenChange} isDismissable className="fixed inset-0 z-40 grid place-items-start justify-center bg-[rgba(15,17,21,.26)] pt-[12vh] backdrop-blur-[6px] entering:animate-[fade_.15s_ease] exiting:animate-[fade_.12s_ease_reverse]">
-      <Modal className="w-[600px] max-w-[92vw] overflow-hidden rounded-[22px] bg-content shadow-float outline-none">
+    <ModalOverlay isOpen={isOpen} onOpenChange={onOpenChange} isDismissable className="fixed inset-0 z-40 grid place-items-start justify-center bg-[rgba(15,17,21,.26)] pt-[12vh] backdrop-blur-[6px] t-scrim">
+      <Modal className="t-modal w-[600px] max-w-[92vw] overflow-hidden rounded-[22px] bg-content shadow-float outline-none">
         <Dialog aria-label={label} className="flex max-h-[60vh] flex-col outline-none">
           <Autocomplete inputValue={query} onInputChange={onQueryChange}>
             <SearchField aria-label={label} autoFocus className="group flex h-[52px] items-center gap-2 border-b border-separator-soft px-4 text-[16px] text-label">

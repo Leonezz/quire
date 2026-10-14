@@ -35,6 +35,14 @@ function loadSidebarCollapsed(): boolean {
 function saveSidebarCollapsed(collapsed: boolean) {
   try { localStorage.setItem(SIDEBAR_KEY, collapsed ? "1" : "0"); } catch { /* storage may be unavailable; the sidebar simply starts open next time */ }
 }
+/** How long the sidebar slide runs: read from the motion token that times it (styles.css), so the two never drift.
+    The built stylesheet may write the token in seconds (".25s"). */
+function slideMs(): number {
+  const value = getComputedStyle(document.documentElement).getPropertyValue("--duration-fast").trim();
+  const amount = parseFloat(value);
+  if (Number.isNaN(amount)) return 250;
+  return value.endsWith("ms") ? amount : amount * 1000;
+}
 /** The part of the scope the Library answers to. */
 function focusOf(scope: Scope): LibraryFocus {
   if (scope.kind === "library") return { cut: scope.id, tag: undefined };
@@ -99,7 +107,7 @@ export function App() {
         slidingRef.current = false; setSidebarSliding(false);
         const collapsed = panel.isCollapsed();
         setSidebarCollapsed(collapsed); saveSidebarCollapsed(collapsed);
-      }, reduced ? 0 : 240);
+      }, reduced ? 0 : slideMs() + 40);
     }, reduced ? 0 : 16);
   }, [sidebarRef, sidebarWidth]);
   const openSettings = useCallback((section?: SettingsSection) => setSettings({ open: true, section }), []);
