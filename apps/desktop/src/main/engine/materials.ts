@@ -3,11 +3,12 @@ import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises"
 import { gunzipSync } from "node:zlib";
 import { join } from "node:path";
 import { normalizeArticleCapture } from "@read/normalize";
-import type { CorpusImportResult, MaterialMeta, MaterialRecord, MaterialSummary, MaterialView, MaterialViewContent, MaterialViewId, OpenFileInput, OpenUrlResult } from "../../shared/contracts";
+import type { ArtifactInfo, ArtifactType, CorpusImportResult, MaterialMeta, MaterialRecord, MaterialSummary, MaterialView, MaterialViewContent, MaterialViewId, OpenFileInput, OpenUrlResult } from "../../shared/contracts";
 import { bibtexOf } from "../../shared/bibtex";
+import { applyArtifactEdit, artifactContent, artifactInfoOf, artifactSourceOf, artifactSourceProblem } from "./artifacts";
 import { captureTextOf } from "./capture-text";
 import { FetchError, assertPublicHttpUrl, fetchPage, type Fetcher } from "./fetch";
-import { NORMALIZE_BUDGET, degradedQuality, isHtml, isPdf, markdownParts, mediaTypeForName, pdfContent, pickRepresentations, titleFromHtml, withoutTitleHeading } from "./material-content";
+import { NORMALIZE_BUDGET, degradedQuality, isHtml, isPdf, markdownParts, mediaTypeForName, pdfContent, pickRepresentations, titleFromHtml } from "./material-content";
 import { effectiveOf, searchFieldsOf, summaryOf, withExtracted, type StoredRecord } from "./material-record";
 import { failedView, mediaTypeFitsView, primaryContentOf, primaryPdfPath, primaryViewOf, readViewContent, readyView, swapPrimaryFiles, upsertView, viewFilePaths, viewPdfPath, viewsOf, withContent, withPrimaryView, writeViewContent } from "./material-views";
 import { PdfError, inspectPdf } from "./pdf";
@@ -49,6 +50,9 @@ export interface FeedMaterialInput {
 }
 
 const ID = /^[a-f0-9]{16}$/;
+
+/** A replaced revision of an artifact, kept beside the record. */
+export interface ArtifactRevision { version: number; updatedAt: string; title: string; source: string }
 /** Records only: <id>.json, never a view's <id>.<view>.json beside it. */
 const RECORD_FILE = /^[a-f0-9]{16}\.json$/;
 
@@ -155,23 +159,67 @@ export class MaterialStore {
   }
 
   /**
-   * A material the agent wrote (a synthesis, a summary). `lineage` names the materials it was built
-   * from; every id must be in the library so each claim keeps its trail.
+   * A material the agent wrote (a synthesis, a summary, a page, a diagram). `lineage` names the
+   * materials it was built from; every id must be in the library so each claim keeps its trail.
+   * `markdown` is the older shape of `source` for a Markdown artifact.
    */
-  async saveArtifact(input: { title: string; markdown: string; lineage: readonly string[] }): Promise<MaterialRecord> {
+  async saveArtifact(input: { title: string; type?: ArtifactType; source?: string; markdown?: string; language?: string; lineage: readonly string[] }): Promise<MaterialRecord> {
     const title = input.title.trim();
     if (!title) throw new Error("An artifact needs a title.");
-    if (!input.markdown.trim()) throw new Error("An artifact needs content.");
-    const lineage = [...new Set(input.lineage)];
-    const present = await Promise.all(lineage.map((id) => this.read(id)));
-    const unknown = lineage.filter((_, index) => present[index] === undefined);
-    if (unknown.length > 0) throw new Error(`Unknown material ids in lineage: ${unknown.join(", ")}. Cite only materials that are in the library.`);
+    const type = input.type ?? "markdown";
+    const source = input.source ?? input.markdown ?? "";
+    const problem = artifactSourceProblem(type, source);
+    if (problem) throw new Error(problem === "The artifact is empty." ? "An artifact needs content." : problem);
+    const lineage = await this.presentLineage(input.lineage);
     const fetchedAt = new Date().toISOString();
     const id = createHash("sha256").update(`${title}\n${fetchedAt}`).digest("hex").slice(0, 16);
     const url = `quire://artifact/${id}`;
-    const record = withExtracted({ id, url, finalUrl: url, mediaType: "text/markdown", fetchedAt, origin: "agent", lineage, title, ...markdownParts(withoutTitleHeading(input.markdown, title), url) });
+    const artifact: ArtifactInfo = { type, version: 1, updatedAt: fetchedAt, ...(type === "code" && input.language ? { language: input.language } : {}) };
+    const record = withExtracted({ id, url, finalUrl: url, fetchedAt, origin: "agent", lineage, title, artifact, ...artifactContent({ type, source, title, language: artifact.language, url }) });
     return this.decorate(await this.save(record));
   }
+
+  /**
+   * A new revision of an agent artifact: its source replaced (a rewrite) or one passage of it edited
+   * (an update), optionally retitled or with more sources. The revision it replaces is kept beside
+   * the record as <id>.rev<version>.json.
+   */
+  async updateArtifact(id: string, change: { source?: string; edit?: { oldText: string; newText: string }; title?: string; lineage?: readonly string[] }): Promise<MaterialRecord> {
+    const record = await this.require(id);
+    const info = artifactInfoOf(record);
+    if (!info) throw new Error(`Material ${id} (${record.title}) is not an artifact the agent wrote; only artifacts can be edited.`);
+    const current = artifactSourceOf(record);
+    if (current === undefined) throw new Error(`Artifact ${id} has no source to edit.`);
+    const source = change.edit ? applyArtifactEdit(current, change.edit.oldText, change.edit.newText) : change.source ?? current;
+    const problem = artifactSourceProblem(info.type, source);
+    if (problem) throw new Error(problem);
+    const title = change.title?.trim() || record.title;
+    const lineage = change.lineage ? [...new Set([...(record.lineage ?? []), ...(await this.presentLineage(change.lineage))])] : record.lineage;
+    const revision: ArtifactRevision = { version: info.version, updatedAt: info.updatedAt, title: record.title, source: current };
+    await writeFile(this.revisionPath(id, info.version), JSON.stringify(revision), "utf8");
+    const updatedAt = new Date().toISOString();
+    const { reader: _reader, markdown: _markdown, plain: _plain, artifactSource: _source, views: _views, primaryView: _primary, ...rest } = record;
+    const next: StoredRecord = { ...rest, title, ...(lineage ? { lineage } : {}), artifact: { ...info, version: info.version + 1, updatedAt }, ...artifactContent({ type: info.type, source, title, language: info.language, url: record.url }) };
+    return this.decorate(await this.save(withExtracted(next)));
+  }
+
+  /** An earlier revision of an artifact, or undefined when it is not kept. */
+  async artifactRevision(id: string, version: number): Promise<ArtifactRevision | undefined> {
+    if (!ID.test(id) || !Number.isInteger(version) || version < 1) return undefined;
+    const bytes = await this.readOptional(this.revisionPath(id, version));
+    return bytes ? (JSON.parse(new TextDecoder().decode(bytes)) as ArtifactRevision) : undefined;
+  }
+
+  /** The lineage ids, each once; every one must be in the library. */
+  private async presentLineage(ids: readonly string[]): Promise<string[]> {
+    const lineage = [...new Set(ids)];
+    const present = await Promise.all(lineage.map((id) => this.read(id)));
+    const unknown = lineage.filter((_, index) => present[index] === undefined);
+    if (unknown.length > 0) throw new Error(`Unknown material ids in lineage: ${unknown.join(", ")}. Cite only materials that are in the library.`);
+    return lineage;
+  }
+
+  private revisionPath(id: string, version: number) { return join(this.dir, `${id}.rev${version}.json`); }
 
   /** Re-runs extraction on the stored capture (or the record's own fields) and replaces the extracted layer; overrides stay. */
   async refreshMetadata(id: string): Promise<MaterialRecord> {
@@ -377,8 +425,10 @@ export class MaterialStore {
     if (invalid !== undefined) throw new Error(`Not a material id: ${invalid}`);
     let deleted = 0;
     for (const id of ids) {
-      if (await this.read(id)) deleted += 1;
-      const paths = [this.pdfPath(id), this.htmlPath(id), join(this.dir, `${id}.json`), ...viewFilePaths(this.dir, id)];
+      const record = await this.read(id);
+      if (record) deleted += 1;
+      const revisions = Array.from({ length: Math.max(0, (record?.artifact?.version ?? 1) - 1) }, (_, index) => this.revisionPath(id, index + 1));
+      const paths = [this.pdfPath(id), this.htmlPath(id), join(this.dir, `${id}.json`), ...viewFilePaths(this.dir, id), ...revisions];
       await Promise.all([...paths.map((path) => rm(path, { force: true })), this.figures.remove(id)]);
       this.meta?.remove(id);
     }

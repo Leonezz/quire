@@ -1,11 +1,23 @@
 import { useMemo } from "react";
 import type { ReactNode, Ref } from "react";
 import { ReaderDocumentSurface } from "@read/reader";
-import type { MaterialRecord, MaterialViewContent } from "../../shared/contracts";
+import type { ArtifactInfo, ArtifactType, MaterialRecord, MaterialViewContent } from "../../shared/contracts";
 import { ArtifactSurface } from "./ArtifactCitations";
+import { ArtifactCanvas } from "./ArtifactFrame";
 import { hostLabel } from "./ArtifactLineage";
 import { headerParts } from "./materialMeta";
 import { prefsStyle, type ReadingPrefs } from "./readingPrefs";
+
+const ignoreMaterial = () => undefined;
+
+const ARTIFACT_TYPE_LABELS: Record<ArtifactType, string> = { markdown: "", code: "Code", html: "HTML", svg: "SVG" };
+
+/** "HTML · version 3" for an artifact that is not plain Markdown or has been revised; empty otherwise. */
+export function artifactLabel(artifact: ArtifactInfo | undefined): string {
+  if (!artifact) return "";
+  const type = artifact.type === "code" && artifact.language ? `${ARTIFACT_TYPE_LABELS.code} (${artifact.language})` : ARTIFACT_TYPE_LABELS[artifact.type];
+  return [type, artifact.version > 1 ? `version ${artifact.version}` : ""].filter(Boolean).join(" · ");
+}
 
 export type ImageResolver = (url: string, signal: AbortSignal) => Promise<string | undefined>;
 
@@ -48,14 +60,17 @@ export function ReaderArticle({ material, content, prefs, resolveImage, onOpenLi
         <h1>{material.title}</h1>
         <div className="mb-8 flex flex-wrap gap-x-3 text-[12.5px] text-label-2">
           {headerParts(material.meta).map((part) => <span key={part}>{part}</span>)}
+          {artifactLabel(material.artifact) ? <span>{artifactLabel(material.artifact)}</span> : null}
           <span>{content.readingMinutes} min</span>
           {bylineExtra}
         </div>
         {banner}
-        {material.origin === "agent" && onOpenMaterial
+        {content.artifactBody ? null : material.origin === "agent" && onOpenMaterial
           ? <ArtifactSurface material={material} markdown={content.markdown} onOpenMaterial={onOpenMaterial} {...surface} />
           : <ReaderDocumentSurface {...surface} />}
       </article>
+      {/* An HTML or SVG artifact takes the column's full width, not the reading measure. */}
+      {content.artifactBody ? <ArtifactCanvas material={material} artifact={content.artifactBody} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial ?? ignoreMaterial} /> : null}
     </div>
   );
 }

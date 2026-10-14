@@ -23,6 +23,23 @@ export interface MaterialSummary {
   publication?: string;
   /** Set when the agent rebuilt this material into a cleaner artifact (its id). */
   rebuiltAs?: string;
+  /** Agent artifacts only: what kind of document it is and which revision is current. Absent on artifacts written before types (Markdown, version 1). */
+  artifact?: ArtifactInfo;
+}
+
+/**
+ * What an agent artifact is. Markdown and code render in the reader; HTML runs in a sandboxed frame
+ * (scripts allowed, no network, no access to the app); SVG is drawn as an image.
+ */
+export type ArtifactType = "markdown" | "code" | "html" | "svg";
+
+export interface ArtifactInfo {
+  type: ArtifactType;
+  /** Code artifacts: the language of the source, for highlighting. */
+  language?: string;
+  /** 1 for the first write; each update or rewrite adds one. Earlier revisions are kept beside the record. */
+  version: number;
+  updatedAt: string;
 }
 
 /** Present when the material is a PDF; the bytes live next to the record and are read with getMaterialBytes. */
@@ -55,6 +72,8 @@ export interface MaterialRecord extends MaterialSummary {
   /** Plain text when nothing richer could be produced. */
   plain?: string;
   problems: NormalizationProblem[];
+  /** Agent artifacts: the source exactly as the agent wrote it (Markdown, code, HTML or SVG); what an update edits. */
+  artifactSource?: string;
 }
 
 export type OpenUrlResult =
@@ -526,9 +545,10 @@ export interface ReadApiM3 {
 
 /**
  * "text" is the reflowed reading view of a PDF (SDT-lite): built locally from the PDF's own text,
- * never fetched. It exists only for materials that have a pdf view.
+ * never fetched. It exists only for materials that have a pdf view. "artifact" is an agent artifact
+ * that is not a text document (HTML, SVG): it renders from its source, not through the reader.
  */
-export type MaterialViewId = "web" | "pdf" | "markdown" | "text";
+export type MaterialViewId = "web" | "pdf" | "markdown" | "text" | "artifact";
 
 /** A way to read the material. Only `ready` views have content stored; `available` ones are fetched on demand. */
 export interface MaterialView {
@@ -586,6 +606,8 @@ export interface MaterialViewContent {
   problems: NormalizationProblem[];
   /** text view only: line anchors back into the PDF, in `plain` order. */
   anchors?: TextViewAnchor[];
+  /** artifact view only: the artifact's type, source and revision, rendered in a sandbox (HTML) or as an image (SVG). */
+  artifactBody?: { type: "html" | "svg"; source: string; version: number };
   report?: TextViewReport;
 }
 

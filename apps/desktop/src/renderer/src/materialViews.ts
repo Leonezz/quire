@@ -3,8 +3,8 @@ import type { Annotation, MaterialRecord, MaterialView, MaterialViewContent, Mat
 // One material, several ways to read it: the pure helpers the reader, the Notes panel, the Info
 // panel and the Library rows share. The hook that chooses and loads a view is useMaterialView.ts.
 
-export const VIEW_LABELS: Record<MaterialViewId, string> = { web: "Web", pdf: "PDF", markdown: "Markdown", text: "Text" };
-const VIEW_IDS: readonly MaterialViewId[] = ["web", "pdf", "markdown", "text"];
+export const VIEW_LABELS: Record<MaterialViewId, string> = { web: "Web", pdf: "PDF", markdown: "Markdown", text: "Text", artifact: "Artifact" };
+const VIEW_IDS: readonly MaterialViewId[] = ["web", "pdf", "markdown", "text", "artifact"];
 
 export function isMaterialViewId(value: unknown): value is MaterialViewId {
   return typeof value === "string" && (VIEW_IDS as readonly string[]).includes(value);
@@ -22,13 +22,16 @@ export function annotationView(annotation: Pick<Annotation, "view">, primaryView
 
 /** The record's own content as a view: the primary view's content travels on the record itself. */
 export function contentOfRecord(material: MaterialRecord): MaterialViewContent {
-  const { primaryView, mediaType, pdf, reader, markdown, plain, readingMinutes, quality, problems } = material;
+  const { primaryView, mediaType, pdf, reader, markdown, plain, readingMinutes, quality, problems, artifact, artifactSource } = material;
+  // An HTML or SVG artifact renders from its source (ArtifactFrame), as the engine's artifact view does.
+  const body = (artifact?.type === "html" || artifact?.type === "svg") && artifactSource !== undefined ? { type: artifact.type, source: artifactSource, version: artifact.version } : undefined;
   return {
     view: primaryView, mediaType, readingMinutes, quality, problems,
     ...(pdf ? { pdf } : {}),
     ...(reader ? { reader } : {}),
     ...(markdown ? { markdown } : {}),
     ...(plain ? { plain } : {}),
+    ...(body ? { artifactBody: body } : {}),
   };
 }
 

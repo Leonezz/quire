@@ -1,4 +1,5 @@
 import type { MaterialMeta, MaterialRecord, MaterialSummary, MaterialView, MaterialViewId } from "../../shared/contracts";
+import { artifactInfoOf } from "./artifacts";
 import { isHtml } from "./material-content";
 import { primaryViewOf, viewsOf } from "./material-views";
 import { applyOverrides, bylineOf, extractMetadata, publishedAtOf } from "./metadata";
@@ -54,8 +55,10 @@ export function effectiveOf(record: StoredRecord, overrides: MaterialMeta | unde
   const byline = bylineOf(meta.creators);
   const publishedAt = publishedAtOf(meta.date);
   const views = viewsOf(record);
+  const artifact = artifactInfoOf(record);
   return {
     ...rest,
+    ...(artifact ? { artifact } : {}),
     title: meta.title ?? storedTitle,
     kind: meta.kind ?? "webpage",
     tags: meta.tags ?? [],
@@ -73,9 +76,9 @@ export function readyViewsOf(views: readonly MaterialView[]): MaterialViewId[] {
 }
 
 export function summaryOf(record: MaterialRecord): MaterialSummary {
-  const { id, url, title, byline, publishedAt, fetchedAt, readingMinutes, origin, mediaType, quality, lineage, tags, kind, rebuiltAs, readyViews } = record;
+  const { id, url, title, byline, publishedAt, fetchedAt, readingMinutes, origin, mediaType, quality, lineage, tags, kind, rebuiltAs, readyViews, artifact } = record;
   const publication = record.meta.publication;
-  return { id, url, title, fetchedAt, readingMinutes, origin, mediaType, quality, tags, kind, readyViews, ...(byline ? { byline } : {}), ...(publishedAt ? { publishedAt } : {}), ...(publication ? { publication } : {}), ...(lineage ? { lineage } : {}), ...(rebuiltAs ? { rebuiltAs } : {}) };
+  return { id, url, title, fetchedAt, readingMinutes, origin, mediaType, quality, tags, kind, readyViews, ...(byline ? { byline } : {}), ...(publishedAt ? { publishedAt } : {}), ...(publication ? { publication } : {}), ...(lineage ? { lineage } : {}), ...(rebuiltAs ? { rebuiltAs } : {}), ...(artifact ? { artifact } : {}) };
 }
 
 /** What a material search matches on besides its text: the effective title, creators, publication, abstract, identifiers and tags. */
