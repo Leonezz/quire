@@ -20,6 +20,53 @@ function renderSurface(
 }
 
 describe("ReaderDocumentSurface", () => {
+  it("lets the host render runs of document text, never code", () => {
+    const surface = renderSurface({
+      fallback: { content: "Fallback", format: "plain" },
+      payload: {
+        type: "root",
+        losses: [],
+        children: [
+          {
+            type: "paragraph",
+            children: [
+              { type: "text", value: "claim [ref] " },
+              { type: "inlineCode", value: "[ref]" },
+            ],
+          },
+          { type: "code", lang: null, meta: null, value: "[ref]" },
+        ],
+      },
+      renderText: (value) =>
+        value.split("[ref]").flatMap((part, index) =>
+          index === 0 ? [part] : [<sup key={index}>1</sup>, part],
+        ),
+      schema: "reader.document.v2",
+    });
+
+    expect(surface.querySelector("p")?.innerHTML).toBe(
+      "claim <sup>1</sup> <code>[ref]</code>",
+    );
+    expect(surface.querySelector("pre")?.textContent).toBe("[ref]");
+  });
+
+  it("lets the host render text in the GFM fallback too", () => {
+    const surface = renderSurface({
+      fallback: { content: "claim [ref] and *more [ref]* `[ref]`", format: "gfm" },
+      payload: "",
+      renderText: (value) =>
+        value.split("[ref]").flatMap((part, index) =>
+          index === 0 ? [part] : [<sup key={index}>1</sup>, part],
+        ),
+      schema: "none",
+      showFallbackNotice: false,
+    });
+
+    expect(surface.querySelector("p")?.innerHTML).toBe(
+      "claim <sup>1</sup> and <em>more <sup>1</sup></em> <code>[ref]</code>",
+    );
+  });
+
   it("renders canonical document anchors with surface-local DOM identifiers", () => {
     const props: React.ComponentProps<typeof ReaderDocumentSurface> = {
       fallback: { content: "Fallback", format: "plain" },

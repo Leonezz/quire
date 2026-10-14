@@ -2,6 +2,7 @@ import { useMemo } from "react";
 import type { ReactNode, Ref } from "react";
 import { ReaderDocumentSurface } from "@read/reader";
 import type { MaterialRecord, MaterialViewContent } from "../../shared/contracts";
+import { ArtifactSurface } from "./ArtifactCitations";
 import { hostLabel } from "./ArtifactLineage";
 import { headerParts } from "./materialMeta";
 import { prefsStyle, type ReadingPrefs } from "./readingPrefs";
@@ -19,6 +20,8 @@ export interface ReaderArticleProps {
   scrolls?: boolean | undefined;
   viewportRef?: Ref<HTMLDivElement> | undefined;
   bodyRef?: Ref<HTMLElement> | undefined;
+  /** Opens a cited material (at the passage the citation quotes); with it an agent artifact's citations become numbered references and a Sources list. */
+  onOpenMaterial?: ((id: string, quote?: string) => void) | undefined;
   /** An agent artifact's host line opens its sources; without it the line is plain text. */
   onShowSources?: (() => void) | undefined;
   /** Appended to the byline line (the app's "Open original ↗"). */
@@ -31,8 +34,9 @@ export interface ReaderArticleProps {
  * The article column as a reader sees it: host, title, byline and the document surface, laid out with the reading prefs.
  * ReaderView wraps it with the reader's chrome; RenderHarness.tsx renders it alone for the eval capture, so the two never drift.
  */
-export function ReaderArticle({ material, content, prefs, resolveImage, onOpenLink, scrolls = true, viewportRef, bodyRef, onShowSources, bylineExtra, banner }: ReaderArticleProps) {
+export function ReaderArticle({ material, content, prefs, resolveImage, onOpenLink, onOpenMaterial, scrolls = true, viewportRef, bodyRef, onShowSources, bylineExtra, banner }: ReaderArticleProps) {
   const fallback = useMemo(() => (content.markdown ? { content: content.markdown, format: "gfm" as const } : { content: content.plain ?? "", format: "plain" as const }), [content]);
+  const surface = { schema: content.reader?.schema ?? "none", payload: content.reader?.payload ?? "", fallback, onOpenLink, resolveImageSource: resolveImage, resolveRemoteImageSource: resolveImage, showFallbackNotice: false };
   const host = hostLabel(material);
   const lineageCount = material.origin === "agent" ? (material.lineage?.length ?? 0) : 0;
   return (
@@ -48,15 +52,9 @@ export function ReaderArticle({ material, content, prefs, resolveImage, onOpenLi
           {bylineExtra}
         </div>
         {banner}
-        <ReaderDocumentSurface
-          schema={content.reader?.schema ?? "none"}
-          payload={content.reader?.payload ?? ""}
-          fallback={fallback}
-          onOpenLink={onOpenLink}
-          resolveImageSource={resolveImage}
-          resolveRemoteImageSource={resolveImage}
-          showFallbackNotice={false}
-        />
+        {material.origin === "agent" && onOpenMaterial
+          ? <ArtifactSurface material={material} markdown={content.markdown} onOpenMaterial={onOpenMaterial} {...surface} />
+          : <ReaderDocumentSurface {...surface} />}
       </article>
     </div>
   );

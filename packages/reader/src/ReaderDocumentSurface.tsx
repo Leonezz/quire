@@ -1,4 +1,5 @@
 import {
+  Children,
   createContext,
   Fragment,
   type ReactNode,
@@ -40,6 +41,12 @@ export type ReaderDocumentSurfaceProps = {
   imageSourceFor?: (sourceUrl: string) => string | undefined;
   onOpenLink?: (url: string) => void;
   payload: unknown;
+  /**
+   * The host's say over a run of document text (never code): it may return inline elements in its
+   * place, as the desktop app turns an artifact's `[material-id]` citations into numbered references.
+   * Must be stable (useCallback or module-level), as it is part of the surface's host policy.
+   */
+  renderText?: (value: string) => ReactNode;
   resolveImageSource?: (
     sourceUrl: string,
     signal: AbortSignal,
@@ -62,6 +69,7 @@ type ReaderHostPolicy = Pick<
   ReaderDocumentSurfaceProps,
   | "imageSourceFor"
   | "onOpenLink"
+  | "renderText"
   | "resolveImageSource"
   | "resolveRemoteImageSource"
 > & { imageBudget?: ReaderImageBudget };
@@ -667,10 +675,16 @@ function ReaderTable({
   );
 }
 
+/** A run of document text, through the host's `renderText` when it has one. */
+function HostText({ value }: { value: string }): ReactNode {
+  const { renderText } = useContext(ReaderHostPolicyContext);
+  return renderText ? renderText(value) : value;
+}
+
 function ReaderNodeView({ node }: { node: ReaderNode }): ReactNode {
   switch (node.type) {
     case "text":
-      return node.value;
+      return <HostText value={node.value} />;
     case "heading": {
       const children = <ReaderChildren children={node.children} />;
       if (node.depth === 1) return <h1>{children}</h1>;
@@ -1089,7 +1103,7 @@ function ReaderV2NodeView({
   const footnoteIndex = useContext(FootnoteIndexContext);
   switch (node.type) {
     case "text":
-      return node.value;
+      return <HostText value={node.value} />;
     case "heading":
       return (
         <ReaderV2HeadingView
@@ -1343,12 +1357,30 @@ function StructuredReaderV2({ document }: { document: ReaderDocumentV2 }) {
   );
 }
 
+/** The fallback Markdown's text containers, with their string children passed through the host's `renderText`. */
+function fallbackTextComponents(renderText: (value: string) => ReactNode) {
+  const withText = (children: ReactNode) =>
+    Children.map(children, (child) =>
+      typeof child === "string" ? renderText(child) : child,
+    );
+  const tags = ["p", "li", "td", "th", "em", "strong", "del", "h1", "h2", "h3", "h4", "h5", "h6"] as const;
+  return Object.fromEntries(
+    tags.map((Tag) => [
+      Tag,
+      ({ children, node: _node, ...props }: { children?: ReactNode; node?: unknown } & Record<string, unknown>) => (
+        <Tag {...props}>{withText(children)}</Tag>
+      ),
+    ]),
+  );
+}
+
 export function ReaderDocumentSurface({
   fallback,
   fallbackLabel = "Reader fallback",
   imageSourceFor,
   onOpenLink,
   payload,
+  renderText,
   resolveImageSource,
   resolveRemoteImageSource,
   schema,
@@ -1364,6 +1396,7 @@ export function ReaderDocumentSurface({
       },
       imageSourceFor,
       onOpenLink,
+      renderText,
       resolveImageSource,
       resolveRemoteImageSource,
     }),
@@ -1371,6 +1404,7 @@ export function ReaderDocumentSurface({
       imageSourceFor,
       onOpenLink,
       payload,
+      renderText,
       resolveImageSource,
       resolveRemoteImageSource,
       schema,
@@ -1405,6 +1439,7 @@ export function ReaderDocumentSurface({
           <div className="reader-document-fallback">
             <ReactMarkdown
               components={{
+                ...(renderText ? fallbackTextComponents(renderText) : {}),
                 a: ({ children, href, node: _node, title, ...props }) =>
                   href?.startsWith("#") ? (
                     <a {...props} href={href} title={title}>

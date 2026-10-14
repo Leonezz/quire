@@ -14,7 +14,7 @@ import { NotesPanel } from "./NotesPanel";
 import { previewTextViewContent } from "./previewTextView";
 
 const quality = { completeness: "declared_full" as const, conformance: "conformant" as const, identityConfidence: "strong" as const, safety: "safe" as const, warnings: [] };
-const ID = "5f725f31pdf00001";
+const ID = "5f725f31bdf00001";
 const content = previewTextViewContent(ID, quality);
 const pdfReady: MaterialView = { id: "pdf", label: "PDF", url: "https://example.org/a.pdf", mediaType: "application/pdf", status: "ready", fetchedAt: "2026-09-19T00:00:00.000Z", pdf: { pages: 15, byteLength: 10, textLayer: "available" } };
 const textReady: MaterialView = { id: "text", label: "Text", url: "https://example.org/a.pdf", mediaType: "text/plain", status: "ready", fetchedAt: "2026-09-20T00:00:00.000Z", byteLength: 100 };

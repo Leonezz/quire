@@ -302,7 +302,7 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
             <TocRail aria-label="Contents" entries={outline.map((entry) => ({ id: entry.id, label: entry.label, level: entry.level - 1 }))} activeId={activeHeading} pinned={tocPinned} resting="hidden" onSelect={(id) => document.getElementById(id)?.scrollIntoView({ block: "start", behavior: "smooth" })} />
           </div>
         ) : null}
-        <ReaderArticle material={material} content={content} prefs={prefs} resolveImage={resolveImage} onOpenLink={onOpenLink} viewportRef={viewportRef} bodyRef={bodyRef} onShowSources={() => setPanel("info")}
+        <ReaderArticle material={material} content={content} prefs={prefs} resolveImage={resolveImage} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} viewportRef={viewportRef} bodyRef={bodyRef} onShowSources={() => setPanel("info")}
           bylineExtra={material.origin === "agent" ? null : <a href={material.finalUrl} onClick={(event) => { event.preventDefault(); onOpenLink(material.finalUrl); }}>Open original ↗</a>}
           banner={content.view === "text" && content.report
             ? <TextViewBanner report={content.report} onOpenPdf={() => views.select("pdf")} />
