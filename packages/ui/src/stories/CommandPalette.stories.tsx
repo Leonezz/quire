@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, userEvent, within } from "storybook/test";
+import { expect, userEvent, waitFor, within } from "storybook/test";
 import { useState } from "react";
 import { CommandPalette, type CommandPaletteItem } from "../primitives/CommandPalette";
 import { Button } from "../primitives/Button";
@@ -47,6 +47,7 @@ export const Palette: Story = {
     await expect(within(list).getByRole("option", { name: /Position bias/ })).toHaveAttribute("data-focused", "true");
     await userEvent.keyboard("{Enter}");
     await expect(within(canvasElement).getByText("Picked: i2")).toBeInTheDocument();
+    await waitFor(() => expect(body.queryByRole("searchbox", { name: "Search" })).toBeNull());
     // Escape closes.
     await userEvent.click(within(canvasElement).getByRole("button", { name: "Search" }));
     await body.findByRole("searchbox", { name: "Search" });
@@ -54,6 +55,7 @@ export const Palette: Story = {
     await expect(await body.findByText("Nothing matches.")).toBeVisible();
     await userEvent.keyboard("{Escape}");
     await userEvent.keyboard("{Escape}");
-    await expect(body.queryByRole("searchbox", { name: "Search" })).toBeNull();
+    // The palette leaves after its close transition.
+    await waitFor(() => expect(body.queryByRole("searchbox", { name: "Search" })).toBeNull());
   },
 };

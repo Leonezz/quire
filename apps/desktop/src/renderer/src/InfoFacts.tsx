@@ -30,8 +30,8 @@ function Fact({ label, children }: { label: string; children: React.ReactNode })
 export function InfoFacts({ material, views, onOpenLink, onOpenMaterial, onReport, onRebuild, rebuild = "idle", rebuildError }: { material: MaterialRecord; views?: MaterialViewController | undefined; onOpenLink: (url: string) => void; onOpenMaterial: (id: string) => void; onReport?: (() => void) | undefined } & Partial<RebuildProps>) {
   const url = material.finalUrl || material.url;
   return (
-    <details className="group">
-      <summary className="mb-2 inline-flex cursor-default list-none items-center gap-1 rounded-pill py-0.5 pr-2 text-[11px] font-semibold uppercase tracking-[.07em] text-label-3 outline-none hover:text-label-2 focus-visible:ring-[3px] focus-visible:ring-accent-ring [&::-webkit-details-marker]:hidden"><Icon of={ChevronRight} size="sm" className="transition-transform group-open:rotate-90" />About</summary>
+    <details className="t-acc group">
+      <summary className="mb-2 inline-flex cursor-default list-none items-center gap-1 rounded-pill py-0.5 pr-2 text-[11px] font-semibold uppercase tracking-[.07em] text-label-3 outline-none hover:text-label-2 focus-visible:ring-[3px] focus-visible:ring-accent-ring [&::-webkit-details-marker]:hidden"><Icon of={ChevronRight} size="sm" className="t-acc-chevron group-open:rotate-90" />About</summary>
       <dl className="m-0 grid gap-1.5">
         {material.origin === "agent" ? null : (
           <Fact label="Source"><a href={url} className="text-accent-text no-underline hover:underline" onClick={(event) => { event.preventDefault(); onOpenLink(url); }}>{material.origin === "file" ? decodeURIComponent(material.url.replace("file:///", "")) : url}</a></Fact>

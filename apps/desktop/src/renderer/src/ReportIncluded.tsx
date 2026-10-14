@@ -43,9 +43,9 @@ export function ReportIncluded({ material, view, original, withSelection }: { ma
   const originalShots = original ? [`the original page at the top${withSelection ? " and at the selected passage" : ""}`] : [];
   const screenshots = [...readerShots, ...originalShots].join(", ");
   return (
-    <details className="group rounded-card bg-content-2 px-3 py-2 text-[12.5px] leading-[17px]">
+    <details className="t-acc group rounded-card bg-content-2 px-3 py-2 text-[12.5px] leading-[17px]">
       <summary className="flex cursor-default list-none items-center gap-1.5 rounded-control text-label-2 outline-none focus-visible:ring-[3px] focus-visible:ring-accent-ring [&::-webkit-details-marker]:hidden">
-        <Icon of={ChevronRight} size="sm" className="text-label-3 transition-transform group-open:rotate-90" />
+        <Icon of={ChevronRight} size="sm" className="t-acc-chevron text-label-3 group-open:rotate-90" />
         <span className="min-w-0"><span className="font-medium text-label">What's included:</span> {includedSummary(original !== undefined)}</span>
       </summary>
       <dl aria-label="Included in the report" className="m-0 mt-2 grid gap-1">
