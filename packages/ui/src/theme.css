@@ -202,3 +202,95 @@ svg.lucide > * { vector-effect: non-scaling-stroke; }
   will-change: transform, width;
   @media (prefers-reduced-motion: reduce) { transition: none !important; }
 }
+
+/* Shimmer text (15) / thinking states (28): a highlight sweeps the glyphs of a status that is still working. The text
+   is repeated in [data-text] so the sweep can be clipped to it; --shimmer-base and --shimmer-highlight tint it. */
+@keyframes t-shimmer { from { background-position: 100% 0; } to { background-position: 0% 0; } }
+@utility t-shimmer {
+  position: relative;
+  display: inline-block;
+  color: var(--shimmer-base, var(--label-3));
+  &::before {
+    content: attr(data-text);
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background-image: linear-gradient(90deg, transparent 0%, transparent 40%, var(--shimmer-highlight, var(--label)) 50%, transparent 60%, transparent 100%);
+    background-size: 400% 100%;
+    background-repeat: no-repeat;
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+    -webkit-text-fill-color: transparent;
+    animation: t-shimmer var(--shimmer-dur) var(--ease-linear) infinite;
+  }
+  @media (prefers-reduced-motion: reduce) { &::before { animation: none; display: none; } }
+}
+
+/* Streaming text (30): each block an answer grows by resolves through a soft blur as it arrives. */
+@keyframes t-stream-in { from { opacity: 0; filter: blur(var(--stream-blur)); } to { opacity: 1; filter: none; } }
+@utility t-stream {
+  & > * { animation: t-stream-in var(--stream-fade) var(--ease-smooth-out) both; }
+  @media (prefers-reduced-motion: reduce) { & > * { animation: none; } }
+}
+
+/* Toast open / close (22): a notice rises in with a cross-blur and leaves quicker than it came. <Presence> keeps it
+   mounted and marks its wrapper [data-exiting] while it leaves. */
+@keyframes t-toast-in { from { opacity: 0; transform: translateY(var(--toast-distance)) scale(var(--toast-scale)); filter: blur(var(--toast-blur)); } to { opacity: 1; transform: none; filter: none; } }
+@keyframes t-toast-out { from { opacity: 1; transform: none; filter: none; } to { opacity: 0; transform: translateY(var(--toast-distance)) scale(var(--toast-scale)); filter: blur(var(--toast-blur)); } }
+@utility t-toast {
+  animation: t-toast-in var(--toast-open) var(--ease-smooth-out) both;
+  :where([data-exiting]) > & { animation: t-toast-out var(--toast-close) var(--ease-smooth-out) both; }
+  @media (prefers-reduced-motion: reduce) { animation: none !important; }
+}
+/* A surface dropping down from above (the find bar) travels the other way. */
+@utility t-toast-down {
+  --toast-distance: calc(var(--distance-base) * -1);
+}
+
+/* Card resize (01) as a position change: rows that move up after a neighbour leaves glide to their new place
+   (ItemList writes the offset and lets it go). */
+@utility t-glide {
+  transition: transform var(--resize-dur) var(--ease-smooth-out);
+  @media (prefers-reduced-motion: reduce) { transition: none !important; }
+}
+
+/* Error state shake (12): the field shakes once when it turns invalid; per-leg easing, 80/60/80/60ms. */
+@keyframes t-shake {
+  0%     { transform: translateX(0); animation-timing-function: var(--ease-smooth-out); }
+  28.57% { transform: translateX(var(--shake-distance)); animation-timing-function: var(--ease-smooth-out); }
+  57.14% { transform: translateX(calc(var(--shake-distance) * -1)); animation-timing-function: var(--ease-smooth-out); }
+  78.57% { transform: translateX(var(--shake-overshoot)); animation-timing-function: var(--ease-smooth-out); }
+  100%   { transform: translateX(0); }
+}
+@utility t-shake {
+  &.is-shaking { animation: t-shake calc(var(--shake-dur-a) * 2 + var(--shake-dur-b) * 2) linear; }
+  @media (prefers-reduced-motion: reduce) { &.is-shaking { animation: none; } }
+}
+
+/* Skeleton loader and reveal (14): placeholders pulse while loading; the loaded content resolves in with a cross-blur. */
+@keyframes t-skel-pulse { 0%, 100% { opacity: 1; } 50% { opacity: var(--pulse-min); } }
+@utility t-skel {
+  & > * { animation: t-skel-pulse var(--pulse-dur) var(--ease-in-out) infinite; }
+  @media (prefers-reduced-motion: reduce) { & > * { animation: none; } }
+}
+@keyframes t-reveal { from { opacity: 0; filter: blur(var(--reveal-blur)); } to { opacity: 1; filter: none; } }
+@utility t-reveal {
+  animation: t-reveal var(--reveal-dur) var(--ease-in-out) both;
+  @media (prefers-reduced-motion: reduce) { animation: none; }
+}
+
+/* Text states swap (04): a status line or message that appears or changes in place rises in through a short blur.
+   Key the element on its text so each new message plays it. */
+@keyframes t-text-in { from { opacity: 0; transform: translateY(var(--text-swap-distance)); filter: blur(var(--text-swap-blur)); } to { opacity: 1; transform: none; filter: none; } }
+@utility t-text-in {
+  animation: t-text-in var(--text-swap-dur) var(--ease-in-out) both;
+  @media (prefers-reduced-motion: reduce) { animation: none; }
+}
+
+/* Tooltip open (17): a hint waits 80ms so a passing pointer doesn't raise it, then fades and scales in; it leaves at once. */
+@keyframes t-tt-in { from { opacity: 0; scale: var(--tt-scale); } to { opacity: 1; scale: 1; } }
+@utility t-tt {
+  animation: t-tt-in var(--tt-in-dur) var(--ease-out) var(--tt-delay) both;
+  @media (prefers-reduced-motion: reduce) { animation: none; }
+}

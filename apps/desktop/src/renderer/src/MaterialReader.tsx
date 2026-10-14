@@ -62,7 +62,7 @@ export function MaterialReader({ id, onOpenLink, onOpenMaterial, jumpToQuote, on
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
       <LoadedMaterialReader material={material} onMaterialChanged={setMaterial} onBack={onBack} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} jumpToQuote={jumpToQuote} onProgress={onProgress} onOpenSettings={onOpenSettings} trailing={trailing} />
-      {eventError ? <div role="alert" className="absolute bottom-3 left-1/2 -translate-x-1/2 rounded-pill bg-red-soft px-3.5 py-1.5 text-[12.5px] text-red-text shadow-float">{eventError}</div> : null}
+      {eventError ? <div role="alert" className="t-toast absolute bottom-3 left-1/2 -translate-x-1/2 rounded-pill bg-red-soft px-3.5 py-1.5 text-[12.5px] text-red-text shadow-float">{eventError}</div> : null}
     </div>
   );
 }
@@ -113,7 +113,7 @@ function LoadedMaterialReader({ material, onMaterialChanged, onBack, onOpenLink,
         onMaterialSaved={onMaterialChanged} onOpenSettings={onOpenSettings} onReport={onReport} trailing={trailing} pendingJump={pendingJump} onJumpDone={onJumpDone} onJumpAcross={jumpAcross} jumpToQuote={jumpToQuote} initialPanel={panelRef.current} onPanelChange={onPanelChange} />
       {reporting ? <FeedbackSheet isOpen={reporting.open} material={material} view={views.view} request={reporting.request} nonce={reporting.nonce} onClose={closeReport} /> : null}
       {fetchError ? (
-        <div role="alert" className="absolute bottom-3 left-1/2 flex max-w-[min(640px,90%)] -translate-x-1/2 items-center gap-2 rounded-pill bg-red-soft py-1 pl-3.5 pr-1 text-[12.5px] text-red-text shadow-float">
+        <div role="alert" className="t-toast absolute bottom-3 left-1/2 flex max-w-[min(640px,90%)] -translate-x-1/2 items-center gap-2 rounded-pill bg-red-soft py-1 pl-3.5 pr-1 text-[12.5px] text-red-text shadow-float">
           <span className="min-w-0 truncate">Could not fetch the {failedView?.label ?? fetchError.view} view — {fetchError.message}</span>
           <Button size="sm" variant="plain" className="h-6 shrink-0 px-2 text-red-text" onPress={() => views.select(fetchError.view)}>Retry</Button>
           <Button size="sm" variant="quiet" aria-label="Dismiss" className="shrink-0 text-red-text" onPress={views.dismissFetchError}><X /></Button>

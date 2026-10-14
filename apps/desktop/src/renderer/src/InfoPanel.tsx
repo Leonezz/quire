@@ -24,7 +24,7 @@ function KindField({ editor }: { editor: MaterialMetaEditor }) {
       <span className="text-[12.5px] font-medium text-label-2">Type</span>
       <MenuSelect aria-label="Type" variant="default" size="md" className="justify-self-start" value={editor.meta.kind ?? "webpage"} options={kindOptions} isDisabled={editor.saving === "kind"}
         onChange={(kind) => { if (isMaterialKind(kind)) void editor.save({ kind }); }} />
-      {editor.errors.kind ? <p role="alert" className="m-0 text-[12px] text-red">{editor.errors.kind}</p> : null}
+      {editor.errors.kind ? <p role="alert" className="t-text-in m-0 text-[12px] text-red">{editor.errors.kind}</p> : null}
       <ExtractedLine editor={editor} field="kind" />
     </div>
   );
@@ -49,7 +49,7 @@ function TagsField({ editor }: { editor: MaterialMetaEditor }) {
     <div className="grid gap-1.5">
       <TagInput label="Tags" value={tags} onChange={setTags} suggestions={known} isDisabled={editor.saving === "tags"}
         onCommit={(next) => { if (next.join("\n") !== savedKey) void editor.save({ tags: next }); }} />
-      {error ?? editor.errors.tags ? <p role="alert" className="m-0 text-[12px] text-red">{error ?? editor.errors.tags}</p> : null}
+      {error ?? editor.errors.tags ? <p role="alert" className="t-text-in m-0 text-[12px] text-red">{error ?? editor.errors.tags}</p> : null}
       <ExtractedLine editor={editor} field="tags" />
     </div>
   );

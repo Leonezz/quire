@@ -4,7 +4,7 @@ export { Toolbar, ToolbarGroup, ToolbarTitle, ToolbarButton, AskButton, ToolbarP
 export type { ToolbarPillTone } from "./primitives/Toolbar";
 export { Sidebar, SidebarSection, SidebarItem } from "./primitives/Sidebar";
 export type { SidebarItemProps, SidebarHealth } from "./primitives/Sidebar";
-export { ItemList, ItemGroup, ItemSection, ItemRow } from "./primitives/ItemList";
+export { ItemList, ItemListSkeleton, ItemGroup, ItemSection, ItemRow } from "./primitives/ItemList";
 export type { ItemRowProps, RowState, RowHealth } from "./primitives/ItemList";
 export { Segmented, Segment } from "./primitives/Segmented";
 export { Panel, InspectorSection } from "./primitives/Panel";
@@ -44,3 +44,4 @@ export type { CreatorRowProps } from "./primitives/CreatorRow";
 export { ChoiceChips } from "./primitives/ChoiceChips";
 export type { ChoiceChipOption, ChoiceChipsProps } from "./primitives/ChoiceChips";
 export { Checkbox } from "./primitives/Checkbox";
+export { Presence, ShimmerText, useShake } from "./primitives/Motion";

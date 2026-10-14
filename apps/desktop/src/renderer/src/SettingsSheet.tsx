@@ -112,7 +112,7 @@ export function SettingsSheet({ open, onClose, section, onOpenLink }: { open: bo
           {SECTIONS.map((entry) => <a key={entry.id} href={`#settings-${entry.id}`} className="rounded-pill px-2.5 py-1 text-[12.5px] font-medium text-label-2 no-underline hover:bg-fill hover:text-label" onClick={(event) => { event.preventDefault(); document.getElementById(`settings-${entry.id}`)?.scrollIntoView({ block: "start", behavior: "smooth" }); }}>{entry.title}</a>)}
         </nav>
         <div className="list-scroll -mx-6 grid min-h-0 gap-5 overflow-y-auto px-6 pb-2 pt-1">
-          {loadError ? <p role="alert" className="m-0 rounded-card bg-red-soft px-3 py-2 text-[12.5px] text-red-text">{loadError}</p> : null}
+          {loadError ? <p role="alert" className="t-text-in m-0 rounded-card bg-red-soft px-3 py-2 text-[12.5px] text-red-text">{loadError}</p> : null}
 
           <Section id="reading" title="Reading">
             <ReadingControls prefs={prefs} onChange={setPrefs} />
@@ -147,7 +147,7 @@ export function SettingsSheet({ open, onClose, section, onOpenLink }: { open: bo
                 onSelectionChange={(keys) => { const key = [...keys][0]; if (key !== undefined) void save("agentReasoningEffort", key === "none" ? "" : (key as Settings["agentReasoningEffort"])); }}>
                 <Segment id="none">None</Segment><Segment id="low">Low</Segment><Segment id="medium">Medium</Segment><Segment id="high">High</Segment>
               </Segmented>
-              {errors.agentReasoningEffort ? <p role="alert" className="m-0 text-[12px] text-red-text">{errors.agentReasoningEffort}</p> : null}
+              {errors.agentReasoningEffort ? <p role="alert" className="t-text-in m-0 text-[12px] text-red-text">{errors.agentReasoningEffort}</p> : null}
             </Row>
             <Row label="TypeSafe API key" hint="Kept encrypted on this machine; used only by the PDF reflow judge.">
               {settings?.typesafeApiKeySet ? (
@@ -159,7 +159,7 @@ export function SettingsSheet({ open, onClose, section, onOpenLink }: { open: bo
                 <TextField aria-label="TypeSafe API key" type="password" placeholder="Paste the key and press Enter" value={drafts.typesafeApiKey} onChange={(value) => setDrafts((current) => ({ ...current, typesafeApiKey: value }))}
                   onBlur={storeKey} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); storeKey(); } }} isDisabled={!settings} />
               )}
-              {errors.typesafeApiKey ? <p role="alert" className="m-0 text-[12px] text-red-text">{errors.typesafeApiKey}</p> : savedNote("typesafeApiKey") ? <p className="m-0 text-[11.5px] text-label-3">{savedNote("typesafeApiKey")}</p> : null}
+              {errors.typesafeApiKey ? <p role="alert" className="t-text-in m-0 text-[12px] text-red-text">{errors.typesafeApiKey}</p> : savedNote("typesafeApiKey") ? <p className="m-0 text-[11.5px] text-label-3">{savedNote("typesafeApiKey")}</p> : null}
             </Row>
             <Row label="PDF reflow judge" hint={JEV_PRIVACY_NOTE}>
               <Segmented aria-label="PDF reflow judge" selectedKeys={[settings?.reflowJudge ?? "rules"]} isDisabled={!settings}
@@ -167,14 +167,14 @@ export function SettingsSheet({ open, onClose, section, onOpenLink }: { open: bo
                 <Segment id="rules">Rules</Segment><Segment id="jev" isDisabled={!settings?.typesafeApiKeySet}>Jev</Segment>
               </Segmented>
               {!settings?.typesafeApiKeySet ? <span className="text-[11.5px] text-label-3">Jev needs a stored TypeSafe API key.</span> : null}
-              {errors.reflowJudge ? <p role="alert" className="m-0 text-[12px] text-red-text">{errors.reflowJudge}</p> : null}
+              {errors.reflowJudge ? <p role="alert" className="t-text-in m-0 text-[12px] text-red-text">{errors.reflowJudge}</p> : null}
             </Row>
           </Section>
 
           <Section id="storage" title="Storage">
             <Row label="Raw page capture" hint="Keeps the page as fetched next to the record so the agent can rebuild it.">
               <div className="pt-1.5"><Switch aria-label="Keep raw page capture" isSelected={settings?.keepCapture ?? true} isDisabled={!settings} onChange={(value) => void save("keepCapture", value)}>{settings?.keepCapture ? "Kept" : "Discarded after extraction"}</Switch></div>
-              {errors.keepCapture ? <p role="alert" className="m-0 text-[12px] text-red-text">{errors.keepCapture}</p> : null}
+              {errors.keepCapture ? <p role="alert" className="t-text-in m-0 text-[12px] text-red-text">{errors.keepCapture}</p> : null}
             </Row>
             <Row label="Data directory" hint="Materials, images and the database.">
               <button type="button" onClick={() => void copyDirectory()} disabled={!settings} className="cursor-default rounded-control bg-fill px-3 py-2 text-left font-mono text-[12px] leading-[17px] text-label outline-none break-all hover:bg-fill-2 focus-visible:ring-[3px] focus-visible:ring-accent-ring" title="Click to copy">

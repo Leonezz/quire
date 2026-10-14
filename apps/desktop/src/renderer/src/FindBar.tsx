@@ -30,7 +30,7 @@ export function FindBar({ root, onClose, generation }: { root: HTMLElement | nul
   const count = ranges.length ? `${current + 1} of ${ranges.length}${limited ? "+" : ""}` : query ? "0" : "";
 
   return (
-    <div role="search" className="glass-strong absolute right-9 top-[76px] z-10 flex items-center gap-1.5 rounded-pill py-[5px] pl-3 pr-1.5">
+    <div role="search" className="glass-strong t-toast t-toast-down absolute right-9 top-[76px] z-10 flex items-center gap-1.5 rounded-pill py-[5px] pl-3 pr-1.5">
       <Icon of={SearchIcon} size="sm" className="text-label-3" />
       <input
         ref={inputRef}

@@ -38,7 +38,7 @@ export function AgentComposer({ status, statusError, authRequired, running, plac
 
   return (
     <div ref={composerRef} className="grid gap-2">
-      {statusError ? <p role="alert" className="text-[12.5px] text-red-text">{statusError}</p> : null}
+      {statusError ? <p role="alert" className="t-text-in text-[12.5px] text-red-text">{statusError}</p> : null}
       {status === undefined && !statusError ? <p className="text-[12px] text-label-3">Checking the agent…</p> : null}
       {status && !available ? (
         <div className="grid gap-2 rounded-card bg-content-2 p-3 text-[12.5px] text-label-2">

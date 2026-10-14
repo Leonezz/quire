@@ -51,7 +51,7 @@ export function ViewSwitch({ view, views, fetching, onSelect }: ViewSwitchProps)
           </Segment>
         ))}
       </Segmented>
-      {fetchingView ? <span role="status" className="whitespace-nowrap text-[11.5px] text-label-2">{fetchVerb(fetchingView.id) === "build" ? `Building ${fetchingView.label.toLowerCase()} view…` : `Fetching ${fetchingView.label}…`}</span> : null}
+      {fetchingView ? <span role="status" className="t-text-in whitespace-nowrap text-[11.5px] text-label-2">{fetchVerb(fetchingView.id) === "build" ? `Building ${fetchingView.label.toLowerCase()} view…` : `Fetching ${fetchingView.label}…`}</span> : null}
     </span>
   );
 }

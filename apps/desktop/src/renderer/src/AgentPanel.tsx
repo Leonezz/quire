@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowUpRight, Plus, X } from "lucide-react";
-import { AgentToolLine, AgentTurn, Button, InspectorSection } from "@read/ui";
+import { AgentToolLine, AgentTurn, Button, InspectorSection, ShimmerText } from "@read/ui";
 import type { AgentContext, AgentTask } from "../../shared/contracts";
 import { AgentComposer, taskLabel } from "./AgentComposer";
 import { AgentMarkdown } from "./AgentMarkdown";
@@ -127,13 +127,13 @@ export function AgentPanel({ context, subject: rawSubject, sessionId, onSessionC
       <div ref={transcriptRef} className="list-scroll -mx-1 flex min-h-0 flex-1 flex-col overflow-y-auto overflow-x-hidden px-1 pb-1">
         <div className={`flex flex-col gap-3 ${wide ? "mx-auto w-full max-w-[760px]" : ""}`}>
           {loadingSession ? <p className="text-[12px] text-label-3">Opening the conversation…</p> : turns.length === 0 ? <p className="text-[13px] text-label-2">{emptyHint}</p> : null}
-          {sessions.error ? <p role="alert" className="text-[12.5px] text-red-text">{sessions.error}</p> : null}
-          {sessionError ? <p role="alert" className="text-[12.5px] text-red-text">{sessionError}</p> : null}
-          {titlesError ? <p role="alert" className="text-[12.5px] text-red-text">{titlesError}</p> : null}
+          {sessions.error ? <p role="alert" className="t-text-in text-[12.5px] text-red-text">{sessions.error}</p> : null}
+          {sessionError ? <p role="alert" className="t-text-in text-[12.5px] text-red-text">{sessionError}</p> : null}
+          {titlesError ? <p role="alert" className="t-text-in text-[12.5px] text-red-text">{titlesError}</p> : null}
           {turns.map((turn) => <TurnView key={turn.id} turn={turn} titleOf={titleOf} onOpenLink={onOpenLink} onOpenMaterial={openCitation} onRetry={canSend ? () => void retry(turn) : undefined} />)}
-          {jumpReport && !jumpReport.found ? <p role="status" className="text-[12px] text-label-3">Opened; the quoted passage was not found</p> : null}
+          {jumpReport && !jumpReport.found ? <p role="status" className="t-text-in text-[12px] text-label-3">Opened; the quoted passage was not found</p> : null}
           {askFailure ? <AskFailureLine failure={askFailure} onRetry={canSend ? () => void retry({ task: askFailure.task, prompt: askFailure.text }) : undefined} /> : null}
-          {stopError ? <p role="alert" className="text-[12.5px] text-red-text">{stopError}</p> : null}
+          {stopError ? <p role="alert" className="t-text-in text-[12.5px] text-red-text">{stopError}</p> : null}
         </div>
       </div>
 
@@ -152,7 +152,7 @@ function AskFailureLine({ failure, onRetry }: { failure: AskFailure; onRetry: ((
     : failure.code === "AUTH_REQUIRED" ? "Sign in first — see below."
     : failure.message;
   return (
-    <p role="alert" className="flex flex-wrap items-center gap-2 text-[12.5px] text-red-text">
+    <p role="alert" className="t-text-in flex flex-wrap items-center gap-2 text-[12.5px] text-red-text">
       <span>{text}</span>
       {onRetry && failure.code !== "AGENT_UNAVAILABLE" && failure.code !== "AUTH_REQUIRED" ? <Button size="sm" onPress={onRetry}>Retry</Button> : null}
     </p>
@@ -168,24 +168,24 @@ function TurnView({ turn, titleOf, onOpenLink, onOpenMaterial, onRetry }: { turn
       {turn.tools.length ? <div className="grid gap-1">{turn.tools.map((tool) => <AgentToolLine key={tool.key} name={tool.name} status={tool.status} summary={tool.summary} />)}</div> : null}
       {turn.answer || turn.status === "running" ? (
         <AgentTurn role="agent">
-          {turn.answer ? <AgentMarkdown text={turn.answer} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} titleOf={titleOf} sources={turn.sources} /> : null}
+          {turn.answer ? <AgentMarkdown text={turn.answer} className={turn.status === "running" ? "t-stream" : ""} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} titleOf={titleOf} sources={turn.sources} /> : null}
           {turn.status === "running" ? (
             // The caret alone while the answer streams; with "Thinking…" while the bridge has not started the turn yet.
             <span role="status" aria-label={turn.pending ? "Thinking" : "Answering"} className="mt-1 inline-flex items-center gap-1.5 align-text-bottom text-[12.5px] text-label-3">
               <i aria-hidden="true" className="inline-block h-[15px] w-[7px] animate-pulse rounded-[2px] bg-label-3" />
-              {turn.pending ? "Thinking…" : null}
+              {turn.pending ? <ShimmerText>Thinking…</ShimmerText> : null}
             </span>
           ) : null}
         </AgentTurn>
       ) : null}
       {turn.status === "interrupted" ? <p className="text-[12.5px] text-label-3">Stopped{turn.error ? ` · ${turn.error}` : "."}</p> : null}
       {timedOut ? (
-        <p role="alert" className="flex flex-wrap items-center gap-2 text-[12.5px] text-label-2">
+        <p role="alert" className="t-text-in flex flex-wrap items-center gap-2 text-[12.5px] text-label-2">
           <span>The agent took too long to answer.</span>
           {onRetry ? <Button size="sm" onPress={onRetry}>Retry</Button> : null}
         </p>
       ) : turn.status === "failed" ? (
-        <p role="alert" className="text-[12.5px] text-red-text">{turn.error ?? "The agent did not answer."}</p>
+        <p role="alert" className="t-text-in text-[12.5px] text-red-text">{turn.error ?? "The agent did not answer."}</p>
       ) : null}
     </div>
   );

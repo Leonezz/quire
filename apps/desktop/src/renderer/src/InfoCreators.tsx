@@ -49,7 +49,7 @@ export function InfoCreators({ editor }: { editor: MaterialMetaEditor }) {
           onRemove={() => update(rows.filter((_, at) => at !== index), true)} />
       ))}
       <Button size="sm" variant="plain" className="justify-self-start" isDisabled={disabled} onPress={() => { setFocusLast(true); setRows((list) => [...list, { role: "author", name: "" }]); }}>+ Add creator</Button>
-      {editor.errors.creators ? <p role="alert" className="m-0 text-[12px] text-red">{editor.errors.creators}</p> : null}
+      {editor.errors.creators ? <p role="alert" className="t-text-in m-0 text-[12px] text-red">{editor.errors.creators}</p> : null}
       <ExtractedLine editor={editor} field="creators" />
     </div>
   );

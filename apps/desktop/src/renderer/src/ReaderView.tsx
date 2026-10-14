@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { SplitGroup, SplitPanel, TocRail, useSplitSizes } from "@read/ui";
+import { Presence, SplitGroup, SplitPanel, TocRail, useSplitSizes } from "@read/ui";
 import { ColumnSeparator, PAGE_MIN, PANEL_DEFAULT, PANEL_MAX, PANEL_MIN } from "./ContentPane";
 import { ReaderToolbar } from "./ReaderToolbar";
 import { installTextAnnotationHighlights, renderedTextQuoteSelection, resolveTextQuoteRange, textAnnotationHighlightStyles, useDocumentReadingPosition } from "@read/reader";
@@ -295,7 +295,7 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
       <SplitPanel id="page" minSize={PAGE_MIN}>
       <main key={material.id} className="reader-enter relative grid h-full min-h-0 grid-rows-[2px_minmax(0,1fr)] overflow-hidden bg-content">
         <div className="bg-separator-soft">{prefs.focus ? null : <i className="block h-full bg-accent opacity-80" style={{ width: `${progress}%` }} />}</div>
-        {findOpen ? <FindBar root={bodyRef.current} generation={bodyGeneration} onClose={() => setFindOpen(false)} /> : null}
+        <Presence show={findOpen}>{findOpen ? <FindBar root={bodyRef.current} generation={bodyGeneration} onClose={() => setFindOpen(false)} /> : null}</Presence>
         <SelectionToolbar root={bodyRef.current} viewport={viewportRef.current} capture={captureSelection} onHighlight={onHighlight} onNote={(capture) => void onNote(capture)} onCopy={onCopyCapture} onAsk={(capture) => { setAsked(capture); setPanel("agent"); }} onReport={(capture, rect) => report(reportSelectionOf(capture, rect))} />
         {outline.length > 1 ? (
           <div className="pointer-events-none absolute inset-y-6 right-1.5 z-10 flex items-center">

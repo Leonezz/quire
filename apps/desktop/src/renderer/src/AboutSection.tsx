@@ -78,7 +78,7 @@ export function AboutSection({ version, autoCheck, disabled, onAutoCheck, autoCh
           ) : null}
           {state?.phase === "ready" ? <Button size="sm" variant="primary" onPress={() => void updateStore.install()}>Restart to update</Button> : null}
         </div>
-        {actionError ? <p role="alert" className="m-0 text-[12px] text-red-text">{actionError}</p> : null}
+        {actionError ? <p role="alert" className="t-text-in m-0 text-[12px] text-red-text">{actionError}</p> : null}
         {state?.phase === "available" && state.notes ? (
           <div className="rounded-card bg-content-2 px-3 py-2.5">
             <AgentMarkdown text={clipNotes(state.notes)} onOpenLink={onOpenLink} onOpenMaterial={() => undefined} />
@@ -89,7 +89,7 @@ export function AboutSection({ version, autoCheck, disabled, onAutoCheck, autoCh
         <div className="pt-1.5">
           <Switch aria-label="Check for updates automatically" isSelected={autoCheck ?? true} isDisabled={disabled} onChange={onAutoCheck}>{autoCheck === false ? "Only when asked" : "On launch and daily"}</Switch>
         </div>
-        {autoCheckError ? <p role="alert" className="m-0 text-[12px] text-red-text">{autoCheckError}</p> : autoCheckNote ? <span className="text-[11.5px] text-label-3">{autoCheckNote}</span> : null}
+        {autoCheckError ? <p role="alert" className="t-text-in m-0 text-[12px] text-red-text">{autoCheckError}</p> : autoCheckNote ? <span className="text-[11.5px] text-label-3">{autoCheckNote}</span> : null}
       </Row>
     </>
   );

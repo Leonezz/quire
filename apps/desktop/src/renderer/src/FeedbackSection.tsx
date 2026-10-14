@@ -84,8 +84,8 @@ export function FeedbackSection({ onOpenLink }: { onOpenLink: (url: string) => v
 
   return (
     <div className="grid gap-2">
-      {loadError ? <p role="alert" className="m-0 rounded-card bg-red-soft px-3 py-2 text-[12.5px] text-red-text">{loadError}</p> : null}
-      {actionError ? <p role="alert" className="m-0 rounded-card bg-red-soft px-3 py-2 text-[12.5px] text-red-text">{actionError}</p> : null}
+      {loadError ? <p role="alert" className="t-text-in m-0 rounded-card bg-red-soft px-3 py-2 text-[12.5px] text-red-text">{loadError}</p> : null}
+      {actionError ? <p role="alert" className="t-text-in m-0 rounded-card bg-red-soft px-3 py-2 text-[12.5px] text-red-text">{actionError}</p> : null}
       {reports === undefined && !loadError ? <p className="m-0 text-[12.5px] text-label-3">Reading the reports…</p> : null}
       {reports?.length === 0 ? <p className="m-0 text-[12.5px] text-label-3">{FEEDBACK_EMPTY_MESSAGE}</p> : null}
       {reports?.length ? (

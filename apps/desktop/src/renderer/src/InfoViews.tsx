@@ -19,7 +19,7 @@ function readyText(view: MaterialView): string {
 function TextViewReportLine({ material }: { material: Pick<MaterialRecord, "id" | "views"> }) {
   const text = useTextViewContent(material);
   if (text.status === "absent" || text.status === "loading") return null;
-  if (text.status === "error") return <span role="alert" className="text-red-text">{text.message}</span>;
+  if (text.status === "error") return <span role="alert" className="t-text-in text-red-text">{text.message}</span>;
   const report = text.content.report;
   return report ? <span className="text-label-2">{textViewReportText(report)}</span> : null;
 }
@@ -57,11 +57,11 @@ export function InfoViews({ material, views, onOpenLink }: { material: Pick<Mate
             </span>
             <span className="text-label-2">
               {view.status === "ready" ? readyText(view) : fetching ? busyText : view.status === "available" ? (verb === "build" ? "not built" : "not fetched") : null}
-              {view.status === "failed" && !fetching ? <span role="alert" className="text-red-text">{view.error ?? "The last fetch failed."}</span> : null}
+              {view.status === "failed" && !fetching ? <span role="alert" className="t-text-in text-red-text">{view.error ?? "The last fetch failed."}</span> : null}
             </span>
             {view.id === "text" && view.status === "ready" ? <TextViewReportLine material={material} /> : null}
-            {fetchError && !fetching ? <span role="alert" className="text-red-text">{fetchError}</span> : null}
-            {primaryError ? <span role="alert" className="text-red-text">{primaryError}</span> : null}
+            {fetchError && !fetching ? <span role="alert" className="t-text-in text-red-text">{fetchError}</span> : null}
+            {primaryError ? <span role="alert" className="t-text-in text-red-text">{primaryError}</span> : null}
             <span className="flex flex-wrap items-center gap-1">
               {view.status === "ready" && !isPrimary ? <Button size="sm" variant="plain" className="h-6 px-1.5" isDisabled={busy} onPress={() => void makePrimary(view.id)}>{promoting === view.id ? "Making primary…" : "Make primary"}</Button> : null}
               {view.status === "available" ? <Button size="sm" variant="plain" className="h-6 px-1.5" isDisabled={busy} onPress={() => void views.fetch(view.id)}>{fetching ? busyText : verb === "build" ? "Build" : "Fetch"}</Button> : null}

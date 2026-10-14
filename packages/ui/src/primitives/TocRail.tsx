@@ -53,6 +53,11 @@ export function TocRail({ entries, activeId, onSelect, pinned = false, resting =
   const activeIndex = entries.findIndex((entry) => entry.id === activeId);
   const magnifyIndex = hoverIndex ?? focusIndex;
   const magnified = !pinned && magnifyIndex !== null;
+  // The heading label is a tooltip: the first one waits a beat so a passing pointer doesn't raise it, and once one is
+  // up, moving to the next heading shows that one at once.
+  const wasMagnified = useRef(false);
+  const labelTravels = wasMagnified.current && magnified;
+  useEffect(() => { wasMagnified.current = magnified; });
   const hidesAtRest = resting === "hidden";
   const revealed = !hidesAtRest || pinned || pointerIn || lingering || focusIndex !== null;
 
@@ -142,7 +147,7 @@ export function TocRail({ entries, activeId, onSelect, pinned = false, resting =
               {!pinned && showLabel ? (
                 <span
                   role="presentation"
-                  className="glass-strong pointer-events-none absolute right-full top-1/2 mr-3 max-w-[260px] -translate-y-1/2 truncate whitespace-nowrap rounded-[9px] px-2.5 py-1 text-[12.5px] font-medium leading-4 text-label"
+                  className={cx("glass-strong t-tt pointer-events-none absolute right-full top-1/2 mr-3 max-w-[260px] -translate-y-1/2 truncate whitespace-nowrap rounded-[9px] px-2.5 py-1 text-[12.5px] font-medium leading-4 text-label", labelTravels && "[--tt-delay:0ms]")}
                 >
                   {entry.label}
                 </span>
