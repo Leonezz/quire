@@ -15,7 +15,9 @@ const workspace = [
 export default defineConfig({
   // The normalization engine and its deps are bundled into main (like the old
   // esbuild engine bundle); only electron and native modules stay external.
-  main: { resolve: { alias: workspace }, build: { rollupOptions: { external: ["electron", "node:sqlite", "canvas", "jsdom", "mathml-to-latex", "temml", /^pdfjs-dist/] } } },
+  // electron-vite externalizes `dependencies` by default; sucrase (the artifact JSX compiler) is
+  // bundled instead so its seven runtime deps need no entry in electron-builder.yml's allow-list.
+  main: { resolve: { alias: workspace }, build: { externalizeDeps: { exclude: ["sucrase"] }, rollupOptions: { external: ["electron", "node:sqlite", "canvas", "jsdom", "mathml-to-latex", "temml", /^pdfjs-dist/] } } },
   preload: { plugins: [externalizeDepsPlugin()] },
   renderer: { resolve: { alias: workspace }, plugins: [react(), tailwindcss()] },
 });
