@@ -1,4 +1,5 @@
 import {
+  Children,
   createContext,
   Fragment,
   type ReactNode,
@@ -40,6 +41,12 @@ export type ReaderDocumentSurfaceProps = {
   imageSourceFor?: (sourceUrl: string) => string | undefined;
   onOpenLink?: (url: string) => void;
   payload: unknown;
+  /**
+   * The host's say over a run of document text (never code): it may return inline elements in its
+   * place, as the desktop app turns an artifact's `[material-id]` citations into numbered references.
+   * Must be stable (useCallback or module-level), as it is part of the surface's host policy.
+   */
+  renderText?: (value: string) => ReactNode;
   resolveImageSource?: (
     sourceUrl: string,
     signal: AbortSignal,
@@ -62,6 +69,7 @@ type ReaderHostPolicy = Pick<
   ReaderDocumentSurfaceProps,
   | "imageSourceFor"
   | "onOpenLink"
+  | "renderText"
   | "resolveImageSource"
   | "resolveRemoteImageSource"
 > & { imageBudget?: ReaderImageBudget };
@@ -667,10 +675,16 @@ function ReaderTable({
   );
 }
 
+/** A run of document text, through the host's `renderText` when it has one. */
+function HostText({ value }: { value: string }): ReactNode {
+  const { renderText } = useContext(ReaderHostPolicyContext);
+  return renderText ? renderText(value) : value;
+}
+
 function ReaderNodeView({ node }: { node: ReaderNode }): ReactNode {
   switch (node.type) {
     case "text":
-      return node.value;
+      return <HostText value={node.value} />;
     case "heading": {
       const children = <ReaderChildren children={node.children} />;
       if (node.depth === 1) return <h1>{children}</h1>;
@@ -778,6 +792,38 @@ function StructuredReaderV1({ document }: { document: ReaderDocumentV1 }) {
 }
 
 type ReaderV2RenderableNode = ReaderV2FlowNode | ReaderV2PhrasingNode;
+
+const CALLOUT_KINDS = ["note", "tip", "important", "warning", "caution"] as const;
+type CalloutKind = (typeof CALLOUT_KINDS)[number];
+const CALLOUT_LABELS: Record<CalloutKind, string> = { note: "Note", tip: "Tip", important: "Important", warning: "Warning", caution: "Caution" };
+const CALLOUT_MARKER = /^\[!(note|tip|important|warning|caution)\][ \t]*/i;
+
+/**
+ * A GitHub alert (`> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]`) as a callout:
+ * its kind, its title (the rest of the marker's line when more follows, else the kind's label) and
+ * its body. Undefined for an ordinary blockquote.
+ */
+export function readerV2Callout(node: Extract<ReaderV2FlowNode, { type: "blockquote" }>): { kind: CalloutKind; title: string; children: ReaderV2FlowNode[] } | undefined {
+  const [first, ...rest] = node.children;
+  if (first?.type !== "paragraph") return undefined;
+  const [lead, ...phrasing] = first.children;
+  if (lead?.type !== "text") return undefined;
+  const marker = CALLOUT_MARKER.exec(lead.value);
+  if (!marker) return undefined;
+  const kind = marker[1]!.toLowerCase() as CalloutKind;
+  const after = lead.value.slice(marker[0].length);
+  const newline = after.indexOf("\n");
+  // The marker's own line is the title when the body goes on below it; a one-line callout is all body.
+  let line = newline >= 0 ? after.slice(0, newline) : after;
+  let body: ReaderV2PhrasingNode[];
+  if (newline >= 0) body = [{ ...lead, value: after.slice(newline + 1) }, ...phrasing];
+  else if (phrasing[0]?.type === "break") body = phrasing.slice(1);
+  else if (phrasing.length === 0 && rest.length > 0) body = [];
+  else { body = [{ ...lead, value: after }, ...phrasing]; line = ""; }
+  body = body.filter((child) => child.type !== "text" || child.value !== "");
+  const title = line.trim() || CALLOUT_LABELS[kind];
+  return { kind, title, children: body.length > 0 ? [{ ...first, children: body }, ...rest] : rest };
+}
 
 type FootnoteIndex = {
   definitions: ReaderV2FootnoteDefinition[];
@@ -1089,7 +1135,7 @@ function ReaderV2NodeView({
   const footnoteIndex = useContext(FootnoteIndexContext);
   switch (node.type) {
     case "text":
-      return node.value;
+      return <HostText value={node.value} />;
     case "heading":
       return (
         <ReaderV2HeadingView
@@ -1225,22 +1271,34 @@ function ReaderV2NodeView({
       );
     case "footnoteReference":
       return <ReaderV2FootnoteReferenceView node={node} />;
-    case "blockquote":
+    case "blockquote": {
+      const callout = readerV2Callout(node);
+      if (callout) {
+        return (
+          <aside className="reader-callout" data-callout={callout.kind} role="note">
+            <p className="reader-callout-title">{callout.title}</p>
+            <ReaderV2Children children={callout.children} />
+          </aside>
+        );
+      }
       return (
         <blockquote>
           <ReaderV2Children children={node.children} />
         </blockquote>
       );
+    }
     case "list": {
       const children = node.children.map((item, index) => (
         <li key={index}>
           <ReaderV2Children children={item.children} />
         </li>
       ));
+      // A tight list (no blank lines between items) reads as one block, as CommonMark renders it.
+      const tight = node.spread || node.children.some((item) => item.spread) ? undefined : "";
       return node.ordered ? (
-        <ol start={node.start ?? undefined}>{children}</ol>
+        <ol data-tight={tight} start={node.start ?? undefined}>{children}</ol>
       ) : (
-        <ul>{children}</ul>
+        <ul data-tight={tight}>{children}</ul>
       );
     }
     case "figure":
@@ -1343,12 +1401,30 @@ function StructuredReaderV2({ document }: { document: ReaderDocumentV2 }) {
   );
 }
 
+/** The fallback Markdown's text containers, with their string children passed through the host's `renderText`. */
+function fallbackTextComponents(renderText: (value: string) => ReactNode) {
+  const withText = (children: ReactNode) =>
+    Children.map(children, (child) =>
+      typeof child === "string" ? renderText(child) : child,
+    );
+  const tags = ["p", "li", "td", "th", "em", "strong", "del", "h1", "h2", "h3", "h4", "h5", "h6"] as const;
+  return Object.fromEntries(
+    tags.map((Tag) => [
+      Tag,
+      ({ children, node: _node, ...props }: { children?: ReactNode; node?: unknown } & Record<string, unknown>) => (
+        <Tag {...props}>{withText(children)}</Tag>
+      ),
+    ]),
+  );
+}
+
 export function ReaderDocumentSurface({
   fallback,
   fallbackLabel = "Reader fallback",
   imageSourceFor,
   onOpenLink,
   payload,
+  renderText,
   resolveImageSource,
   resolveRemoteImageSource,
   schema,
@@ -1364,6 +1440,7 @@ export function ReaderDocumentSurface({
       },
       imageSourceFor,
       onOpenLink,
+      renderText,
       resolveImageSource,
       resolveRemoteImageSource,
     }),
@@ -1371,6 +1448,7 @@ export function ReaderDocumentSurface({
       imageSourceFor,
       onOpenLink,
       payload,
+      renderText,
       resolveImageSource,
       resolveRemoteImageSource,
       schema,
@@ -1405,6 +1483,7 @@ export function ReaderDocumentSurface({
           <div className="reader-document-fallback">
             <ReactMarkdown
               components={{
+                ...(renderText ? fallbackTextComponents(renderText) : {}),
                 a: ({ children, href, node: _node, title, ...props }) =>
                   href?.startsWith("#") ? (
                     <a {...props} href={href} title={title}>

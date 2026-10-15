@@ -284,3 +284,27 @@ describe("withoutTitleHeading", () => {
     expect(withoutTitleHeading("Body", "A title")).toBe("Body");
   });
 });
+
+describe("MaterialStore artifact versions", () => {
+  it("keeps every version of an artifact, shows an earlier one, and restores it as the newest", async () => {
+    const store = new MaterialStore(root);
+    const opened = await store.openFile({ name: "note.md", mediaType: "", bytes: new TextEncoder().encode("# Note\n\nText.\n") });
+    if (!opened.ok) throw new Error(opened.message);
+    const first = "export default function Chart() { return <p>First</p>; }";
+    const saved = await store.saveArtifact({ title: "Chart", type: "react", source: first, lineage: [opened.material.id] });
+    expect(saved).toMatchObject({ mediaType: "application/vnd.quire.artifact+react", artifact: { type: "react", version: 1 }, plain: "First" });
+    await store.updateArtifact(saved.id, { edit: { oldText: "First", newText: "Second" } });
+    await store.updateArtifact(saved.id, { edit: { oldText: "Second", newText: "Third" }, title: "Chart, final" });
+
+    expect((await store.artifactAt(saved.id))?.source).toContain("Third");
+    expect(await store.artifactAt(saved.id, 1)).toMatchObject({ source: first, title: "Chart", info: { version: 1 } });
+    expect(await store.artifactAt(saved.id, 9)).toBeUndefined();
+    expect((await store.artifactVersionContent(saved.id, 2))?.artifactBody).toEqual({ type: "react", source: first.replace("First", "Second"), version: 2 });
+
+    const restored = await store.restoreArtifact(saved.id, 1);
+    expect(restored).toMatchObject({ title: "Chart", artifact: { version: 4 }, artifactSource: first });
+    expect((await store.artifactAt(saved.id, 3))?.source).toContain("Third");
+    await expect(store.restoreArtifact(saved.id, 7)).rejects.toThrow(/not kept/);
+    await expect(store.saveArtifact({ title: "Bad", type: "react", source: "import x from 'axios';\nexport default () => x;", lineage: [opened.material.id] })).rejects.toThrow(/axios/);
+  });
+});

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ClipboardItem, Menu, Notification, clipboard, ipcMain, nativeImage, nativeTheme, safeStorage, shell } from "electron";
+import { app, BrowserWindow, ClipboardItem, Menu, Notification, clipboard, ipcMain, nativeImage, nativeTheme, protocol, safeStorage, shell } from "electron";
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -33,6 +33,10 @@ import { registerFeedbackHandlers } from "./ipc-feedback";
 import type { FeedbackProgress } from "./engine/feedback-submit";
 import { createElectronCapturer, type RendererTarget } from "./feedback-capturer";
 import normalizePackage from "../../../../packages/normalize/package.json";
+import { ARTIFACT_SCHEME, artifactResponse } from "./artifact-protocol";
+
+// HTML artifacts load from their own scheme, so they get their own (opaque) origin and CSP; see artifact-protocol.ts.
+protocol.registerSchemesAsPrivileged([{ scheme: ARTIFACT_SCHEME, privileges: { standard: true, secure: true } }]);
 
 const userData = app.getPath("userData");
 const settings = new SettingsStore(join(userData, "settings.json"), userData, { warn: (message) => console.warn(`[settings] ${message}`), encryptor: electronEncryptor(safeStorage) });
@@ -378,6 +382,10 @@ function createWindow(): BrowserWindow {
     },
   });
   win.once("ready-to-show", () => win.show());
+  // A frame inside the app (an HTML artifact) stays on its own page: links reach the reader through the artifact bridge instead.
+  win.webContents.on("will-frame-navigate", (event) => {
+    if (!event.isMainFrame && !event.url.startsWith(`${ARTIFACT_SCHEME}:`)) event.preventDefault();
+  });
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/.test(url)) void shell.openExternal(url);
     return { action: "deny" };
@@ -419,6 +427,15 @@ function installMenu() {
 }
 
 app.whenReady().then(() => {
+  protocol.handle(ARTIFACT_SCHEME, (request) => artifactResponse(request.url, {
+    artifact: async (id, version) => {
+      const at = await store.artifactAt(id, version);
+      const type = at?.info.type;
+      return at && (type === "html" || type === "react" || type === "mermaid") ? { type, source: at.source } : undefined;
+    },
+    // Built by scripts/build-artifact-runtime.mjs next to main, renderer and preload.
+    runtime: (file) => readFile(join(__dirname, "../artifact-runtime", `${file}.js`), "utf8").catch(() => undefined),
+  }));
   installMenu();
   createWindow();
   scheduler.start();

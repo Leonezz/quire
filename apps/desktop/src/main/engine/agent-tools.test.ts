@@ -42,7 +42,7 @@ describe("agentTools", () => {
       expect(tool.inputSchema.type).toBe("object");
       expect(tool.inputSchema.additionalProperties).toBe(false);
     }
-    expect(agentTools.map((t) => t.name)).toEqual(["library_search", "library_recent", "material_read", "material_annotations", "inbox_list", "library_import", "material_source", "artifact_write"]);
+    expect(agentTools.map((t) => t.name)).toEqual(["library_search", "library_recent", "material_read", "material_annotations", "inbox_list", "library_import", "material_source", "artifact_write", "artifact_update", "artifact_rewrite"]);
     expect(agentTools.find((t) => t.name === "material_read")?.description).toMatch(/exact words/);
     expect(agentTools.find((t) => t.name === "material_read")?.description).toMatch(/\[0123456789abcdef\]/);
     const artifact = agentTools.find((t) => t.name === "artifact_write")?.description ?? "";
@@ -120,6 +120,41 @@ describe("createToolHandler", () => {
     expect(changes).toHaveLength(2);
   });
 
+  it("writes typed artifacts and edits them in place, one version per change", async () => {
+    const { handle, store, material } = await setup();
+    const html = "<!doctype html><html><body><h1>Momentum</h1><p id=\"n\">Old figure</p><script>document.title = 'x'</script></body></html>";
+    const written = await handle({ tool: "artifact_write", arguments: { title: "Momentum chart", type: "html", content: html, sources: [material.id] }, callId: "c1" });
+    expect(parse(written.text)).toMatchObject({ ok: true, type: "html", version: 1 });
+    const { id } = parse(written.text) as { id: string };
+    const saved = await store.get(id);
+    expect(saved).toMatchObject({ mediaType: "application/vnd.quire.artifact+html", primaryView: "artifact", artifactSource: html, plain: "Momentum Old figure", artifact: { type: "html", version: 1 } });
+    expect(saved?.reader).toBeUndefined();
+    // The agent reads an artifact back as its source, so it can copy a passage to edit.
+    expect(parse((await handle({ tool: "material_read", arguments: { id }, callId: "c2" })).text).content).toBe(html);
+
+    const edited = await handle({ tool: "artifact_update", arguments: { id, old_str: "Old figure", new_str: "New figure" }, callId: "c3" });
+    expect(edited.summary).toBe(`artifact_update "Momentum chart" → ${id} v2`);
+    expect((await store.get(id))?.artifactSource).toBe(html.replace("Old figure", "New figure"));
+    expect(await store.artifactRevision(id, 1)).toMatchObject({ version: 1, title: "Momentum chart", source: html });
+
+    const ambiguous = await handle({ tool: "artifact_update", arguments: { id, old_str: "<", new_str: "[" }, callId: "c4" });
+    expect(parse(ambiguous.text).error).toMatch(/occurs more than once/);
+    const missing = await handle({ tool: "artifact_update", arguments: { id, old_str: "Old figure", new_str: "x" }, callId: "c5" });
+    expect(parse(missing.text).error).toMatch(/does not occur/);
+
+    const rewritten = await handle({ tool: "artifact_rewrite", arguments: { id, content: "<p>Short now</p>", title: "Momentum, short" }, callId: "c6" });
+    expect(parse(rewritten.text)).toMatchObject({ id, title: "Momentum, short", version: 3 });
+    expect(parse((await handle({ tool: "artifact_update", arguments: { id: material.id, old_str: "a", new_str: "b" }, callId: "c7" })).text).error).toMatch(/not an artifact the agent wrote/);
+  });
+
+  it("checks an artifact's type against its content", async () => {
+    const { handle, material } = await setup();
+    expect(parse((await handle({ tool: "artifact_write", arguments: { title: "x", type: "svg", content: "<div>no svg</div>", sources: [material.id] }, callId: "c1" })).text).error).toMatch(/must contain an <svg> element/);
+    expect(parse((await handle({ tool: "artifact_write", arguments: { title: "x", type: "pdf", content: "y", sources: [material.id] }, callId: "c2" })).text).error).toMatch(/"type" must be one of markdown, code, html, svg/);
+    const code = await handle({ tool: "artifact_write", arguments: { title: "Fit", type: "code", language: "python", content: "print('```')", sources: [material.id] }, callId: "c3" });
+    expect(parse(code.text)).toMatchObject({ ok: true, type: "code" });
+  });
+
   it("writes an artifact with its lineage and rejects sources the turn did not retrieve", async () => {
     const { handle, store, material, changes, scope, deps } = await setup();
     const reply = await handle({ tool: "artifact_write", arguments: { title: "On momentum", markdown: "# On momentum\n\nSee [" + material.id + "]: \"keeps the direction\".", sources: [material.id] }, callId: "c1" });
@@ -155,7 +190,7 @@ describe("createToolHandler", () => {
     const gate = new Promise<void>((resolve) => { release = resolve; });
     const slowStore: ToolDeps["store"] = {
       list: async () => { await gate; return store.list(); }, search: (query) => store.search(query), get: (id) => store.get(id),
-      openUrl: (url, origin) => store.openUrl(url, origin), saveArtifact: (input) => store.saveArtifact(input), captureText: (id) => store.captureText(id),
+      openUrl: (url, origin) => store.openUrl(url, origin), saveArtifact: (input) => store.saveArtifact(input), updateArtifact: (id, change) => store.updateArtifact(id, change), captureText: (id) => store.captureText(id),
     };
     const factory = createToolHandler({ ...deps, store: slowStore });
     const first = factory.forTurn(createTurnScope());

@@ -95,3 +95,15 @@ describe("AgentMarkdown", () => {
     expect(screen.getByRole("button", { name: `Open material ${FAKE} (unverified citation)` }).getAttribute("data-unverified")).toBe("true");
   });
 });
+
+describe("AgentMarkdown citation groups", () => {
+  it("turns [id, id] into one pill per source, the quote going with the first", () => {
+    const h = handlers();
+    const quote = "styling arbitrary text ranges";
+    render(<AgentMarkdown text={`It says "${quote}" [${REAL}, ${FAKE}].`} {...h} sources={[REAL]} />);
+    const real = screen.getByRole("button", { name: "Open CSS Custom Highlight API" });
+    expect(real.getAttribute("data-quote")).toBe(quote);
+    expect(screen.getByRole("button", { name: `Open material ${FAKE} (unverified citation)` }).getAttribute("data-quote")).toBeNull();
+    expect(screen.getByText(/It says/).textContent).not.toContain("[");
+  });
+});

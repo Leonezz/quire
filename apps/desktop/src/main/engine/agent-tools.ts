@@ -1,5 +1,8 @@
-import type { Annotation, ItemRecord, MaterialKind, MaterialRecord, MaterialSummary, OpenUrlResult } from "../../shared/contracts";
+import type { Annotation, ArtifactType, ItemRecord, MaterialKind, MaterialRecord, MaterialSummary, OpenUrlResult } from "../../shared/contracts";
 import type { DynamicTool, ToolCall, ToolReply } from "./codex-client";
+import { ARTIFACT_TYPES, MAX_ARTIFACT_SOURCE, isArtifactType } from "./artifacts";
+import { RUNTIME_MODULES } from "../artifact-runtime";
+import { reviewArtifact } from "./artifact-review";
 import { itemHits, materialHits, mergeHits, searchWords } from "./search";
 
 // The agent's window onto the library. Every tool validates its arguments by hand (no zod in the
@@ -23,7 +26,9 @@ export interface ToolDeps {
     search: (query: string) => Promise<MaterialSummary[]>;
     get: (id: string) => Promise<MaterialRecord | undefined>;
     openUrl: (url: string, origin: "web" | "feed") => Promise<OpenUrlResult>;
-    saveArtifact: (input: { title: string; markdown: string; lineage: readonly string[] }) => Promise<MaterialRecord>;
+    saveArtifact: (input: { title: string; type: ArtifactType; source: string; language?: string; lineage: readonly string[] }) => Promise<MaterialRecord>;
+    /** A new revision of an agent artifact: the source replaced, or one passage of it edited. */
+    updateArtifact: (id: string, change: { source?: string; edit?: { oldText: string; newText: string }; title?: string; lineage?: readonly string[] }) => Promise<MaterialRecord>;
     /** The captured page as structured text; undefined when the material has no capture. */
     captureText: (id: string) => Promise<string | undefined>;
   };
@@ -40,10 +45,19 @@ const SEARCH_HITS = 20;
 const DEFAULT_RECENT = 20;
 const MAX_LIST = 100;
 const MAX_TITLE = 200;
-const MAX_MARKDOWN = 400_000;
 const MAX_LINEAGE = 50;
 
 const CITE = "Cite by writing the material id in square brackets right after the claim or quote it supports, e.g. \"exact words\" [0123456789abcdef]; quote the material's exact words, never paraphrase inside quotation marks, and never print an id bare.";
+/** What a non-Markdown artifact may rely on; shared by artifact_write and artifact_rewrite. */
+const ARTIFACT_RULES = "Every artifact but markdown and code runs offline in a sandbox, sized to its content: fetch and remote URLs are blocked, and nothing can be loaded from the web. "
+  + "An html artifact is one self-contained document with inline <style> and <script>; it follows the reader's light or dark theme through the CSS variables --quire-bg, --quire-fg, --quire-muted, --quire-accent, --quire-border and --quire-font (use them instead of fixed colours), and may load Quire's own copies of libraries with <script src=\"quire-artifact://runtime/NAME.js\"></script>, NAME one of d3 (window.d3), lodash (window._), mermaid (window.mermaid) or tailwind (Tailwind utility classes). "
+  + `A react artifact is one component file (JSX or TSX) that \`export default\`s its component, which renders with no props; it may import only ${RUNTIME_MODULES}, and keeps its state in React (no localStorage). `
+  + "Build it from Quire's components so it reads like the rest of the reader: import { Page, Lead, Section, Prose, Columns, Card, Callout, Stats, Stat, Figure, Legend, Cite, Quote, DataTable, Tabs, Timeline, Badge, ChartTooltip, chart } from \"quire\". "
+  + "Page wraps everything; Lead states the finding; Section takes a title that states its point and an optional description; Callout takes tone (note, tip, important, warning, caution) and title; Stat takes label, value, change (\"+12%\") and hint; Figure takes title, subtitle, caption and source { id, label, quote }; Cite takes id and quote; DataTable takes columns [{ key, label, align, format }] and rows and sorts on click; Tabs takes [{ label, content }]; Timeline takes [{ date, title, body }]. "
+  + "For recharts, spread chart.axis on XAxis and YAxis, chart.grid on CartesianGrid, chart.tooltip on Tooltip, chart.margin on the chart, chart.bar on Bar and chart.line on Line, colour series in order with chart.color(i), wrap the chart in <ResponsiveContainer width=\"100%\" height={280}>, put it in a Figure whose title states what it shows, and add a Legend for two or more series. "
+  + "For anything else use Tailwind with the reader's colours (bg-surface, bg-bg, text-fg, text-muted, text-accent, border-line, text-positive, text-negative, bg-chart-1…8), never fixed colours such as bg-white or text-gray-900. "
+  + "A mermaid artifact is the diagram's Mermaid source alone (flowchart, sequenceDiagram, classDiagram, stateDiagram, erDiagram, gantt, pie, mindmap, timeline…), drawn in the reader's theme. "
+  + "To cite inside html or react, link the claim: <a href=\"quire:material/ID\" data-quote=\"exact words\">…</a> opens that material at the quote. An svg artifact is one <svg> element with a viewBox, drawn as a static image (no scripts).";
 const idSchema = { type: "string", pattern: "^[a-f0-9]{16}$", description: "A material id, 16 hex characters, as returned by library_search, library_recent or the conversation." };
 const limitSchema = { type: "integer", minimum: 1, maximum: MAX_LIST };
 
@@ -52,7 +66,7 @@ export const agentTools: readonly DynamicTool[] = [
     inputSchema: { type: "object", properties: { query: { type: "string", minLength: 1, maxLength: 200 } }, required: ["query"], additionalProperties: false } },
   { name: "library_recent", description: "The newest materials in the library (id, title, kind, creators, publication, date, doi, arxivId, byline, publishedAt, url, readingMinutes, origin). Use it to see what the reader has been reading, or when a question is about the library as a whole.",
     inputSchema: { type: "object", properties: { limit: { ...limitSchema, description: `How many, default ${DEFAULT_RECENT}.` } }, additionalProperties: false } },
-  { name: "material_read", description: `Read a material's text as Markdown, ${PAGE_CHARS} characters per call. Start at offset 0 and continue with nextOffset until it is null; read before you summarise, verify or quote. ${CITE}`,
+  { name: "material_read", description: `Read a material's text as Markdown (an artifact as its source: Markdown, code, HTML, React, Mermaid or SVG), ${PAGE_CHARS} characters per call. Start at offset 0 and continue with nextOffset until it is null; read before you summarise, verify or quote. ${CITE}`,
     inputSchema: { type: "object", properties: { id: idSchema, offset: { type: "integer", minimum: 0, description: "Character offset; use the previous call's nextOffset." } }, required: ["id"], additionalProperties: false } },
   { name: "material_annotations", description: "The reader's own highlights and notes on a material (quote, note, kind, color, createdAt). Use it to learn what the reader marked as important or asked about before answering about the material.",
     inputSchema: { type: "object", properties: { id: idSchema }, required: ["id"], additionalProperties: false } },
@@ -62,8 +76,12 @@ export const agentTools: readonly DynamicTool[] = [
     inputSchema: { type: "object", properties: { url: { type: "string", minLength: 8, maxLength: 4096 } }, required: ["url"], additionalProperties: false } },
   { name: "material_source", description: `The captured raw page of a material as readable text with its structure (blank lines between blocks, # headings, - list items, fenced code, [text](href) links), ${PAGE_CHARS} characters per call, navigation and chrome included. Use it for a rebuild when the extracted text is broken; page with nextOffset until it is null. Only materials fetched with capture on have it.`,
     inputSchema: { type: "object", properties: { id: idSchema, offset: { type: "integer", minimum: 0, description: "Character offset; use the previous call's nextOffset." } }, required: ["id"], additionalProperties: false } },
-  { name: "artifact_write", description: `Save a document you wrote (a synthesis, a summary) into the library as a Markdown material. \`sources\` must list the id of every material you drew on; only ids you retrieved in this turn (library_search, library_recent, material_read, material_source, material_annotations, library_import) or the material the conversation is about are accepted. Every claim in the markdown should carry [material-id] and exact quotes. Returns { id, title }; cite it as [id] after a one-line summary of what you saved. ${CITE}`,
-    inputSchema: { type: "object", properties: { title: { type: "string", minLength: 1, maxLength: MAX_TITLE }, markdown: { type: "string", minLength: 1, maxLength: MAX_MARKDOWN }, sources: { type: "array", items: idSchema, minItems: 1, maxItems: MAX_LINEAGE, uniqueItems: true } }, required: ["title", "markdown", "sources"], additionalProperties: false } },
+  { name: "artifact_write", description: `Save a document you made into the library as an artifact the reader can open, keep and cite. \`type\` says what it is: "markdown" (the default: a synthesis, a summary, notes, a rebuilt article), "code" (one source file; give \`language\`), "html" (a page that needs layout or interaction), "react" (an interactive component: a chart with recharts, a calculator, a dashboard, a sortable or filterable table, a quiz), "mermaid" (a flowchart, sequence, timeline, mind map or other diagram from text), or "svg" (a drawn figure). ${ARTIFACT_RULES} \`sources\` must list the id of every material you drew on; only ids you retrieved in this turn (library_search, library_recent, material_read, material_source, material_annotations, library_import) or the material the conversation is about are accepted. Every claim should carry [material-id] (several as [id, id]) after its exact quote. Quire renders each citation as a numbered reference and appends a Sources list built from \`sources\`, so do not write a references, bibliography or sources section, and do not mention ids in the prose. Returns { id, title, type, version } and, when an editor would flag something, \`review\` notes to fix with artifact_update before you reply; cite it as [id] after a one-line summary of what you saved. ${CITE}`,
+    inputSchema: { type: "object", properties: { title: { type: "string", minLength: 1, maxLength: MAX_TITLE }, type: { type: "string", enum: [...ARTIFACT_TYPES], description: "What the artifact is; markdown when omitted." }, language: { type: "string", maxLength: 40, description: "code artifacts: the source's language, e.g. python." }, content: { type: "string", minLength: 1, maxLength: MAX_ARTIFACT_SOURCE, description: "The whole artifact: Markdown, the code, a complete HTML document, a React component file, Mermaid source, or an <svg> element." }, sources: { type: "array", items: idSchema, minItems: 1, maxItems: MAX_LINEAGE, uniqueItems: true } }, required: ["title", "content", "sources"], additionalProperties: false } },
+  { name: "artifact_update", description: "Edit an artifact you or an earlier turn wrote, without writing it again: replace one exact passage of its source (old_str, which must occur exactly once; copy it from material_read, whitespace included) with new_str. Use it for every change smaller than the whole artifact, one call per change. The artifact keeps its id; each edit makes a new version and the old one is kept. `sources` adds materials the edit draws on (retrieved this turn). Returns { id, title, type, version }.",
+    inputSchema: { type: "object", properties: { id: idSchema, old_str: { type: "string", minLength: 1, maxLength: MAX_ARTIFACT_SOURCE }, new_str: { type: "string", maxLength: MAX_ARTIFACT_SOURCE }, sources: { type: "array", items: idSchema, maxItems: MAX_LINEAGE, uniqueItems: true } }, required: ["id", "old_str", "new_str"], additionalProperties: false } },
+  { name: "artifact_rewrite", description: `Replace the whole source of an artifact (same type) when most of it changes; for smaller changes use artifact_update. The artifact keeps its id and gets a new version; the old one is kept. ${ARTIFACT_RULES} Returns { id, title, type, version }.`,
+    inputSchema: { type: "object", properties: { id: idSchema, content: { type: "string", minLength: 1, maxLength: MAX_ARTIFACT_SOURCE }, title: { type: "string", minLength: 1, maxLength: MAX_TITLE }, sources: { type: "array", items: idSchema, maxItems: MAX_LINEAGE, uniqueItems: true } }, required: ["id", "content"], additionalProperties: false } },
 ];
 
 class ArgumentError extends Error {}
@@ -120,6 +138,22 @@ function quoteOf(query: string) { return `"${query.length > 40 ? `${query.slice(
 
 interface Outcome { value: unknown; summary: string }
 
+/** Material ids a write cites: each one retrieved in this turn (or the conversation's material). */
+function sourceIds(value: unknown, min: number, scope: TurnScope): string[] {
+  if (!Array.isArray(value) || value.length < min || value.length > MAX_LINEAGE || !value.every((id) => typeof id === "string" && /^[a-f0-9]{16}$/.test(id))) throw new ArgumentError(`"sources" must be ${min} to ${MAX_LINEAGE} material ids.`);
+  const unseen = (value as string[]).filter((id) => !scope.seen.has(id));
+  if (unseen.length > 0) throw new Error(`These sources were not retrieved during this turn, so they cannot be cited: ${unseen.join(", ")}. Read them with material_read (or find them with library_search) first.`);
+  return value as string[];
+}
+
+/** What an artifact tool returns: the artifact, and an editor's notes on it when there are any (artifact-review.ts). */
+function artifactValue(saved: MaterialRecord) {
+  const type = saved.artifact?.type ?? "markdown";
+  const value = { id: saved.id, title: saved.title, type, version: saved.artifact?.version ?? 1 };
+  const review = reviewArtifact({ type, title: saved.title, source: saved.artifactSource ?? saved.markdown ?? "", lineage: saved.lineage ?? [] });
+  return review.length > 0 ? { ...value, review, next: "The artifact is saved. Fix the review notes that apply with artifact_update (one pass), then reply." } : value;
+}
+
 /** One page of `content` from `offset`, with the cursor for the next call. */
 function page(content: string, offset: number) {
   if (offset > content.length) throw new Error(`Offset ${offset} is past the end of the text (${content.length} characters).`);
@@ -161,7 +195,8 @@ async function execute(tool: string, raw: unknown, deps: ToolDeps, scope: TurnSc
     const offset = integer(args, "offset", 0, Number.MAX_SAFE_INTEGER);
     const material = await deps.store.get(id);
     if (!material) throw new Error(`Material ${id} is not in the library. Find ids with library_search or library_recent.`);
-    const content = material.markdown ?? material.plain;
+    // An artifact reads as its source, so an update can copy a passage of it exactly.
+    const content = material.artifactSource ?? material.markdown ?? material.plain;
     if (content === undefined) throw new Error(`Material ${id} (${material.title}) has no text to read; it is probably a scanned PDF.`);
     scope.seen.add(id);
     const value = { id, title: material.title, ...(material.byline ? { byline: material.byline } : {}), url: material.url, ...bibOf(material), ...page(content, offset) };
@@ -201,17 +236,36 @@ async function execute(tool: string, raw: unknown, deps: ToolDeps, scope: TurnSc
     return { value: { id, title, readingMinutes }, summary: `library_import → ${quoteOf(title)}` };
   }
   if (tool === "artifact_write") {
-    const args = record(raw, ["title", "markdown", "sources"]);
+    const args = record(raw, ["title", "type", "language", "content", "markdown", "sources"]);
     const title = text(args, "title", MAX_TITLE);
-    const markdown = text(args, "markdown", MAX_MARKDOWN);
-    const sources = args.sources;
-    if (!Array.isArray(sources) || sources.length === 0 || sources.length > MAX_LINEAGE || !sources.every((id) => typeof id === "string" && /^[a-f0-9]{16}$/.test(id))) throw new ArgumentError(`"sources" must be 1 to ${MAX_LINEAGE} material ids.`);
-    const unseen = (sources as string[]).filter((id) => !scope.seen.has(id));
-    if (unseen.length > 0) throw new Error(`These sources were not retrieved during this turn, so they cannot be cited: ${unseen.join(", ")}. Read them with material_read (or find them with library_search) first.`);
-    const saved = await deps.store.saveArtifact({ title, markdown, lineage: sources as string[] });
+    // `markdown` is the argument's name from before artifacts had types; a resumed thread may still send it.
+    const source = text(args, args.content === undefined && args.markdown !== undefined ? "markdown" : "content", MAX_ARTIFACT_SOURCE);
+    const type = args.type ?? "markdown";
+    if (!isArtifactType(type)) throw new ArgumentError(`"type" must be one of ${ARTIFACT_TYPES.join(", ")}.`);
+    const language = args.language === undefined ? undefined : text(args, "language", 40);
+    const sources = sourceIds(args.sources, 1, scope);
+    const saved = await deps.store.saveArtifact({ title, type, source, lineage: sources, ...(language ? { language } : {}) });
     scope.seen.add(saved.id);
     deps.onChanged();
-    return { value: { id: saved.id, title: saved.title }, summary: `artifact_write ${quoteOf(saved.title)} → ${saved.id}` };
+    return { value: artifactValue(saved), summary: `artifact_write ${quoteOf(saved.title)} → ${saved.id}` };
+  }
+  if (tool === "artifact_update" || tool === "artifact_rewrite") {
+    const update = tool === "artifact_update";
+    const args = record(raw, update ? ["id", "old_str", "new_str", "sources"] : ["id", "content", "title", "sources"]);
+    const id = materialId(args);
+    const sources = args.sources === undefined ? undefined : sourceIds(args.sources, 0, scope);
+    let change: Parameters<ToolDeps["store"]["updateArtifact"]>[1];
+    if (update) {
+      const newText = args.new_str;
+      if (typeof newText !== "string" || newText.length > MAX_ARTIFACT_SOURCE) throw new ArgumentError(`"new_str" must be a string of at most ${MAX_ARTIFACT_SOURCE} characters.`);
+      change = { edit: { oldText: text(args, "old_str", MAX_ARTIFACT_SOURCE), newText } };
+    } else {
+      change = { source: text(args, "content", MAX_ARTIFACT_SOURCE), ...(args.title !== undefined ? { title: text(args, "title", MAX_TITLE) } : {}) };
+    }
+    const saved = await deps.store.updateArtifact(id, { ...change, ...(sources ? { lineage: sources } : {}) });
+    scope.seen.add(saved.id);
+    deps.onChanged();
+    return { value: artifactValue(saved), summary: `${tool} ${quoteOf(saved.title)} → ${saved.id} v${saved.artifact?.version ?? 1}` };
   }
   throw new Error(`Unknown tool ${tool}. Available: ${agentTools.map((t) => t.name).join(", ")}.`);
 }

@@ -116,6 +116,9 @@ const browserPreview: ReadApi = {
     return result.ok ? { ok: true, material: await requirePreviewMaterial(id) } : result;
   },
   getMaterialView: previewViews.getMaterialView,
+  // The browser preview keeps no artifact revisions.
+  getArtifactVersion: async () => undefined,
+  restoreArtifactVersion: async () => { throw new Error("The preview keeps no artifact versions."); },
   setPrimaryView: async (id, view) => {
     await previewViews.setPrimaryView(id, view);
     previewM3.notifyLibraryChanged();
