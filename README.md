@@ -35,12 +35,9 @@ Blogs, newsletters, papers, PDFs — whatever you bring in, Quire turns it into 
 
 Alpha builds for macOS are published on the [Releases page](https://github.com/Leonezz/quire/releases): download the `.dmg` for your Mac (`arm64` for Apple silicon, `x64` for Intel) and drag Quire to Applications.
 
-**First launch.** The alpha is signed with a development certificate, not notarized by Apple, so macOS will refuse to open it the normal way. Once:
+Since alpha.5 Quire is signed with a Developer ID certificate and notarized by Apple, so it opens like any other downloaded app. Quire checks for newer alphas and offers them in **Settings › About**, where they install in place.
 
-1. Right-click (or Control-click) Quire in Applications and choose **Open**, then **Open** again in the dialog. If the dialog offers no Open button, go to **System Settings → Privacy & Security**, scroll to the message about Quire and click **Open Anyway**.
-2. Or, in Terminal: `xattr -d com.apple.quarantine /Applications/Quire.app`.
-
-After that it opens like any other app. Quire checks for newer alphas and offers them in **Settings › About**; installing in place works when the new build carries the same signature, otherwise it opens the download page.
+**Coming from alpha.4 or earlier?** Those builds carried a development certificate, so installing alpha.5 in place stops at a code-signature error and **Settings › About** then offers the download page. Download alpha.5 once and replace Quire in Applications; your library stays where it is (`~/Library/Application Support/Quire`), and later updates install in place again.
 
 The agent needs the [Codex CLI](https://github.com/openai/codex) installed; everything else works without it. Quire runs Codex in a home of its own (`<userData>/codex`), so its conversations stay out of your Codex app and it asks you to sign in to ChatGPT once, from the agent panel. Threads an older Quire left in `~/.codex` can be listed and archived with `node apps/desktop/scripts/clean-codex-threads.mjs [--archive | --delete]`.
 

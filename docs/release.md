@@ -9,14 +9,17 @@ else is public.
 
 **On GitHub Actions (the default since alpha.3).** `release.yml` runs by hand (Actions → Release →
 Run workflow with an existing tag, or `gh workflow run release.yml -f tag=v<version>`) on a
-`macos-14` runner and publishes with the job's own `GITHUB_TOKEN`. It signs with the certificate
-in `CSC_LINK` / `CSC_KEY_PASSWORD`; today that is the maintainer's **Apple Development**
-identity (`leonez12138@gmail.com (LGNAH9RZH4)`), exported from Keychain Access as a `.p12`. A
-development certificate is not trusted by Gatekeeper on other Macs — users follow the "First
-launch" steps in the README — but it is a valid code signature, so in-app updates install in place
-between builds signed with the same identity. Keep signing every alpha with that one identity:
-electron-updater refuses an update whose signature does not match the running app. With a
-Developer ID certificate and the `APPLE_ID` secrets the same workflow notarizes as well.
+`macos-14` runner and publishes with the job's own `GITHUB_TOKEN`. Since alpha.5 it signs with
+the **Developer ID Application** certificate `Hanzhen Hong (7Z39KUX3QC)` from `CSC_LINK` /
+`CSC_KEY_PASSWORD` (exported from Keychain Access as a `.p12`) and notarizes with the `APPLE_*`
+secrets, so Gatekeeper opens the app on any Mac without a manual override.
+
+Keep every release on team `7Z39KUX3QC`: electron-updater refuses an update whose signature does not
+satisfy the running app's designated requirement. A renewed Developer ID certificate from the same
+team keeps updates working (the current one expires 2027-02-01); a different team or identity type
+does not. alpha.1–alpha.4 were signed with the maintainer's Apple Development identity
+(`leonez12138@gmail.com (LGNAH9RZH4)`), so users of those builds cannot update in place to alpha.5
+and download it once by hand from the release page.
 
 The workflow is deliberately not tag-triggered: without the secrets it would publish an unsigned
 build, and on the first alpha a tag-triggered run replaced locally signed assets with unsigned ones.
@@ -32,8 +35,14 @@ pnpm build
 pnpm --filter @read/desktop release:local
 ```
 
-`release:local` signs with `Apple Development: leonez12138@gmail.com (LGNAH9RZH4)` (override with
-`CSC_NAME`), builds with `--publish never`, then runs `scripts/publish-release.mjs <notes.md>`
+`release:local` signs with the Developer ID certificate `Hanzhen Hong (7Z39KUX3QC)` (override with
+`CSC_NAME`, which electron-builder rejects when it carries the `Developer ID Application:` prefix).
+electron-builder hands codesign the certificate's name, so the keychain must hold exactly one
+identity of that name: the maintainer's Mac has two (both created on 2026-10-15) and codesign stops
+with "ambiguous" until one is removed in Keychain Access → My Certificates. It notarizes with the notarytool keychain profile `quire-notary` (override with
+`APPLE_KEYCHAIN_PROFILE`; create it with `xcrun notarytool store-credentials quire-notary
+--apple-id <Apple ID> --team-id 7Z39KUX3QC`), builds with `--publish never`, then runs
+`scripts/publish-release.mjs <notes.md>`
 (`NOTES=` overrides the default `release-notes.md`), which writes `latest-mac.yml` from the
 artifacts' sha512, pushes the tag `v<version>`, and creates the prerelease with `gh` from every
 `.dmg` / `.zip` / `.blockmap` plus the manifest. electron-builder's own GitHub publisher is not
@@ -75,7 +84,7 @@ Set these in the source repository (Settings → Secrets and variables → Actio
 | Secret | Required | Purpose |
 | --- | --- | --- |
 | `GITHUB_TOKEN` | automatic | The job's own token; releases are created on this repository. |
-| `CSC_LINK` | for signing | Base64 of the signing certificate exported as `.p12` with its private key (`gh secret set CSC_LINK < <(base64 -i cert.p12)`). Currently the Apple Development identity; a **Developer ID Application** certificate once one exists. |
+| `CSC_LINK` | for signing | Base64 of the signing certificate exported as `.p12` with its private key (`gh secret set CSC_LINK < <(base64 -i cert.p12)`). The **Developer ID Application** certificate of team `7Z39KUX3QC`; delete the `.p12` once the secret is set. |
 | `CSC_KEY_PASSWORD` | with `CSC_LINK` | Password of that `.p12`. |
 | `APPLE_ID` | for notarization | Apple ID of the developer account. |
 | `APPLE_APP_SPECIFIC_PASSWORD` | with `APPLE_ID` | An app-specific password for that Apple ID (appleid.apple.com). |

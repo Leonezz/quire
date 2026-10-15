@@ -3,10 +3,9 @@ name: Release
 # Cutting a release: bump apps/desktop/package.json `version`, commit, tag `v<version>` and push the
 # tag. electron-builder publishes the macOS artifacts (dmg + zip, arm64 and x64, plus latest-mac.yml
 # for electron-updater) to this repository's Releases page. See docs/release.md.
-# Manual only: alphas are built and published from the maintainer's Mac (signed with the local
-# identity, see docs/release.md). Running this on a tag would replace those signed assets with
-# unsigned ones, which is exactly what happened on the first alpha. Use it once Developer ID
-# signing secrets exist.
+# Manual only: without the signing secrets a run publishes an unsigned build, and on the first alpha
+# a tag-triggered run replaced locally signed assets with unsigned ones. Since alpha.5 the secrets
+# hold the Developer ID certificate and the notarization credentials (see docs/release.md).
 on:
   workflow_dispatch:
     inputs:
@@ -26,7 +25,9 @@ jobs:
   mac:
     name: macOS (arm64 + x64)
     runs-on: macos-14
-    timeout-minutes: 60
+    # Notarization submits each architecture separately and Apple's queue is not bounded; the team's
+    # first submission took 68 minutes.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:

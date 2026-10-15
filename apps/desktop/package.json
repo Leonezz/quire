@@ -14,7 +14,7 @@
     "test": "vitest run",
     "package": "pnpm build && electron-builder --mac",
     "package:dir": "pnpm build && electron-builder --mac --dir",
-    "release:local": "pnpm build && CSC_NAME=\"${CSC_NAME:-Apple Development: leonez12138@gmail.com (LGNAH9RZH4)}\" electron-builder --mac --publish never && node scripts/publish-release.mjs \"${NOTES:-release-notes.md}\""
+    "release:local": "pnpm build && CSC_NAME=\"${CSC_NAME:-Hanzhen Hong (7Z39KUX3QC)}\" APPLE_KEYCHAIN_PROFILE=\"${APPLE_KEYCHAIN_PROFILE:-quire-notary}\" electron-builder --mac --publish never && node scripts/publish-release.mjs \"${NOTES:-release-notes.md}\""
   },
   "dependencies": {
     "@mixmark-io/domino": "2.2.0",
