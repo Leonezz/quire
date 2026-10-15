@@ -34,7 +34,7 @@ describe("ArtifactSurface", () => {
     await setup();
     const paragraph = document.querySelector("p")!;
     expect(paragraph.textContent).not.toContain(A);
-    expect(paragraph.textContent).toBe(`The fox, as one essay has it, "the quick brown fox jumps over"[1]. Both agree[1, 2]; a third does not[3].`);
+    expect(paragraph.textContent).toBe(`The fox, as one essay has it, \u201Cthe quick brown fox jumps over\u201D[1]. Both agree[1, 2]; a third does not[3].`);
     expect(screen.getAllByRole("button", { name: "Source 1: On Foxes" })).toHaveLength(2);
   });
 

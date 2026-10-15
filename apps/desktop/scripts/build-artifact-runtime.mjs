@@ -20,6 +20,8 @@ const LIBRARIES = {
   lucide: { modules: { "lucide-react": "lucide-react" } },
   lodash: { modules: { lodash: "lodash" }, global: "_", default: true },
   mermaid: { modules: { mermaid: "mermaid" }, global: "mermaid", default: true },
+  // Quire's own components for React artifacts (src/artifact-kit).
+  quire: { modules: { quire: "./src/artifact-kit/index.tsx" } },
 };
 
 // Inside every library but the React one, React resolves to the copy react.js registered.
@@ -42,7 +44,7 @@ for (const [name, library] of Object.entries(LIBRARIES)) {
   if (library.global) lines.push(`window[${JSON.stringify(library.global)}] = ${library.default ? "m0.default" : "m0"};`);
   await build({
     stdin: { contents: lines.join("\n"), resolveDir: root, loader: "js" },
-    bundle: true, minify: true, format: "iife", platform: "browser", target: "chrome130", legalComments: "none",
+    bundle: true, minify: true, format: "iife", jsx: "automatic", platform: "browser", target: "chrome130", legalComments: "none",
     define: { "process.env.NODE_ENV": "\"production\"" },
     plugins: name === "react" ? [] : [sharedReact],
     outfile: join(out, `${name}.js`), logLevel: "warning",

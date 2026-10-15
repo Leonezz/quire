@@ -793,6 +793,38 @@ function StructuredReaderV1({ document }: { document: ReaderDocumentV1 }) {
 
 type ReaderV2RenderableNode = ReaderV2FlowNode | ReaderV2PhrasingNode;
 
+const CALLOUT_KINDS = ["note", "tip", "important", "warning", "caution"] as const;
+type CalloutKind = (typeof CALLOUT_KINDS)[number];
+const CALLOUT_LABELS: Record<CalloutKind, string> = { note: "Note", tip: "Tip", important: "Important", warning: "Warning", caution: "Caution" };
+const CALLOUT_MARKER = /^\[!(note|tip|important|warning|caution)\][ \t]*/i;
+
+/**
+ * A GitHub alert (`> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]`) as a callout:
+ * its kind, its title (the rest of the marker's line when more follows, else the kind's label) and
+ * its body. Undefined for an ordinary blockquote.
+ */
+export function readerV2Callout(node: Extract<ReaderV2FlowNode, { type: "blockquote" }>): { kind: CalloutKind; title: string; children: ReaderV2FlowNode[] } | undefined {
+  const [first, ...rest] = node.children;
+  if (first?.type !== "paragraph") return undefined;
+  const [lead, ...phrasing] = first.children;
+  if (lead?.type !== "text") return undefined;
+  const marker = CALLOUT_MARKER.exec(lead.value);
+  if (!marker) return undefined;
+  const kind = marker[1]!.toLowerCase() as CalloutKind;
+  const after = lead.value.slice(marker[0].length);
+  const newline = after.indexOf("\n");
+  // The marker's own line is the title when the body goes on below it; a one-line callout is all body.
+  let line = newline >= 0 ? after.slice(0, newline) : after;
+  let body: ReaderV2PhrasingNode[];
+  if (newline >= 0) body = [{ ...lead, value: after.slice(newline + 1) }, ...phrasing];
+  else if (phrasing[0]?.type === "break") body = phrasing.slice(1);
+  else if (phrasing.length === 0 && rest.length > 0) body = [];
+  else { body = [{ ...lead, value: after }, ...phrasing]; line = ""; }
+  body = body.filter((child) => child.type !== "text" || child.value !== "");
+  const title = line.trim() || CALLOUT_LABELS[kind];
+  return { kind, title, children: body.length > 0 ? [{ ...first, children: body }, ...rest] : rest };
+}
+
 type FootnoteIndex = {
   definitions: ReaderV2FootnoteDefinition[];
   namespace: string;
@@ -1239,22 +1271,34 @@ function ReaderV2NodeView({
       );
     case "footnoteReference":
       return <ReaderV2FootnoteReferenceView node={node} />;
-    case "blockquote":
+    case "blockquote": {
+      const callout = readerV2Callout(node);
+      if (callout) {
+        return (
+          <aside className="reader-callout" data-callout={callout.kind} role="note">
+            <p className="reader-callout-title">{callout.title}</p>
+            <ReaderV2Children children={callout.children} />
+          </aside>
+        );
+      }
       return (
         <blockquote>
           <ReaderV2Children children={node.children} />
         </blockquote>
       );
+    }
     case "list": {
       const children = node.children.map((item, index) => (
         <li key={index}>
           <ReaderV2Children children={item.children} />
         </li>
       ));
+      // A tight list (no blank lines between items) reads as one block, as CommonMark renders it.
+      const tight = node.spread || node.children.some((item) => item.spread) ? undefined : "";
       return node.ordered ? (
-        <ol start={node.start ?? undefined}>{children}</ol>
+        <ol data-tight={tight} start={node.start ?? undefined}>{children}</ol>
       ) : (
-        <ul>{children}</ul>
+        <ul data-tight={tight}>{children}</ul>
       );
     }
     case "figure":

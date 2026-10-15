@@ -31,9 +31,12 @@ export function artifactTheme(): { scheme: "dark" | "light"; vars: Record<string
   const body = document.querySelector(".reader-body");
   const pick = (name: string) => root.getPropertyValue(name).trim();
   const vars: Record<string, string> = {
-    "--quire-bg": pick("--content"), "--quire-fg": pick("--label"), "--quire-muted": pick("--label-2"),
-    "--quire-accent": pick("--accent-text"), "--quire-border": pick("--separator"),
+    "--quire-bg": pick("--content"), "--quire-fg": pick("--label"), "--quire-muted": pick("--label-2"), "--quire-subtle": pick("--label-3"),
+    "--quire-accent": pick("--accent-text"), "--quire-border": pick("--separator"), "--quire-surface": pick("--content-2"),
+    "--quire-negative": pick("--red-text"), "--quire-warning": pick("--orange-text"), "--quire-mono": pick("--mono"),
     "--quire-font": body ? getComputedStyle(body).fontFamily : "",
+    // The reading column's width, so an artifact's page lines up with the title above it.
+    "--quire-measure": body ? getComputedStyle(body).maxWidth : "",
   };
   return { scheme: isDark() ? "dark" : "light", vars: Object.fromEntries(Object.entries(vars).filter(([, value]) => value)) };
 }
@@ -109,8 +112,8 @@ export function ArtifactError({ message, onFix }: { message: string; onFix?: ((m
  * instead (ArtifactCitations).
  */
 export function ArtifactCanvas({ material, artifact, onOpenLink, onOpenMaterial, onFix }: { material: Pick<MaterialRecord, "id" | "title" | "lineage">; artifact: NonNullable<MaterialViewContent["artifactBody"]>; onOpenLink: (url: string) => void; onOpenMaterial: OpenMaterial; onFix?: ((message: string) => void) | undefined }) {
-  // The materials the artifact links to (quire:material/<id>) are its citations, numbered in the order they first appear.
-  const cited = useMemo(() => [...artifact.source.matchAll(/quire:material\/([a-f0-9]{16})/g)].map((match) => `[${match[1]}]`).join(" "), [artifact.source]);
+  // The materials the artifact names (a quire:material/<id> link, a <Cite id>, a Figure source) are its citations, numbered in the order they first appear.
+  const cited = useMemo(() => [...artifact.source.matchAll(/(?:quire:material\/|\bid\s*[:=]\s*\{?\s*["'])([a-f0-9]{16})/g)].map((match) => `[${match[1]}]`).join(" "), [artifact.source]);
   const { sources, loaded } = useArtifactCitations(material, cited, onOpenMaterial);
   const [error, setError] = useState<{ version: number; message: string } | undefined>(undefined);
   // An error belongs to the version that hit it; a new version starts clean.

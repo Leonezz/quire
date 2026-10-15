@@ -50,6 +50,46 @@ describe("ReaderDocumentSurface", () => {
     expect(surface.querySelector("pre")?.textContent).toBe("[ref]");
   });
 
+  it("renders GFM alerts as titled callouts and marks tight lists", () => {
+    const surface = renderSurface({
+      fallback: { content: "Fallback", format: "plain" },
+      payload: {
+        type: "root",
+        losses: [],
+        children: [
+          {
+            type: "blockquote",
+            children: [
+              { type: "paragraph", children: [{ type: "text", value: "[!TIP] Key takeaways" }] },
+              {
+                type: "list",
+                ordered: false,
+                spread: false,
+                start: null,
+                children: [{ type: "listItem", spread: false, children: [{ type: "paragraph", children: [{ type: "text", value: "Rerank first." }] }] }],
+              },
+            ],
+          },
+          {
+            type: "blockquote",
+            children: [{ type: "paragraph", children: [{ type: "text", value: "[!WARNING]\nCalibrate the judge." }] }],
+          },
+          { type: "blockquote", children: [{ type: "paragraph", children: [{ type: "text", value: "A plain quote." }] }] },
+        ],
+      },
+      schema: "reader.document.v2",
+    });
+
+    const [tip, warning] = [...surface.querySelectorAll("aside.reader-callout")];
+    expect(tip?.getAttribute("data-callout")).toBe("tip");
+    expect(tip?.querySelector(".reader-callout-title")?.textContent).toBe("Key takeaways");
+    expect(tip?.querySelector("ul")?.hasAttribute("data-tight")).toBe(true);
+    expect(warning?.getAttribute("data-callout")).toBe("warning");
+    expect(warning?.querySelector(".reader-callout-title")?.textContent).toBe("Warning");
+    expect(warning?.querySelector("p:not(.reader-callout-title)")?.textContent).toBe("Calibrate the judge.");
+    expect(surface.querySelector("blockquote")?.textContent).toBe("A plain quote.");
+  });
+
   it("lets the host render text in the GFM fallback too", () => {
     const surface = renderSurface({
       fallback: { content: "claim [ref] and *more [ref]* `[ref]`", format: "gfm" },

@@ -11,6 +11,7 @@
 
 import type { ArtifactType } from "../shared/contracts";
 import { mermaidDocument, reactDocument, RUNTIME_FILES, RUNTIME_HOST, type RuntimeFile } from "./artifact-runtime";
+import { artifactStyle } from "./artifact-style";
 
 export const ARTIFACT_SCHEME = "quire-artifact";
 
@@ -32,21 +33,13 @@ export const ARTIFACT_CSP = [
   "base-uri 'none'",
 ].join("; ");
 
-/** The theme an artifact starts with, before the reader sends its own colours; `dark` follows the app. */
-function baseStyle(dark: boolean): string {
-  const palette = dark
-    ? "--quire-bg:#191b20;--quire-fg:#f2f3f7;--quire-muted:rgba(226,229,236,.68);--quire-accent:#8fb0ff;--quire-border:rgba(226,229,236,.14);color-scheme:dark;"
-    : "--quire-bg:#ffffff;--quire-fg:#0f1115;--quire-muted:rgba(28,32,40,.68);--quire-accent:#2653c4;--quire-border:rgba(28,32,40,.12);color-scheme:light;";
-  return `:root{${palette}--quire-font:-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif}`
-    + "html,body{margin:0;background:var(--quire-bg);color:var(--quire-fg);font-family:var(--quire-font)}a{color:var(--quire-accent)}";
-}
-
 /** Runs before the artifact's own scripts; the only channel out of the sandbox. */
 const BRIDGE = `(() => {
   const post = (message) => parent.postMessage({ quire: 1, ...message }, "*");
   let last = 0;
   const report = () => {
-    const height = Math.ceil(Math.max(document.documentElement.scrollHeight, document.body ? document.body.scrollHeight : 0));
+    // The content's own height: the root's box (not its scrollHeight, which never drops below the frame's), or the body's overflow.
+    const height = Math.ceil(Math.max(document.documentElement.getBoundingClientRect().height, document.body ? document.body.scrollHeight : 0));
     if (height !== last) { last = height; post({ type: "size", height }); }
   };
   new ResizeObserver(report).observe(document.documentElement);
@@ -54,7 +47,7 @@ const BRIDGE = `(() => {
   addEventListener("message", (event) => {
     if (event.source !== parent || !event.data || event.data.quire !== 1 || event.data.type !== "theme") return;
     for (const [name, value] of Object.entries(event.data.vars || {})) if (/^--quire-[a-z-]+$/.test(name) && typeof value === "string") document.documentElement.style.setProperty(name, value);
-    if (event.data.scheme === "dark" || event.data.scheme === "light") document.documentElement.style.colorScheme = event.data.scheme;
+    if (event.data.scheme === "dark" || event.data.scheme === "light") document.documentElement.dataset.scheme = event.data.scheme;
   });
   const material = (id, quote) => { if (/^[a-f0-9]{16}$/.test(String(id))) post({ type: "open-material", id: String(id), ...(quote ? { quote: String(quote) } : {}) }); };
   document.addEventListener("click", (event) => {
@@ -80,7 +73,8 @@ const BRIDGE = `(() => {
  * <head>; a fragment is wrapped in a document of its own.
  */
 export function artifactPage(source: string, options: { dark: boolean }): string {
-  const head = `<meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${baseStyle(options.dark)}</style><script>${BRIDGE}</script>`;
+  const scheme = `<script>document.documentElement.dataset.scheme=${JSON.stringify(options.dark ? "dark" : "light")}</script>`;
+  const head = `<meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${ARTIFACT_CSP}"><meta name="viewport" content="width=device-width,initial-scale=1"><style>${artifactStyle()}</style>${scheme}<script>${BRIDGE}</script>`;
   const headTag = /<head(\s[^>]*)?>/i.exec(source);
   if (headTag) return source.slice(0, headTag.index + headTag[0].length) + head + source.slice(headTag.index + headTag[0].length);
   const htmlTag = /<html(\s[^>]*)?>/i.exec(source);
@@ -109,8 +103,8 @@ export function parseRuntimeUrl(url: string): RuntimeFile | undefined {
 }
 
 /** The document an artifact of this type runs as, before the head is added; a React artifact that does not compile shows why. */
-export function artifactDocument(type: FramedArtifactType, source: string, dark: boolean): string {
-  if (type === "mermaid") return mermaidDocument(source, dark);
+export function artifactDocument(type: FramedArtifactType, source: string): string {
+  if (type === "mermaid") return mermaidDocument(source);
   if (type === "react") {
     try { return reactDocument(source); } catch (error) {
       const message = JSON.stringify(error instanceof Error ? error.message : String(error)).replace(/</g, "\\u003c");
@@ -140,7 +134,7 @@ export async function artifactResponse(url: string, sources: ArtifactSources): P
   const target = parseArtifactUrl(url);
   const artifact = target ? await sources.artifact(target.id, target.version) : undefined;
   if (!target || !artifact) return NOT_FOUND();
-  return new Response(artifactPage(artifactDocument(artifact.type, artifact.source, target.dark), { dark: target.dark }), {
+  return new Response(artifactPage(artifactDocument(artifact.type, artifact.source), { dark: target.dark }), {
     headers: { "content-type": "text/html; charset=utf-8", "content-security-policy": ARTIFACT_CSP, "cache-control": "no-store", "x-content-type-options": "nosniff" },
   });
 }

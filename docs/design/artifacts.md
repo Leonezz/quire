@@ -59,6 +59,26 @@ agent 只能产出 Markdown。综述、笔记这类文本够用，但图表、�
 - `artifact_rewrite { id, content, title?, sources? }`
 - 提示词说明何时选哪种类型（交互用 react，图示用 mermaid），以及沙箱约束（无网络、可用模块、用 `--quire-*` 变量、链接式引用）。
 
+## 内容质量与渲染
+
+Artifact 的价值是沉淀值得阅读、收藏的内容，所以质量要在三处同时把关。
+
+**内容**
+- 提示词里有一段编辑标准：标题要说清主题和结论，开头一段导语直接给答案，小标题陈述该节要点而不是"背景""总结"，每个论断带原文引语和引用，适合时用表格、callout（`> [!TIP] Key takeaways`）、图表，不写套话和 emoji，用读者的语言。
+- 保存时 `reviewArtifact`（`engine/artifact-review.ts`）像编辑一样过一遍：泛泛的标题、缺导语、长文无小标题、空洞的小标题、手写参考文献、无引用或引用无原文、裸 id、套话（中英）、超长段落、emoji、写死的颜色、Mermaid 节点过多。结果作为 `review` 随工具结果返回，并要求 agent 用 `artifact_update` 改一轮再回复。
+
+**展示形式**
+- Markdown 支持 GFM alert（`> [!NOTE|TIP|IMPORTANT|WARNING|CAUTION] 标题`），渲染为带色调的 callout；紧凑列表不再有段落间距。
+- React artifact 可以 `import { Page, Lead, Section, Stats, Stat, Figure, Legend, Cite, Callout, DataTable, Tabs, Timeline, chart } from "quire"`（`src/artifact-kit/`，打包成 `quire-artifact://runtime/quire.js`）。组件自带排版和主题；`<Cite id quote>` 与 `Figure` 的 `source` 都算引用，出现在下方的 Sources 列表里。
+- 图表用 `chart.color(i)` 等预设：8 色分类色板经色觉缺陷校验（浅色、深色各一套），轴线、网格、tooltip 都跟随主题。
+
+**渲染样式**
+- 所有 artifact 页面共享 `artifact-style.ts` 生成的样式，放在 `@layer quire`（位于 Tailwind preflight 之后、utilities 之前），所以 Tailwind 类仍可覆盖。主题变量 `--quire-*` 由阅读器实时下发，包括正文宽度 `--quire-measure`，让 `Page` 与阅读器标题对齐。
+- Tailwind 主题暴露 `bg-surface`、`text-muted`、`border-line`、`text-accent`、`bg-chart-1..8` 等语义类，不鼓励写死颜色。
+- Mermaid 使用 `base` 主题，节点、连线、文字颜色从 `--quire-*` 计算，切换明暗时重绘。
+- 阅读器侧：Markdown artifact 的导语段放大、标题下显示日期，正文做弯引号与省略号的排印替换。
+- 框架高度按内容实际高度（`getBoundingClientRect`）上报，可增可减；页面本身不出现滚动条。
+
 ## 后续阶段
 
 1. ~~运行时库~~（已完成）。可以继续补 shadcn/ui 组件、mathjs、papaparse 等 Claude 也提供的库。

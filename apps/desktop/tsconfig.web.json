@@ -26,6 +26,7 @@
   "include": [
     "src/preload/index.d.ts",
     "src/renderer/src",
+    "src/artifact-kit",
     "src/shared"
   ]
 }

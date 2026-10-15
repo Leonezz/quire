@@ -23,6 +23,8 @@ html[data-render] body { overflow: visible; }
 /* The passage a citation jumped to, marked for a moment (see quoteJump.ts). */
 ::highlight(read-jump) { background: color-mix(in srgb, var(--accent) 32%, transparent); }
 .reader-body { text-align: var(--reading-align, start); }
+/* An agent artifact's lead: the paragraph before its first heading states the answer, a size up. */
+.artifact-surface .reader-document > p:first-child { margin-bottom: 1.4em; color: var(--label-2); font-size: 1.12em; line-height: 1.55; letter-spacing: -.008em; }
 
 /* Motion: the transitions.dev tokens and recipes from @read/ui; nothing moves for reduced motion. A reader (or a
    preview) switches with a page fade, the side panel reveals itself (`panel-slide`, in @read/ui), and the selection

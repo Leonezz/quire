@@ -1,4 +1,5 @@
 import { transform } from "sucrase";
+import { TAILWIND_THEME } from "./artifact-style";
 
 // The artifact types that run on a bundled runtime in the sandbox (artifact-protocol.ts): a React
 // component and a Mermaid diagram. The libraries are built by scripts/build-artifact-runtime.mjs into
@@ -8,12 +9,13 @@ import { transform } from "sucrase";
 // own React artifacts in Claude import: react, recharts, d3, lucide-react, lodash; Tailwind classes work.
 
 export const RUNTIME_HOST = "runtime";
-export const RUNTIME_FILES = ["react", "recharts", "d3", "lucide", "lodash", "mermaid", "tailwind"] as const;
+export const RUNTIME_FILES = ["react", "quire", "recharts", "d3", "lucide", "lodash", "mermaid", "tailwind"] as const;
 export type RuntimeFile = (typeof RUNTIME_FILES)[number];
 
 /** The runtime file that registers a module, with the files it needs first; undefined for a module Quire does not ship. */
 export function runtimeFilesOf(module: string): RuntimeFile[] | undefined {
   if (module === "react" || module === "react-dom" || module === "react-dom/client" || module === "react/jsx-runtime") return ["react"];
+  if (module === "quire") return ["react", "quire"];
   if (module === "recharts") return ["react", "recharts"];
   if (module === "lucide-react") return ["react", "lucide"];
   if (module === "d3" || /^d3-[a-z-]+$/.test(module)) return ["d3"];
@@ -21,7 +23,7 @@ export function runtimeFilesOf(module: string): RuntimeFile[] | undefined {
   return undefined;
 }
 
-export const RUNTIME_MODULES = "react, react-dom, recharts, d3 (and d3-*), lucide-react, lodash (and lodash/*)";
+export const RUNTIME_MODULES = "quire (Quire's components), react, react-dom, recharts, d3 (and d3-*), lucide-react, lodash (and lodash/*)";
 
 export interface CompiledReact { code: string; files: RuntimeFile[] }
 
@@ -94,30 +96,67 @@ ${scriptSafe(code)}
     createRoot(document.getElementById("root")).render(React.createElement(Boundary, null, React.createElement(App)));
   } catch (error) { quireShowError(error); }
 })();`;
-  return `<!doctype html><html><head>${runtimeScripts(["tailwind", ...files])}</head><body><div id="root"></div><script>${runner}</script></body></html>`;
+  return `<!doctype html><html data-kind="react"><head><style type="text/tailwindcss">${TAILWIND_THEME}</style>${runtimeScripts(["tailwind", ...files])}</head><body><div id="root"></div><script>${runner}</script></body></html>`;
 }
 
-/** The document a Mermaid artifact runs as: the diagram drawn in the reader's scheme, and redrawn when it changes. */
-export function mermaidDocument(source: string, dark: boolean): string {
+/**
+ * The document a Mermaid artifact runs as: the diagram drawn with Mermaid's base theme in the reader's
+ * own colours (read from the --quire-* variables and flattened to the solid colours Mermaid computes
+ * with), and redrawn when the reader's theme changes.
+ */
+export function mermaidDocument(source: string): string {
   const runner = `(() => {
   ${SHOW_ERROR}
   const source = ${scriptSafe(JSON.stringify(source))};
-  let scheme = ${JSON.stringify(dark ? "dark" : "light")};
-  let drawn = 0;
+  const canvas = document.createElement("canvas");
+  canvas.width = canvas.height = 1;
+  const pen = canvas.getContext("2d", { willReadFrequently: true });
+  const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  // A colour as solid hex: drawn over the page background at the given strength, then read back.
+  const solid = (color, strength = 1) => {
+    pen.globalAlpha = 1; pen.fillStyle = "#808080"; pen.fillStyle = css("--quire-bg") || "#ffffff"; pen.fillRect(0, 0, 1, 1);
+    pen.globalAlpha = strength; pen.fillStyle = color; pen.fillRect(0, 0, 1, 1);
+    const [r, g, b] = pen.getImageData(0, 0, 1, 1).data;
+    return "#" + [r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("");
+  };
+  const themeVariables = () => {
+    const accent = css("--quire-accent"), fg = css("--quire-fg"), muted = css("--quire-muted"), warning = css("--quire-warning");
+    const chart = Array.from({ length: 8 }, (_, i) => solid(css("--quire-chart-" + (i + 1))));
+    const vars = {
+      darkMode: document.documentElement.dataset.scheme === "dark", background: solid(css("--quire-bg")), fontFamily: css("--quire-font"), fontSize: "16px",
+      primaryColor: solid(accent, .1), primaryBorderColor: solid(accent, .55), primaryTextColor: solid(fg), mainBkg: solid(accent, .1), nodeBorder: solid(accent, .55),
+      secondaryColor: solid(chart[1], .14), secondaryBorderColor: solid(chart[1], .55), secondaryTextColor: solid(fg),
+      tertiaryColor: solid(css("--quire-surface")), tertiaryBorderColor: solid(css("--quire-border")), tertiaryTextColor: solid(fg),
+      lineColor: solid(muted), textColor: solid(fg), titleColor: solid(fg), edgeLabelBackground: solid(css("--quire-bg")),
+      clusterBkg: solid(css("--quire-surface")), clusterBorder: solid(css("--quire-border")),
+      noteBkgColor: solid(warning, .12), noteBorderColor: solid(warning, .5), noteTextColor: solid(fg),
+      actorBkg: solid(accent, .1), actorBorder: solid(accent, .55), actorTextColor: solid(fg), signalColor: solid(muted), signalTextColor: solid(fg),
+      labelBoxBkgColor: solid(css("--quire-surface")), labelBoxBorderColor: solid(css("--quire-border")),
+      sectionBkgColor: solid(accent, .08), altSectionBkgColor: solid(css("--quire-bg")), taskBkgColor: solid(accent, .55), taskBorderColor: solid(accent), activeTaskBkgColor: solid(chart[1], .7), doneTaskBkgColor: solid(muted, .35), gridColor: solid(css("--quire-border")),
+      pieStrokeColor: solid(css("--quire-bg")), pieOuterStrokeColor: solid(css("--quire-border")), pieTitleTextColor: solid(fg), pieSectionTextColor: "#ffffff", pieLegendTextColor: solid(fg),
+    };
+    chart.forEach((color, i) => { vars["pie" + (i + 1)] = color; vars["cScale" + i] = solid(color, .2); vars["cScaleLabel" + i] = solid(fg); vars["git" + i] = color; });
+    return vars;
+  };
+  let drawn = 0, last = "";
   const draw = async () => {
     const root = document.getElementById("root");
-    const font = getComputedStyle(document.documentElement).getPropertyValue("--quire-font").trim();
-    window.mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: scheme === "dark" ? "dark" : "neutral", ...(font ? { fontFamily: font } : {}) });
+    const variables = themeVariables();
+    const key = JSON.stringify(variables);
+    if (key === last) return;
+    last = key;
+    window.mermaid.initialize({ startOnLoad: false, securityLevel: "strict", theme: "base", themeVariables: variables, fontFamily: variables.fontFamily, flowchart: { curve: "basis", padding: 14, htmlLabels: true }, sequence: { mirrorActors: false } });
     try {
       const { svg } = await window.mermaid.render("quire-diagram-" + (drawn += 1), source);
       root.innerHTML = svg;
-    } catch (error) { quireShowError(error); }
+    } catch (error) { last = ""; quireShowError(error); }
   };
   addEventListener("message", (event) => {
     if (event.source !== parent || !event.data || event.data.quire !== 1 || event.data.type !== "theme") return;
-    if ((event.data.scheme === "dark" || event.data.scheme === "light") && event.data.scheme !== scheme) { scheme = event.data.scheme; draw(); }
+    // The bridge applied the new variables first (it listens earlier); draw again if they changed anything.
+    setTimeout(draw, 0);
   });
   draw();
 })();`;
-  return `<!doctype html><html><head>${runtimeScripts(["mermaid"])}<style>#root{display:flex;justify-content:center;padding:16px}#root svg{max-width:100%;height:auto}</style></head><body><div id="root"></div><script>${runner}</script></body></html>`;
+  return `<!doctype html><html data-kind="mermaid"><head>${runtimeScripts(["mermaid"])}<style>#root{display:flex;justify-content:center;padding:12px 0 16px}#root svg{max-width:100%;height:auto}</style></head><body><div id="root"></div><script>${runner}</script></body></html>`;
 }

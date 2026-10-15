@@ -2,6 +2,7 @@ import { Fragment, useCallback, useMemo, useRef, type ReactNode } from "react";
 import { ReaderDocumentSurface, type ReaderDocumentSurfaceProps } from "@read/reader";
 import type { MaterialRecord, MaterialSummary } from "../../shared/contracts";
 import { numberSources, splitCitations, type CitationSource } from "./citations";
+import { typographic } from "./typography";
 import { displayDate } from "./materialMeta";
 import { useMaterialTitles } from "./useMaterialTitles";
 
@@ -114,10 +115,10 @@ export function useArtifactCitations(material: Pick<MaterialRecord, "lineage">, 
   const openMaterial = useCallback<OpenMaterial>((id, quote) => (quote ? open.current(id, quote) : open.current(id)), []);
   const renderText = useCallback((value: string): ReactNode => {
     const parts = splitCitations(value);
-    if (parts.length === 1 && typeof parts[0] === "string") return value;
+    if (parts.length === 1 && typeof parts[0] === "string") return typographic(value);
     const byId = new Map(sources.map((source) => [source.id, source]));
     return parts.map((part, index) => {
-      if (typeof part === "string") return <Fragment key={index}>{part}</Fragment>;
+      if (typeof part === "string") return <Fragment key={index}>{typographic(part)}</Fragment>;
       const marked = part.ids.map((id) => byId.get(id)).filter((source): source is ResolvedSource => source !== undefined);
       if (marked.length === 0) return <Fragment key={index}>{` [${part.ids.join(", ")}]`}</Fragment>;
       return <CitationMark key={index} sources={marked} quote={part.quote} loaded={loaded} onOpenMaterial={openMaterial} />;
@@ -131,7 +132,9 @@ export function ArtifactSurface({ material, markdown, onOpenMaterial, ...surface
   const { sources, loaded, renderText } = useArtifactCitations(material, markdown, onOpenMaterial);
   return (
     <>
-      <ReaderDocumentSurface {...surface} renderText={renderText} />
+      <div className="artifact-surface">
+        <ReaderDocumentSurface {...surface} renderText={renderText} />
+      </div>
       <ArtifactSources sources={sources} loaded={loaded} onOpenMaterial={onOpenMaterial} />
     </>
   );

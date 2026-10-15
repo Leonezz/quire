@@ -12,6 +12,12 @@ const ignoreMaterial = () => undefined;
 
 const ARTIFACT_TYPE_LABELS: Record<ArtifactType, string> = { markdown: "", code: "Code", html: "HTML", svg: "SVG", react: "Interactive", mermaid: "Diagram" };
 
+/** When an artifact was last written, as the byline shows it: "Oct 15, 2026". */
+export function artifactDate(iso: string): string {
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? "" : date.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" });
+}
+
 /** "Interactive", "Code (python)" for an artifact that is not plain Markdown; empty otherwise. Its versions are the reader's (ArtifactVersions.tsx). */
 export function artifactLabel(artifact: ArtifactInfo | undefined): string {
   if (!artifact) return "";
@@ -62,6 +68,7 @@ export function ReaderArticle({ material, content, prefs, resolveImage, onOpenLi
         <div className="mb-8 flex flex-wrap gap-x-3 text-[12.5px] text-label-2">
           {headerParts(material.meta).map((part) => <span key={part}>{part}</span>)}
           {artifactLabel(material.artifact) ? <span>{artifactLabel(material.artifact)}</span> : null}
+          {material.origin === "agent" && material.artifact ? <span>{artifactDate(material.artifact.updatedAt)}</span> : null}
           <span>{content.readingMinutes} min</span>
           {bylineExtra}
         </div>

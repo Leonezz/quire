@@ -22,9 +22,10 @@ describe("artifact protocol", () => {
     const page = artifactPage("<!doctype html><html lang=\"en\"><head><title>T</title></head><body><p>Hi</p></body></html>", { dark: false });
     expect(page.indexOf("Content-Security-Policy")).toBeLessThan(page.indexOf("<title>"));
     expect(page.indexOf("window.quire")).toBeLessThan(page.indexOf("<title>"));
-    expect(page).toContain("color-scheme:light");
+    expect(page).toContain('dataset.scheme="light"');
+    expect(page).toContain("@layer theme, base, quire, components, utilities");
     const fragment = artifactPage("<p>Only a paragraph</p>", { dark: true });
-    expect(fragment).toMatch(/^<!doctype html><html><head>.*color-scheme:dark.*<\/head><body><p>Only a paragraph<\/p><\/body><\/html>$/s);
+    expect(fragment).toMatch(/^<!doctype html><html><head>.*dataset\.scheme="dark".*<\/head><body><p>Only a paragraph<\/p><\/body><\/html>$/s);
   });
 
   it("serves an HTML artifact with a policy that loads and connects nowhere, and 404s anything else", async () => {
@@ -58,7 +59,7 @@ describe("artifact protocol", () => {
     expect(broken).toContain("does not compile");
     const mermaid = await (await artifactResponse(`quire-artifact://artifact/${ID}?scheme=dark`, sources({ type: "mermaid", source: "graph TD; A-->B</script>" }))).text();
     expect(mermaid).toContain("quire-artifact://runtime/mermaid.js");
-    expect(mermaid).toContain('let scheme = "dark"');
+    expect(mermaid).toContain('dataset.scheme="dark"');
     expect(mermaid).not.toContain("A-->B</script>");
   });
 });
