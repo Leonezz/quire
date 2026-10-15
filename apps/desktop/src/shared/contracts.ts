@@ -599,17 +599,23 @@ export interface ReadApiViews {
 }
 
 // ---------------------------------------------------------------------------
-// Updates: GitHub Releases (alpha channel). Signed builds install in place; unsigned ones offer the download.
+// Updates: GitHub Releases (alpha channel). Signed builds install in place; the others download the
+// installer for this Mac into Downloads and open it.
 // ---------------------------------------------------------------------------
 
 export type UpdateState =
   | { phase: "idle"; current: string; checkedAt?: string }
   | { phase: "checking"; current: string }
   | { phase: "up-to-date"; current: string; checkedAt: string }
-  /** A newer release exists. `canInstall` is true when the running build can replace itself (signed macOS build). */
-  | { phase: "available"; current: string; latest: string; notes?: string; url: string; canInstall: boolean; checkedAt: string }
+  /**
+   * A newer release exists. `canInstall` is true when the running build can replace itself (signed macOS build);
+   * `downloadUrl` is the release's installer for this platform and architecture, when it publishes one.
+   */
+  | { phase: "available"; current: string; latest: string; notes?: string; url: string; canInstall: boolean; downloadUrl?: string; checkedAt: string }
   | { phase: "downloading"; current: string; latest: string; percent: number }
   | { phase: "ready"; current: string; latest: string }
+  /** The installer was saved (the manual path) at `path`; opening it is the next step. */
+  | { phase: "saved"; current: string; latest: string; path: string }
   | { phase: "error"; current: string; message: string; checkedAt: string };
 
 export interface ReadApiUpdates {
@@ -618,7 +624,11 @@ export interface ReadApiUpdates {
   /** Downloads (when not yet) and restarts into the new version; rejects when the build cannot install itself. */
   installUpdate: () => Promise<void>;
   onUpdateState: (listener: (state: UpdateState) => void) => () => void;
-  /** Opens the release page in the browser (the manual path). */
+  /** Saves this Mac's installer into Downloads with progress, then opens it; rejects when the release names none. */
+  downloadUpdate: () => Promise<void>;
+  /** Opens the saved installer again. */
+  openDownloadedUpdate: () => Promise<void>;
+  /** Opens the release page in the browser. */
   openReleasePage: () => Promise<void>;
 }
 

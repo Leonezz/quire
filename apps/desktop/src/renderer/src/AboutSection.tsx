@@ -45,6 +45,7 @@ function statusLine(state: UpdateState | undefined): string {
     case "available": return `v${state.latest} is available`;
     case "downloading": return `Downloading v${state.latest}… ${Math.round(state.percent)}%`;
     case "ready": return `v${state.latest} is downloaded. Restart to update.`;
+    case "saved": return `v${state.latest} is in Downloads. Open it and drag Quire to Applications.`;
     case "error": return state.message;
   }
 }
@@ -54,7 +55,7 @@ const checkLabel = (state: UpdateState | undefined) => (state?.phase === "error"
 export function AboutSection({ version, autoCheck, disabled, onAutoCheck, autoCheckError, autoCheckNote, onOpenLink }: AboutSectionProps) {
   const { state, actionError } = useUpdateStore();
   const busy = state?.phase === "checking" || state?.phase === "downloading";
-  const canCheck = state !== undefined && !busy && state.phase !== "ready";
+  const canCheck = state !== undefined && !busy && state.phase !== "ready" && state.phase !== "saved";
   const isError = state?.phase === "error";
 
   return (
@@ -73,9 +74,10 @@ export function AboutSection({ version, autoCheck, disabled, onAutoCheck, autoCh
               <Button size="sm" variant="plain" onPress={() => void updateStore.openReleasePage()}>Release notes ↗</Button>
               {state.canInstall
                 ? <Button size="sm" variant="primary" onPress={() => void updateStore.install()}>Install and restart</Button>
-                : <Button size="sm" variant="primary" onPress={() => void updateStore.openReleasePage()}>Download</Button>}
+                : <Button size="sm" variant="primary" onPress={() => void (state.downloadUrl ? updateStore.download() : updateStore.openReleasePage())}>Download</Button>}
             </>
           ) : null}
+          {state?.phase === "saved" ? <Button size="sm" variant="primary" onPress={() => void updateStore.openDownloaded()}>Open installer</Button> : null}
           {state?.phase === "ready" ? <Button size="sm" variant="primary" onPress={() => void updateStore.install()}>Restart to update</Button> : null}
         </div>
         {actionError ? <p role="alert" className="t-text-in m-0 text-[12px] text-red-text">{actionError}</p> : null}

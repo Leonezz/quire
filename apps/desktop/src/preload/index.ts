@@ -97,6 +97,8 @@ const api: ReadApi = {
   getUpdateState: () => ipcRenderer.invoke("update:state"),
   checkForUpdates: () => ipcRenderer.invoke("update:check"),
   installUpdate: () => ipcRenderer.invoke("update:install"),
+  downloadUpdate: () => ipcRenderer.invoke("update:download"),
+  openDownloadedUpdate: () => ipcRenderer.invoke("update:openDownloaded"),
   openReleasePage: () => ipcRenderer.invoke("update:openRelease"),
   onUpdateState: (listener) => {
     const handler = (_event: Electron.IpcRendererEvent, state: UpdateState) => listener(state);

@@ -19,6 +19,8 @@ function setup(initial: UpdateState, overrides: Partial<ReturnType<typeof mockRe
     getUpdateState: vi.fn(async () => initial),
     checkForUpdates: vi.fn(async () => available()),
     installUpdate: vi.fn(async () => undefined),
+    downloadUpdate: vi.fn(async () => undefined),
+    openDownloadedUpdate: vi.fn(async () => undefined),
     openReleasePage: vi.fn(async () => undefined),
     onUpdateState: (listener) => { api.listeners.add(listener); return () => { api.listeners.delete(listener); }; },
     ...overrides,
@@ -49,6 +51,18 @@ describe("AboutSection", () => {
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Check for updates" })); await flush(); });
     expect(api.read.checkForUpdates).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("status").textContent).toContain("You're on the latest alpha.");
+  });
+
+  it("downloads this Mac's installer when the release has one and offers to open it once saved", async () => {
+    await mount(available({ downloadUrl: "https://example.test/Quire-0.1.0-alpha.2-arm64.dmg" }));
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Download" })); await flush(); });
+    expect(api.read.downloadUpdate).toHaveBeenCalledTimes(1);
+    expect(api.read.openReleasePage).not.toHaveBeenCalled();
+    push({ phase: "saved", current: CURRENT, latest: "0.1.0-alpha.2", path: "/Downloads/Quire.dmg" });
+    expect(screen.getByRole("status").textContent).toContain("v0.1.0-alpha.2 is in Downloads.");
+    expect(screen.queryByRole("button", { name: "Check for updates" })).toBeNull();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Open installer" })); await flush(); });
+    expect(api.read.openDownloadedUpdate).toHaveBeenCalledTimes(1);
   });
 
   it("offers the download with the notes when the build cannot install, and the install when it can", async () => {

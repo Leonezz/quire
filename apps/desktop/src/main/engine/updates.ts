@@ -4,10 +4,11 @@ import { compareSemver, formatSemver, parseSemver, type SemVer } from "./semver"
 
 // In-app updates over GitHub Releases. Two paths share one state machine:
 //   manual  — always: the releases feed (no rate limit; the API only when the feed cannot be read) names
-//             the newest version; the user downloads it from the release page.
+//             the newest version; the installer for this Mac is saved into Downloads and opened (`download`),
+//             or, when the release publishes none for it, the user takes it from the release page.
 //   install — a signed, packaged build (electron-updater behind `installer`): download, then restart into it.
 // State moves idle → checking → up-to-date | available | error, and from available → downloading → ready
-// on install. Every change goes out through `onState`; `check()` never throws, the state carries the failure.
+// on install, or available → downloading → saved on download. Every change goes out through `onState`; `check()` never throws, the state carries the failure.
 
 export const UPDATE_INSTALL_UNAVAILABLE = "UPDATE_INSTALL_UNAVAILABLE";
 export const UPDATE_NOT_AVAILABLE = "UPDATE_NOT_AVAILABLE";
@@ -16,6 +17,9 @@ export const CHECK_INTERVAL_MS = 24 * 60 * 60_000;
 export const MAX_NOTES_LENGTH = 4000;
 const RELEASES_PER_PAGE = 10;
 const CODE_SIGNATURE = /code signature/i;
+/** electron-builder's `artifactName` (electron-builder.yml): `${productName}-${version}-${arch}.${ext}`. */
+const PRODUCT_NAME = "Quire";
+const INSTALLER_ARCHS = new Set(["arm64", "x64"]);
 
 export interface UpdateFeed { owner: string; repo: string }
 
@@ -57,6 +61,9 @@ export interface UpdateInstaller {
   subscribe: (events: InstallerEvents) => () => void;
 }
 
+/** Saves `url` as `fileName` in the downloads folder, reporting 0–100, and resolves with the saved path. */
+export type SaveDownload = (url: string, fileName: string, onProgress: (percent: number) => void) => Promise<string>;
+
 export interface UpdateServiceOptions {
   currentVersion: string;
   feed: UpdateFeed;
@@ -68,6 +75,10 @@ export interface UpdateServiceOptions {
   /** `settings.checkUpdatesAutomatically`, read at every scheduled tick. */
   autoCheck: () => boolean;
   openExternal: (url: string) => Promise<void>;
+  /** The manual path's download; without it `download` refuses and the release page is the way. */
+  saveDownload?: SaveDownload | undefined;
+  /** Opens a saved file with its default app (the .dmg mounts and shows its window). */
+  openPath?: ((path: string) => Promise<void>) | undefined;
   now?: (() => Date) | undefined;
   /** The feed could not be used and the API was asked instead: said here, never silently. */
   warn?: ((message: string) => void) | undefined;
@@ -112,6 +123,11 @@ export function rateLimitResetLabel(reset: string | null): string | undefined {
 export function rateLimitMessage(reset: string | null): string {
   const label = rateLimitResetLabel(reset);
   return `GitHub's rate limit is exhausted; try again after ${label ?? "a few minutes"}.`;
+}
+
+/** The release's installer for this platform and architecture: a .dmg per Mac architecture, nothing elsewhere. */
+export function installerAsset(platform: string, arch: string, version: string): string | undefined {
+  return platform === "darwin" && INSTALLER_ARCHS.has(arch) ? `${PRODUCT_NAME}-${version}-${arch}.dmg` : undefined;
 }
 
 export class UpdateService {
@@ -167,7 +183,7 @@ export class UpdateService {
   /** One check at a time; a download in progress (or finished) is never interrupted by a check. */
   check(): Promise<UpdateState> {
     if (this.inFlight) return this.inFlight;
-    if (this.state.phase === "downloading" || this.state.phase === "ready") return Promise.resolve(this.state);
+    if (this.state.phase === "downloading" || this.state.phase === "ready" || this.state.phase === "saved") return Promise.resolve(this.state);
     this.inFlight = this.runCheck().finally(() => { this.inFlight = undefined; });
     return this.inFlight;
   }
@@ -190,7 +206,15 @@ export class UpdateService {
     const checkedAt = this.stamp();
     if (compareSemver(latest.version, current) <= 0) return { phase: "up-to-date", current: currentVersion, checkedAt };
     const notes = notesOf(latest.release);
-    return { phase: "available", current: currentVersion, latest: formatSemver(latest.version), ...(notes ? { notes } : {}), url: latest.release.html_url, canInstall: this.canInstall(), checkedAt };
+    const version = formatSemver(latest.version);
+    const downloadUrl = this.downloadUrlOf(latest.release.tag_name, version);
+    return { phase: "available", current: currentVersion, latest: version, ...(notes ? { notes } : {}), url: latest.release.html_url, canInstall: this.canInstall(), ...(downloadUrl ? { downloadUrl } : {}), checkedAt };
+  }
+
+  private downloadUrlOf(tag: string, version: string): string | undefined {
+    if (!this.options.saveDownload) return undefined;
+    const asset = installerAsset(this.options.platform, this.options.arch, version);
+    return asset ? `${this.releasesUrl}/download/${encodeURIComponent(tag)}/${asset}` : undefined;
   }
 
   /** The feed first, because it has no rate limit; the API only when the feed is unreachable or unparsable, which is reported. */
@@ -265,6 +289,40 @@ export class UpdateService {
     if (CODE_SIGNATURE.test(message)) this.installBlocked = true;
     if (this.state.phase === "error") return;
     this.set(this.failure(message));
+  }
+
+  /**
+   * The manual path: saves the available release's installer into Downloads with progress, then opens it.
+   * Rejects with UPDATE_NOT_AVAILABLE when there is no release for this Mac, and with the failure (also
+   * written to the state) when the download or the opening fails.
+   */
+  async download(): Promise<void> {
+    const { saveDownload } = this.options;
+    const state = this.state;
+    if (state.phase === "downloading") return;
+    if (state.phase === "saved") return this.openDownloaded();
+    if (state.phase !== "available" || !state.downloadUrl || !saveDownload) throw new Error(UPDATE_NOT_AVAILABLE);
+    const { current, latest, downloadUrl } = state;
+    const fileName = decodeURIComponent(downloadUrl.slice(downloadUrl.lastIndexOf("/") + 1));
+    this.set({ phase: "downloading", current, latest, percent: 0 });
+    let path: string;
+    try {
+      path = await saveDownload(downloadUrl, fileName, (percent) => {
+        if (this.state.phase === "downloading") this.set({ phase: "downloading", current, latest, percent });
+      });
+    } catch (cause: unknown) {
+      this.set(this.failure(`Could not download ${fileName}: ${messageOf(cause)}`));
+      throw cause instanceof Error ? cause : new Error(messageOf(cause));
+    }
+    this.set({ phase: "saved", current, latest, path });
+    await this.openDownloaded();
+  }
+
+  /** Opens the saved installer; the state stays `saved`, so a failure only rejects. */
+  async openDownloaded(): Promise<void> {
+    if (this.state.phase !== "saved") throw new Error(UPDATE_NOT_AVAILABLE);
+    if (!this.options.openPath) return;
+    await this.options.openPath(this.state.path);
   }
 
   /** The release page of the available version, else the repository's releases. */

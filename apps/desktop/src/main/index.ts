@@ -28,6 +28,7 @@ import { registerM3Handlers } from "./ipc-m3";
 import { isMaterialViewId } from "./engine/material-views";
 import { UpdateService } from "./engine/updates";
 import { createElectronInstaller } from "./update-installer";
+import { createSaveDownload } from "./update-download";
 import { FeedbackStore } from "./engine/feedback";
 import { registerFeedbackHandlers } from "./ipc-feedback";
 import type { FeedbackProgress } from "./engine/feedback-submit";
@@ -314,11 +315,15 @@ const updates = new UpdateService({
   onState: (state) => broadcast("update:state", state),
   autoCheck: () => settings.get().checkUpdatesAutomatically,
   openExternal: (url) => shell.openExternal(url),
+  saveDownload: createSaveDownload({ directory: () => app.getPath("downloads"), fetch: (url, init) => fetch(url, init), userAgent: `Quire/${app.getVersion()} (${process.platform}; ${process.arch})` }),
+  openPath: async (path) => { const failure = await shell.openPath(path); if (failure) throw new Error(failure); },
   warn: (message) => console.warn(message),
 });
 ipcMain.handle("update:state", () => updates.getState());
 ipcMain.handle("update:check", () => updates.check());
 ipcMain.handle("update:install", () => updates.install());
+ipcMain.handle("update:download", () => updates.download());
+ipcMain.handle("update:openDownloaded", () => updates.openDownloaded());
 ipcMain.handle("update:openRelease", () => updates.openReleasePage());
 
 // --- Rendering feedback: bundles under <userData>/feedback, filed by hand as issues on the release repository. ---
