@@ -96,23 +96,28 @@ export function App() {
   // only for the toggle, turns the jump into a slide without fighting the library's own layout or drag resizing.
   const [sidebarSliding, setSidebarSliding] = useState(false);
   const slidingRef = useRef(false);
+  // The sidebar's content fills the panel, except during the slide, when it is pinned to this width so it moves behind the edge instead of squashing.
+  const [slideWidth, setSlideWidth] = useState<number | undefined>(undefined);
+  // The width the sidebar comes back at: the last one the user dragged to, never a slide frame.
+  const lastSidebarWidth = useRef(sidebarWidth);
   const toggleSidebar = useCallback(() => {
     const panel = sidebarRef.current;
     if (!panel || slidingRef.current) return;
     const expanding = panel.isCollapsed();
+    const width = expanding ? lastSidebarWidth.current : Math.round(panel.getSize().inPixels);
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    if (!reduced) { slidingRef.current = true; setSidebarSliding(true); }
+    if (!reduced) { slidingRef.current = true; setSidebarSliding(true); setSlideWidth(width); }
     // The transition class lands on the next paint; the size change follows it so the first frame animates too.
     window.setTimeout(() => {
-      if (expanding) panel.resize(sidebarWidth); else panel.collapse();
+      if (expanding) panel.resize(width); else panel.collapse();
       // The collapsed state is read back from the panel itself once it settled, whatever the resize callbacks reported.
       window.setTimeout(() => {
-        slidingRef.current = false; setSidebarSliding(false);
+        slidingRef.current = false; setSidebarSliding(false); setSlideWidth(undefined);
         const collapsed = panel.isCollapsed();
         setSidebarCollapsed(collapsed); saveSidebarCollapsed(collapsed);
       }, reduced ? 0 : slideMs() + 40);
     }, reduced ? 0 : 16);
-  }, [sidebarRef, sidebarWidth]);
+  }, [sidebarRef]);
   const openSettings = useCallback((section?: SettingsSection) => setSettings({ open: true, section }), []);
 
   useEffect(() => {
@@ -254,13 +259,16 @@ export function App() {
       <SplitPanel id="sidebar" panelRef={sidebarRef} defaultSize={sidebarCollapsed ? 0 : sidebarWidth} minSize={SIDEBAR_MIN} maxSize={320} collapsible collapsedSize={0} className="overflow-hidden"
         onResize={(size, id, previous) => {
           // Only a settled width at or above the minimum is worth remembering.
-          if (size.inPixels >= SIDEBAR_MIN) shellSizes.onResize("sidebar")(size, id, previous);
+          if (size.inPixels >= SIDEBAR_MIN) {
+            shellSizes.onResize("sidebar")(size, id, previous);
+            if (!slidingRef.current) lastSidebarWidth.current = Math.round(size.inPixels);
+          }
           // The mount report is a measurement in progress; the collapsed state follows real changes only.
           if (previous === undefined) return;
           const collapsed = size.inPixels === 0;
           setSidebarCollapsed(collapsed); saveSidebarCollapsed(collapsed);
         }}>
-        <AppSidebar width={sidebarWidth} scope={scope} onScope={setScope} inbox={lists.inbox} queueCount={lists.queue.length} conversationCount={agentSessions.sessions.length} runningCount={agentRunning} tags={library.tags} sources={lists.sources} onHide={toggleSidebar} onOpenSettings={() => openSettings()} />
+        <AppSidebar slideWidth={slideWidth} scope={scope} onScope={setScope} inbox={lists.inbox} queueCount={lists.queue.length} conversationCount={agentSessions.sessions.length} runningCount={agentRunning} tags={library.tags} sources={lists.sources} onHide={toggleSidebar} onOpenSettings={() => openSettings()} />
       </SplitPanel>
       {/* With the sidebar hidden the separator takes no room, so the list segment starts at the window's edge. */}
       <SplitSeparator aria-label="Resize sidebar" hit={sidebarCollapsed ? 0 : 10} footprint={sidebarCollapsed ? 0 : 1} line="always" className={sidebarCollapsed ? "invisible" : ""} />

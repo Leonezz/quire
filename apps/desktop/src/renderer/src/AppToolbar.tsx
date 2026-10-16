@@ -37,14 +37,14 @@ export interface ListToolbarProps {
   sort?: { value: LibrarySort; onChange: (sort: LibrarySort) => void } | undefined;
 }
 
-/** The toolbar's list segment: "Inbox · 47", the search field in Library scopes, the sort at the far right. */
+/** The toolbar's list segment: "Inbox · 47", the sort at the far right (its icon alone while the traffic lights' inset takes the room). */
 export function ListToolbar({ title, count, inset, onShowSidebar, sort }: ListToolbarProps) {
   return (
     // With the sidebar hidden the segment starts under the traffic lights: 92px keeps the toggle clear of them, as Mail does.
     <header aria-label="List toolbar" className={`titlebar-drag flex h-[52px] min-w-0 items-center gap-2.5 overflow-hidden border-b border-separator pr-2.5 ${inset ? "pl-[92px]" : "pl-3.5"}`}>
       {inset ? <ToolbarButton aria-label="Show sidebar (⌘\\)" isSelected={false} onChange={onShowSidebar} className="reader-enter shrink-0"><PanelLeft /></ToolbarButton> : null}
       <strong className="min-w-[64px] shrink truncate text-[13.5px] font-semibold leading-[18px] tracking-[-.01em] text-label">{title} <span className="font-medium tabular-nums text-label-3">· {count}</span></strong>
-      {sort ? <div className="ml-auto"><SortMenu sort={sort.value} onChange={sort.onChange} compact={false} /></div> : null}
+      {sort ? <div className="ml-auto"><SortMenu sort={sort.value} onChange={sort.onChange} compact={inset} /></div> : null}
     </header>
   );
 }
