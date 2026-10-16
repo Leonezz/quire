@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateState } from "../../shared/contracts";
-import { CHECK_INTERVAL_MS, FIRST_CHECK_DELAY_MS, UPDATE_INSTALL_UNAVAILABLE, UPDATE_NOT_AVAILABLE, UpdateService, pickLatestRelease, rateLimitMessage, rateLimitResetLabel, type GithubRelease, type InstallerEvents, type UpdateFetch, type UpdateFetchResponse, type UpdateInstaller, type UpdateServiceOptions } from "./updates";
+import { CHECK_INTERVAL_MS, FIRST_CHECK_DELAY_MS, UPDATE_INSTALL_UNAVAILABLE, UPDATE_NOT_AVAILABLE, UpdateService, installerAsset, pickLatestRelease, rateLimitMessage, rateLimitResetLabel, type GithubRelease, type InstallerEvents, type UpdateFetch, type UpdateFetchResponse, type UpdateInstaller, type UpdateServiceOptions } from "./updates";
 
 const RELEASES_URL = "https://github.com/Leonezz/quire/releases";
 const FEED_URL = "https://github.com/Leonezz/quire/releases.atom";
@@ -226,6 +226,49 @@ describe("UpdateService.install", () => {
     await expect(updates.install()).rejects.toThrow("net::ERR_CONNECTION_RESET");
     expect(updates.getState()).toMatchObject({ phase: "error", message: "net::ERR_CONNECTION_RESET" });
     expect(await updates.check()).toMatchObject({ phase: "available", canInstall: true });
+  });
+});
+
+describe("UpdateService.download", () => {
+  const DMG_URL = `${RELEASES_URL}/download/v0.1.0-alpha.2/Quire-0.1.0-alpha.2-arm64.dmg`;
+
+  it("names a .dmg per Mac architecture and nothing elsewhere", () => {
+    expect(installerAsset("darwin", "x64", "0.1.0-alpha.2")).toBe("Quire-0.1.0-alpha.2-x64.dmg");
+    expect(installerAsset("darwin", "ia32", "0.1.0-alpha.2")).toBeUndefined();
+    expect(installerAsset("linux", "x64", "0.1.0-alpha.2")).toBeUndefined();
+  });
+
+  it("offers this Mac's installer only when it can save downloads", async () => {
+    const without = service({ fetch: jsonFetch(200, [release("v0.1.0-alpha.2")]) });
+    expect(await without.updates.check()).not.toHaveProperty("downloadUrl");
+    await expect(without.updates.download()).rejects.toThrow(UPDATE_NOT_AVAILABLE);
+    const intel = service({ fetch: jsonFetch(200, [release("v0.1.0-alpha.2")]), arch: "x64", saveDownload: vi.fn(async () => "/tmp/x") });
+    expect(await intel.updates.check()).toMatchObject({ downloadUrl: `${RELEASES_URL}/download/v0.1.0-alpha.2/Quire-0.1.0-alpha.2-x64.dmg` });
+  });
+
+  it("saves the installer with progress, then opens it, and opens it again on request", async () => {
+    const saveDownload = vi.fn(async (_url: string, _name: string, onProgress: (percent: number) => void) => { onProgress(40); onProgress(100); return "/Users/me/Downloads/Quire-0.1.0-alpha.2-arm64.dmg"; });
+    const openPath = vi.fn(async () => undefined);
+    const { updates, states } = service({ fetch: jsonFetch(200, [release("v0.1.0-alpha.2")]), saveDownload, openPath });
+    expect(await updates.check()).toMatchObject({ phase: "available", canInstall: false, downloadUrl: DMG_URL });
+    await updates.download();
+    expect(saveDownload).toHaveBeenCalledWith(DMG_URL, "Quire-0.1.0-alpha.2-arm64.dmg", expect.any(Function));
+    expect(states.map((state) => state.phase)).toEqual(["checking", "available", "downloading", "downloading", "downloading", "saved"]);
+    expect(updates.getState()).toEqual({ phase: "saved", current: "0.1.0-alpha.1", latest: "0.1.0-alpha.2", path: "/Users/me/Downloads/Quire-0.1.0-alpha.2-arm64.dmg" });
+    expect(openPath).toHaveBeenCalledTimes(1);
+    // A check leaves the saved installer alone; opening it again does not download again.
+    expect(await updates.check()).toMatchObject({ phase: "saved" });
+    await updates.openDownloaded();
+    expect(openPath).toHaveBeenCalledTimes(2);
+    expect(saveDownload).toHaveBeenCalledTimes(1);
+  });
+
+  it("turns a failed download into an error state naming the file", async () => {
+    const saveDownload = vi.fn(async () => { throw new Error("the release has no installer for this Mac"); });
+    const { updates } = service({ fetch: jsonFetch(200, [release("v0.1.0-alpha.2")]), saveDownload });
+    await updates.check();
+    await expect(updates.download()).rejects.toThrow("no installer");
+    expect(updates.getState()).toMatchObject({ phase: "error", message: "Could not download Quire-0.1.0-alpha.2-arm64.dmg: the release has no installer for this Mac" });
   });
 });
 

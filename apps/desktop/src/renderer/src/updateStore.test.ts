@@ -12,6 +12,8 @@ function harness(overrides: Partial<UpdateStoreApi> = {}) {
     getUpdateState: vi.fn(async () => idle),
     checkForUpdates: vi.fn(async () => available("0.1.0-alpha.2")),
     installUpdate: vi.fn(async () => undefined),
+    downloadUpdate: vi.fn(async () => undefined),
+    openDownloadedUpdate: vi.fn(async () => undefined),
     openReleasePage: vi.fn(async () => undefined),
     onUpdateState: (listener) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
     ...overrides,

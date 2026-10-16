@@ -27,9 +27,9 @@ function messageOf(cause: unknown, fallback: string): string {
   return text.length > 0 ? text : fallback;
 }
 
-/** The version a banner would announce: the available or downloaded one. */
+/** The version a banner would announce: the available one, through its download, until it is installed or saved. */
 export function latestOf(state: UpdateState | undefined): string | undefined {
-  return state && (state.phase === "available" || state.phase === "ready") ? state.latest : undefined;
+  return state && (state.phase === "available" || state.phase === "downloading" || state.phase === "ready" || state.phase === "saved") ? state.latest : undefined;
 }
 
 export function createUpdateStore(api: UpdateStoreApi) {
@@ -70,6 +70,16 @@ export function createUpdateStore(api: UpdateStoreApi) {
         if (state.state?.phase !== "error") fail(cause, "Could not install the update.");
       }
     },
+    /** The manual path: saves this Mac's installer and opens it; a failure shows as the error state. */
+    download: async () => {
+      set({ ...state, actionError: undefined });
+      try { await api.downloadUpdate(); }
+      catch (cause: unknown) { if (state.state?.phase !== "error") fail(cause, "Could not download the update."); }
+    },
+    openDownloaded: async () => {
+      try { await api.openDownloadedUpdate(); }
+      catch (cause: unknown) { fail(cause, "Could not open the downloaded installer."); }
+    },
     openReleasePage: async () => {
       try { await api.openReleasePage(); }
       catch (cause: unknown) { fail(cause, "Could not open the release page."); }
@@ -88,6 +98,8 @@ export const updateStore: UpdateStore = createUpdateStore({
   getUpdateState: () => read.getUpdateState(),
   checkForUpdates: () => read.checkForUpdates(),
   installUpdate: () => read.installUpdate(),
+  downloadUpdate: () => read.downloadUpdate(),
+  openDownloadedUpdate: () => read.openDownloadedUpdate(),
   openReleasePage: () => read.openReleasePage(),
   onUpdateState: (listener) => read.onUpdateState(listener),
 });
