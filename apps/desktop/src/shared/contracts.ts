@@ -79,7 +79,8 @@ export interface MaterialRecord extends MaterialSummary {
 }
 
 export type OpenUrlResult =
-  | { ok: true; material: MaterialRecord }
+  /** `existing`: the page or file was in the library already and comes back as stored, not fetched again. */
+  | { ok: true; material: MaterialRecord; existing?: true }
   | { ok: false; code: string; message: string };
 
 export interface OpenFileInput {
@@ -490,6 +491,23 @@ export interface Settings {
 /** What updateSettings accepts: every editable field, plus the write-only key ("" removes it). */
 export type SettingsPatch = Partial<Omit<Settings, "dataDirectory" | "typesafeApiKeySet">> & { typesafeApiKey?: string };
 
+/** A delete that went through. `picturesKept`: the cached pictures of the deleted materials could not be forgotten, and why. */
+export interface DeleteMaterialsResult {
+  picturesKept?: string;
+}
+
+/** Bytes on disk in the data directory, by what they hold (Settings › Storage). */
+export interface StorageUsage {
+  /** Records, captured pages, PDFs and view files (materials/). */
+  materials: number;
+  /** Pictures cached for reading without the network (images/). */
+  images: number;
+  /** Figure crops of PDF text views (figures/). */
+  figures: number;
+  /** Sources, items, reading events, metadata overrides and agent sessions (quire.sqlite with its WAL files). */
+  database: number;
+}
+
 export interface AgentTurnRecord {
   id: string;
   role: "user" | "agent";
@@ -526,13 +544,15 @@ export interface ReadApiM3 {
   /** BibTeX entries for the given materials, from their effective metadata. */
   exportBibtex: (ids: string[]) => Promise<string>;
   listTags: () => Promise<TagCount[]>;
-  /** Removes the records, their bytes, images are left in the shared cache; items that pointed at them lose the link. */
-  deleteMaterials: (ids: string[]) => Promise<void>;
+  /** Removes the records, their bytes and the cached pictures no remaining material shows; items that pointed at them lose the link. */
+  deleteMaterials: (ids: string[]) => Promise<DeleteMaterialsResult>;
   /** Keep an Inbox/Queue item in the library without reading it (materializes it, marks it kept). */
   keepItem: (id: string) => Promise<OpenUrlResult>;
 
   getSettings: () => Promise<Settings>;
   updateSettings: (patch: SettingsPatch) => Promise<Settings>;
+  /** What the data directory holds, measured at each call. */
+  storageUsage: () => Promise<StorageUsage>;
 
   listAgentSessions: () => Promise<AgentSessionSummary[]>;
   getAgentSession: (id: string) => Promise<AgentSession | undefined>;

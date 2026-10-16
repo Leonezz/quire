@@ -81,6 +81,7 @@ const api: ReadApi = {
   keepItem: (id) => ipcRenderer.invoke("item:keep", id),
   getSettings: () => ipcRenderer.invoke("settings:get"),
   updateSettings: (patch) => ipcRenderer.invoke("settings:update", patch),
+  storageUsage: () => ipcRenderer.invoke("storage:usage"),
   listAgentSessions: () => ipcRenderer.invoke("agent:sessions:list"),
   getAgentSession: (id) => ipcRenderer.invoke("agent:sessions:get", id),
   deleteAgentSession: (id) => ipcRenderer.invoke("agent:sessions:delete", id),

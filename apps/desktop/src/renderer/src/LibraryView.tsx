@@ -31,6 +31,9 @@ export function selectedIds(selection: Selection, materials: readonly MaterialSu
   return selection === "all" ? materials.map((item) => item.id) : materials.filter((item) => selection.has(item.id)).map((item) => item.id);
 }
 
+/** A status about one material, said in the action bar while it alone is selected (it was in the library already). */
+export interface LibraryNotice { materialId: string; text: string }
+
 export interface LibraryViewProps {
   library: Library;
   selected: Selection;
@@ -43,6 +46,7 @@ export interface LibraryViewProps {
   shell: ShellSlots;
   /** The scope is narrower than the whole library (a cut or a tag): an empty list says so. */
   narrowed: boolean;
+  notice?: LibraryNotice | undefined;
 }
 
 /**
@@ -50,17 +54,19 @@ export interface LibraryViewProps {
  * after asking, an action bar at the bottom while something is selected), the reader of the one
  * selected material on the right.
  */
-export function LibraryView({ library, selected, onSelectionChange, onOpenLink, onOpenMaterial, jumpToQuote, onOpenSettings, shell, narrowed }: LibraryViewProps) {
+export function LibraryView({ library, selected, onSelectionChange, onOpenLink, onOpenMaterial, jumpToQuote, onOpenSettings, shell, narrowed, notice }: LibraryViewProps) {
   const { materials, error, loading } = library;
   const [confirming, setConfirming] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | undefined>(undefined);
+  /** A delete went through but kept the pictures: why, said under the list until something is selected again. */
+  const [picturesKept, setPicturesKept] = useState<string | undefined>(undefined);
   const [bibtex, setBibtex] = useState<{ tone: "ok" | "error"; text: string } | undefined>(undefined);
   const ids = selectedIds(selected, materials);
   const chosen = ids.length === 1 ? materials.find((item) => item.id === ids[0]) : undefined;
   const searching = library.query.trim() !== "";
   const idsKey = ids.join(",");
-  useEffect(() => { setBibtex(undefined); }, [idsKey]);
+  useEffect(() => { setBibtex(undefined); if (idsKey !== "") setPicturesKept(undefined); }, [idsKey]);
 
   // ⌫ / Delete with a selection asks to delete it, unless the focus is in a text field.
   useEffect(() => {
@@ -85,21 +91,29 @@ export function LibraryView({ library, selected, onSelectionChange, onOpenLink, 
   const remove = async () => {
     setDeleting(true); setDeleteError(undefined);
     try {
-      await read.deleteMaterials(ids);
+      const result = await read.deleteMaterials(ids);
       setConfirming(false);
       onSelectionChange(new Set());
+      setPicturesKept(result.picturesKept);
       await library.refresh();
     } catch (cause: unknown) {
       setDeleteError(cause instanceof Error ? cause.message : "Could not delete the selected materials.");
     } finally { setDeleting(false); }
   };
 
+  // The notice gets a line of its own: beside the two buttons a narrow list column would cut it off.
+  const noticeText = !bibtex && notice && chosen?.id === notice.materialId ? notice.text : undefined;
   const actionBar = ids.length > 0 ? (
-    <div className="flex items-center gap-2 border-t border-separator px-3 py-1.5 text-[12.5px] text-label-2">
-      <span className="min-w-0 truncate">{bibtex ? <span role={bibtex.tone === "error" ? "alert" : "status"} className={bibtex.tone === "error" ? "text-red-text" : ""}>{bibtex.text}</span> : `${ids.length} selected`}</span>
-      <Button size="sm" variant="quiet" className="ml-auto" onPress={() => void copyBibtex()}><Copy />Copy BibTeX</Button>
-      <Button size="sm" variant="quiet" className="text-red-text" onPress={() => { setDeleteError(undefined); setConfirming(true); }}><Trash2 />Delete {ids.length} <Kbd>⌫</Kbd></Button>
+    <div className="border-t border-separator text-[12.5px] text-label-2">
+      {noticeText ? <p role="status" className="m-0 px-3 pt-1.5">{noticeText}</p> : null}
+      <div className="flex items-center gap-2 px-3 py-1.5">
+        <span className="min-w-0 truncate">{bibtex ? <span role={bibtex.tone === "error" ? "alert" : "status"} className={bibtex.tone === "error" ? "text-red-text" : ""}>{bibtex.text}</span> : noticeText ? null : `${ids.length} selected`}</span>
+        <Button size="sm" variant="quiet" className="ml-auto" onPress={() => void copyBibtex()}><Copy />Copy BibTeX</Button>
+        <Button size="sm" variant="quiet" className="text-red-text" onPress={() => { setDeleteError(undefined); setConfirming(true); }}><Trash2 />Delete {ids.length} <Kbd>⌫</Kbd></Button>
+      </div>
     </div>
+  ) : picturesKept ? (
+    <div className="border-t border-separator px-3 py-1.5 text-[12.5px]"><span role="alert" className="text-red-text">{picturesKept}</span></div>
   ) : undefined;
   const empty = searching ? "Nothing matches your search." : narrowed ? "Nothing here yet." : "Nothing kept yet — press ⌘N and paste a page URL to read it here.";
 

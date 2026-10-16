@@ -8,9 +8,9 @@ import { bibtexOf } from "../../shared/bibtex";
 import { applyArtifactEdit, artifactContent, artifactInfoOf, artifactSourceOf, artifactSourceProblem } from "./artifacts";
 import { captureTextOf } from "./capture-text";
 import { FetchError, assertPublicHttpUrl, fetchPage, type Fetcher } from "./fetch";
-import { NORMALIZE_BUDGET, degradedQuality, isHtml, isPdf, markdownParts, mediaTypeForName, pdfContent, pickRepresentations, titleFromHtml } from "./material-content";
-import { effectiveOf, searchFieldsOf, summaryOf, withExtracted, type StoredRecord } from "./material-record";
-import { failedView, mediaTypeFitsView, primaryContentOf, primaryPdfPath, primaryViewOf, readViewContent, readyView, swapPrimaryFiles, upsertView, viewFilePaths, viewPdfPath, viewsOf, withContent, withPrimaryView, writeViewContent } from "./material-views";
+import { NORMALIZE_BUDGET, degradedQuality, imageReferencesOf, isHtml, isPdf, markdownParts, mediaTypeForName, pdfContent, pickRepresentations, titleFromHtml, type ContentFields } from "./material-content";
+import { effectiveOf, searchFieldsOf, summaryOf, withExtracted, withItemMeta, type StoredRecord } from "./material-record";
+import { MATERIAL_VIEW_IDS, failedView, mediaTypeFitsView, mergeViews, primaryContentOf, primaryPdfPath, primaryViewOf, readViewContent, readyView, swapPrimaryFiles, upsertView, viewFilePaths, viewPdfPath, viewsOf, withContent, withPrimaryView, writeViewContent } from "./material-views";
 import { PdfError, inspectPdf } from "./pdf";
 import { buildTextView } from "./pdf-reflow";
 import type { BlockJudge } from "./pdf-reflow/judge";
@@ -27,6 +27,28 @@ function sha256(bytes: Uint8Array): `sha256:${string}` {
 
 function idFor(url: string): string {
   return createHash("sha256").update(url).digest("hex").slice(0, 16);
+}
+
+/** The URL a fetch would end at when nothing redirects: the fragment never reaches the server. */
+function withoutHash(url: URL): string {
+  const page = new URL(url);
+  page.hash = "";
+  return page.toString();
+}
+
+/** A page the extractor could not read (a bot challenge, an error page), kept as its plain text. */
+function isUnreadablePage(record: StoredRecord): boolean {
+  return record.quality.safety === "degraded_plaintext";
+}
+
+/** The text a feed carried, kept because the page itself could not be fetched. */
+function isFeedCopy(record: StoredRecord): boolean {
+  return record.problems.some((problem) => problem.code === "FEED_CONTENT_FALLBACK");
+}
+
+/** A copy kept only because the page itself could not be read. Adding its URL again fetches it again. */
+function isFallbackCopy(record: StoredRecord): boolean {
+  return isUnreadablePage(record) || isFeedCopy(record);
 }
 
 export interface MaterialStoreOptions {
@@ -77,26 +99,56 @@ export class MaterialStore {
 
   private get dir() { return join(this.root, "materials"); }
 
-  /** Fetches and materializes a public page. `origin` marks material that arrived through a subscription. */
+  /**
+   * Fetches and materializes a public page. `origin` marks material that arrived through a subscription;
+   * `item` is what that item declared. A page already in the library (found by the URL as given, then by
+   * where the fetch ended) comes back as stored, `existing`, with the item merged in; only a fallback copy
+   * is materialized again, keeping its other views and its item's metadata. A page the extractor cannot
+   * read never replaces the feed's copy of it.
+   */
   async openUrl(raw: string, origin: "web" | "feed" = "web", item?: MaterialMeta): Promise<OpenUrlResult> {
     try {
       const url = assertPublicHttpUrl(raw);
+      const known = await this.read(idFor(withoutHash(url)));
+      if (known && !isFallbackCopy(known)) return this.existing(known, item);
       const page = await this.fetch(url);
-      const record = await this.materializeAny(page.bytes, page.mediaType, page.finalUrl, raw, origin, idFor(page.finalUrl), item);
-      return { ok: true, material: this.decorate(await this.save(record)) };
+      const id = idFor(page.finalUrl);
+      // Looked up before materializing, which already writes the capture (or the PDF) under this id.
+      const previous = await this.read(id);
+      if (previous && !isFallbackCopy(previous)) return this.existing(previous, item);
+      const itemMeta = previous?.itemMeta ? { ...previous.itemMeta, ...item } : item;
+      const record = await this.materializeAny(page.bytes, page.mediaType, page.finalUrl, raw, origin, id, itemMeta);
+      if (previous && isFeedCopy(previous) && isUnreadablePage(record)) {
+        // The feed's copy has the text; the capture just written is the unreadable page's.
+        await rm(this.htmlPath(id), { force: true });
+        return this.existing(previous, item);
+      }
+      return { ok: true, material: this.decorate(await this.save(previous ? mergeViews(previous, record) : record)) };
     } catch (error) {
       return failureOf(error, "Could not read this page.");
     }
   }
 
-  /** A dropped or opened file. The bytes already crossed the bridge; only the type is decided here. */
+  /** A material already in the library, as stored; what an item declared is merged in, and written only when it adds something. */
+  private async existing(record: StoredRecord, item: MaterialMeta | undefined): Promise<OpenUrlResult> {
+    if (!item) return { ok: true, material: this.decorate(record), existing: true };
+    const itemMeta = { ...record.itemMeta, ...item };
+    const unchanged = JSON.stringify(itemMeta) === JSON.stringify(record.itemMeta);
+    const stored = unchanged ? record : await this.save(withItemMeta(record, itemMeta, await this.pageOf(record)));
+    return { ok: true, material: this.decorate(stored), existing: true };
+  }
+
+  /** A dropped or opened file. The bytes already crossed the bridge; only the type is decided here. The same bytes dropped again come back as stored. */
   async openFile(input: OpenFileInput): Promise<OpenUrlResult> {
     try {
+      const id = sha256(input.bytes).slice(7, 23);
+      const known = await this.read(id);
+      if (known) return { ok: true, material: this.decorate(known), existing: true };
       const name = input.name.replace(/[\\/]/g, "_").slice(0, 200) || "file";
       const mediaType = input.mediaType || mediaTypeForName(name);
       // The article extractor only resolves http(s) bases; a synthetic origin keeps relative links well-formed.
       const locator = `https://file.local/${encodeURIComponent(name)}`;
-      const record = await this.materializeAny(input.bytes, mediaType, locator, `file:///${encodeURIComponent(name)}`, "file", sha256(input.bytes).slice(7, 23));
+      const record = await this.materializeAny(input.bytes, mediaType, locator, `file:///${encodeURIComponent(name)}`, "file", id);
       return { ok: true, material: this.decorate(await this.save(record)) };
     } catch (error) {
       return failureOf(error, "Could not read this file.");
@@ -252,9 +304,17 @@ export class MaterialStore {
 
   /** Re-runs extraction on the stored capture (or the record's own fields) and replaces the extracted layer; overrides stay. */
   async refreshMetadata(id: string): Promise<MaterialRecord> {
-    const record = await this.require(id);
-    const html = isHtml(record.mediaType) ? await this.readOptional(this.htmlPath(id)) : undefined;
-    return this.decorate(await this.save(withExtracted(record, html)));
+    return this.decorate(await this.save(await this.extractedAgain(await this.require(id))));
+  }
+
+  /** The record with its extracted layer computed again, from the stored capture when it is a page. */
+  private async extractedAgain(record: StoredRecord): Promise<StoredRecord> {
+    return withExtracted(record, await this.pageOf(record));
+  }
+
+  /** The captured page the record was read from; undefined when none was kept or another view is primary. */
+  private async pageOf(record: StoredRecord): Promise<Uint8Array | undefined> {
+    return isHtml(record.mediaType) ? this.readOptional(this.htmlPath(record.id)) : undefined;
   }
 
   /** BibTeX entries for the given materials, in the given order, separated by blank lines; unknown ids are skipped. */
@@ -378,24 +438,33 @@ export class MaterialStore {
 
   /**
    * A material built from the copy a feed carried, used when the page itself could not be
-   * fetched. The FEED_CONTENT_FALLBACK problem marks it so the reader can say so.
+   * fetched. The FEED_CONTENT_FALLBACK problem marks it so the reader can say so. A material
+   * already stored under the link (the page, or another item's copy) is returned, never replaced,
+   * unless it is a page the extractor could not read: the copy takes its place, keeping its other
+   * views and its item's metadata, and its capture goes.
    */
   async saveFromFeed(input: FeedMaterialInput): Promise<MaterialRecord> {
+    const id = idFor(input.url);
+    const known = await this.read(id);
+    if (known && !isUnreadablePage(known)) return this.decorate(known);
+    const itemMeta = known?.itemMeta ? { ...known.itemMeta, ...input.meta } : input.meta;
     const plain = input.content.plain ?? input.content.markdown ?? "";
     const record = withExtracted({
-      id: idFor(input.url), url: input.url, finalUrl: input.url, title: input.title, fetchedAt: new Date().toISOString(),
+      id, url: input.url, finalUrl: input.url, title: input.title, fetchedAt: new Date().toISOString(),
       origin: "feed", mediaType: "text/html", readingMinutes: readingMinutes(plain),
       ...(input.byline ? { byline: input.byline } : {}),
       ...(input.publishedAt ? { publishedAt: input.publishedAt } : {}),
       ...(input.lang ? { lang: input.lang } : {}),
-      ...(input.meta ? { itemMeta: input.meta } : {}),
+      ...(itemMeta ? { itemMeta } : {}),
       ...(input.content.reader ? { reader: input.content.reader } : {}),
       ...(input.content.markdown ? { markdown: input.content.markdown } : {}),
       ...(input.content.plain ? { plain: input.content.plain } : {}),
       quality: { completeness: "declared_full", conformance: "conformant", identityConfidence: "medium", safety: "safe", warnings: [] },
       problems: [{ code: "FEED_CONTENT_FALLBACK", recoverBy: "reopen", scope: "capture", severity: "warning" }],
     });
-    return this.decorate(await this.save(record));
+    if (!known) return this.decorate(await this.save(record));
+    await rm(this.htmlPath(id), { force: true });
+    return this.decorate(await this.save(mergeViews(known, record)));
   }
 
   /** Materializes every eval snapshot (corpus/<slug>/page.html.gz + meta.json) that is not in the library yet. */
@@ -462,6 +531,45 @@ export class MaterialStore {
       this.meta?.remove(id);
     }
     return deleted;
+  }
+
+  /**
+   * The pictures every rendering of these materials shows (of every material when no ids are given):
+   * the record's, each stored view's and each kept artifact revision's, every file read once. A cached
+   * image none of them shows is unused; deleting materials forgets those (library.ts).
+   */
+  async imageReferences(ids?: readonly string[]): Promise<Set<string>> {
+    const invalid = ids?.find((id) => !ID.test(id));
+    if (invalid !== undefined) throw new Error(`Not a material id: ${invalid}`);
+    await mkdir(this.dir, { recursive: true });
+    const names = new Set(await readdir(this.dir));
+    const materials = ids ? [...new Set(ids)] : [...names].filter((name) => RECORD_FILE.test(name)).map((name) => name.slice(0, -".json".length));
+    const urls = new Set<string>();
+    for (const id of materials) for (const url of await this.materialImageReferences(id, names)) urls.add(url);
+    return urls;
+  }
+
+  private async materialImageReferences(id: string, names: ReadonlySet<string>): Promise<string[]> {
+    try {
+      const record = await this.read(id);
+      if (!record) return [];
+      const views = await Promise.all(MATERIAL_VIEW_IDS.filter((view) => names.has(`${id}.${view}.json`)).map((view) => readViewContent(this.dir, id, view)));
+      const renderings: (ContentFields | undefined)[] = [record, ...views, ...(await this.revisionContents(record, names))];
+      return renderings.flatMap((content) => (content ? imageReferencesOf(content, record.finalUrl) : []));
+    } catch (error) {
+      throw new Error(`Could not read the pictures of material ${id}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+    }
+  }
+
+  /** What each kept revision of an artifact rendered. */
+  private async revisionContents(record: StoredRecord, names: ReadonlySet<string>): Promise<ContentFields[]> {
+    const info = artifactInfoOf(record);
+    if (!info) return [];
+    const versions = Array.from({ length: info.version - 1 }, (_, index) => index + 1).filter((version) => names.has(`${record.id}.rev${version}.json`));
+    const revisions = await Promise.all(versions.map((version) => this.artifactRevision(record.id, version)));
+    return revisions
+      .filter((revision): revision is ArtifactRevision => revision !== undefined)
+      .map((revision) => artifactContent({ type: info.type, source: revision.source, title: revision.title, language: info.language, url: record.url }));
   }
 
   private async read(id: string): Promise<StoredRecord | undefined> {

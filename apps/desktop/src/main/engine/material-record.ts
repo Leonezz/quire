@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { MaterialMeta, MaterialRecord, MaterialSummary, MaterialView, MaterialViewId } from "../../shared/contracts";
 import { artifactInfoOf } from "./artifacts";
 import { isHtml } from "./material-content";
@@ -40,6 +41,24 @@ function extractedFor(record: StoredRecord, html?: Uint8Array): MaterialMeta {
 /** A record with its extracted layer computed from its own fields (and the page bytes when it is HTML). */
 export function withExtracted(record: StoredRecord, html?: Uint8Array): StoredRecord {
   return { ...record, extracted: extractedFor(record, html) };
+}
+
+/**
+ * The record with what an item declared. With the page at hand the layer is extracted again. Without it
+ * (no capture kept, or another view made primary) a field the record's own fields and its old item do
+ * not account for came from the page, so it stays as stored; every other field is extracted again.
+ */
+export function withItemMeta(record: StoredRecord, itemMeta: MaterialMeta, html?: Uint8Array): StoredRecord {
+  const next = { ...record, itemMeta };
+  if (html && isHtml(record.mediaType)) return withExtracted(next, html);
+  const stored = extractedOf(record);
+  const unpaged = extractedFor(record);
+  const again = extractedFor(next);
+  const keys = [...new Set([...Object.keys(stored), ...Object.keys(again)])] as (keyof MaterialMeta)[];
+  const extracted = Object.fromEntries(keys
+    .map((key) => [key, isDeepStrictEqual(stored[key], unpaged[key]) ? again[key] : stored[key]] as const)
+    .filter(([, value]) => value !== undefined)) as MaterialMeta;
+  return { ...next, extracted };
 }
 
 /** The stored layer, derived from the extractor's fields for records written before it was stored. */

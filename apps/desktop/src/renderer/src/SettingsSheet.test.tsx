@@ -27,6 +27,7 @@ function engine(initial: Settings) {
   });
   api.read = mockRead({
     getSettings: vi.fn(async () => current), updateSettings,
+    storageUsage: vi.fn(async () => ({ materials: 0, images: 0, figures: 0, database: 0 })),
     agentStatus: vi.fn(async () => ({ available: false, reason: "Codex is not installed.", running: 0 })),
     getUpdateState: vi.fn(async () => ({ phase: "idle" as const, current: "0.1.0" })),
     feedbackList: vi.fn(async () => []),
@@ -131,6 +132,37 @@ describe("SettingsSheet › Agent › TypeSafe key and reflow judge", () => {
     await act(async () => { fireEvent.click(screen.getByRole("radio", { name: "Jev" })); await flush(); });
     expect(screen.getByRole("alert").textContent).toBe("The stored typesafeApiKey could not be decrypted. Remove it and enter it again.");
     expect(screen.getByRole("radio", { name: "Rules" }).getAttribute("aria-checked")).toBe("true");
+  });
+});
+
+describe("SettingsSheet › Storage", () => {
+  const MB = 1024 * 1024;
+  const usagePairs = () => [...screen.getByLabelText("Storage used").querySelectorAll("dt")].map((term) => `${term.textContent} ${term.nextElementSibling?.textContent}`);
+
+  it("shows what the data directory holds by part and in total, measured each time the sheet opens", async () => {
+    engine(base);
+    api.read.storageUsage = vi.fn(async () => ({ materials: 19 * MB, images: 51.5 * MB, figures: 5_662_310, database: 300 * 1024 }));
+    const { rerender } = render(<SettingsSheet open onClose={() => undefined} section="storage" onOpenLink={() => undefined} />);
+    await act(flush);
+    expect(usagePairs()).toEqual(["Materials 19.0 MB", "Images 51.5 MB", "Figures 5.4 MB", "Database 300 KB", "Total 76.2 MB"]);
+    expect(api.read.storageUsage).toHaveBeenCalledTimes(1);
+
+    api.read.storageUsage = vi.fn(async () => ({ materials: 19 * MB, images: 2 * MB, figures: 0, database: 300 * 1024 }));
+    rerender(<SettingsSheet open={false} onClose={() => undefined} section="storage" onOpenLink={() => undefined} />);
+    rerender(<SettingsSheet open onClose={() => undefined} section="storage" onOpenLink={() => undefined} />);
+    await act(flush);
+    expect(api.read.storageUsage).toHaveBeenCalledTimes(1);
+    expect(usagePairs()).toEqual(["Materials 19.0 MB", "Images 2.0 MB", "Figures 0 B", "Database 300 KB", "Total 21.3 MB"]);
+  });
+
+  it("says why the storage could not be measured", async () => {
+    engine(base);
+    api.read.storageUsage = vi.fn(async () => { throw new Error("EACCES: permission denied, scandir '/data/images'"); });
+    render(<SettingsSheet open onClose={() => undefined} section="storage" onOpenLink={() => undefined} />);
+    await act(flush);
+    const storage = document.getElementById("settings-storage")!;
+    expect(within(storage).getByRole("alert").textContent).toBe("EACCES: permission denied, scandir '/data/images'");
+    expect(screen.queryByLabelText("Storage used")).toBeNull();
   });
 });
 

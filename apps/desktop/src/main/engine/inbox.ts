@@ -20,8 +20,12 @@ function isNoHtmlRendering(code: string): boolean {
   return code === "HTTP_404" || code === "HTTP_410";
 }
 
-/** The other arXiv rendering, listed on the material so the reader can fetch it later. */
+/**
+ * The other arXiv rendering, listed on the material so the reader can fetch it later. A material
+ * already in the library may hold it (fetched, or made the primary view): then it stays as it is.
+ */
 async function withArxivView(store: MaterialStore, result: { ok: true; material: MaterialRecord }, view: MaterialView): Promise<OpenUrlResult> {
+  if (result.material.readyViews.includes(view.id)) return result;
   return { ok: true, material: await store.registerView(result.material.id, view) };
 }
 

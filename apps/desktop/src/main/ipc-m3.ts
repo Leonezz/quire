@@ -1,7 +1,8 @@
 import { ipcMain } from "electron";
-import type { LibraryFilter, MaterialKind, MaterialMeta, MaterialViewId, OpenUrlResult } from "../shared/contracts";
+import type { DeleteMaterialsResult, LibraryFilter, MaterialKind, MaterialMeta, MaterialViewId, OpenUrlResult } from "../shared/contracts";
 import type { AnnotationStore } from "./engine/annotations";
 import type { EventStore } from "./engine/events";
+import type { ImageCache } from "./engine/images";
 import type { ItemStore } from "./engine/items";
 import { keepItem } from "./engine/inbox";
 import { deleteMaterials, queryLibrary } from "./engine/library";
@@ -10,6 +11,7 @@ import { isMaterialViewId } from "./engine/material-views";
 import { MATERIAL_KINDS, MAX_META_LONG_TEXT, MAX_META_TEXT, MAX_TAG_LENGTH, type MetaStore } from "./engine/meta";
 import type { SessionStore } from "./engine/agent-sessions";
 import type { SettingsPatch, SettingsStore } from "./engine/settings";
+import { storageUsage } from "./engine/storage-usage";
 
 // M3 handlers: library management, settings, agent sessions. Same rule as index.ts: validate
 // every argument before touching a store, broadcast after every change the renderer must see.
@@ -24,6 +26,10 @@ export interface M3Deps {
   events: EventStore;
   settings: SettingsStore;
   sessions: SessionStore;
+  /** The cached pictures: a delete forgets those no remaining material shows. */
+  images: ImageCache;
+  /** Where materials, images and the database live, for storage:usage. */
+  dataDirectory: string;
   /** agent:status:changed goes out after any agent setting changed, so the renderer re-reads agentStatus(). */
   broadcast: (channel: M3Channel) => void;
   /** The codexPath changed: the running app-server must be restarted with the new binary. */
@@ -123,7 +129,7 @@ function settingsPatch(value: unknown): SettingsPatch {
 }
 
 export function registerM3Handlers(deps: M3Deps): void {
-  const { store, meta, annotations, items, events, settings, sessions, broadcast } = deps;
+  const { store, meta, annotations, items, events, settings, sessions, images, broadcast } = deps;
 
   ipcMain.handle("library:query", async (_event, filter: unknown) => queryLibrary(await store.list(), libraryFilter(filter)));
   ipcMain.handle("material:updateMeta", async (_event, id: unknown, patch: unknown) => {
@@ -143,10 +149,12 @@ export function registerM3Handlers(deps: M3Deps): void {
   });
   ipcMain.handle("material:bibtex", (_event, ids: unknown) => store.exportBibtex(materialIds(ids, MAX_BIBTEX_IDS)));
   ipcMain.handle("material:tags", () => meta.tags());
-  ipcMain.handle("material:delete", async (_event, ids: unknown) => {
-    const result = await deleteMaterials(materialIds(ids, MAX_DELETE_IDS), { store, annotations, items });
-    broadcast("library:changed");
+  ipcMain.handle("material:delete", async (_event, ids: unknown): Promise<DeleteMaterialsResult> => {
+    const deleting = deleteMaterials(materialIds(ids, MAX_DELETE_IDS), { store, annotations, items, images });
+    // A step that fails after the records went (their annotations) still leaves them gone.
+    const result = await deleting.finally(() => broadcast("library:changed"));
     if (result.unlinkedItems > 0) broadcast("sources:changed");
+    return result.picturesKept ? { picturesKept: result.picturesKept } : {};
   });
   ipcMain.handle("item:keep", (_event, id: unknown) => deps.withPrefetch(keepItem(boundedId(id), {
     items, events, store, warn: (message) => deps.warn(`[inbox] ${message}`),
@@ -181,6 +189,7 @@ export function registerM3Handlers(deps: M3Deps): void {
     if (AGENT_SETTING_KEYS.some((key) => before[key] !== after[key])) broadcast("agent:status:changed");
     return after;
   });
+  ipcMain.handle("storage:usage", () => storageUsage(deps.dataDirectory));
 
   ipcMain.handle("agent:sessions:list", () => sessions.list());
   ipcMain.handle("agent:sessions:get", (_event, id: unknown) => sessions.get(boundedId(id)));

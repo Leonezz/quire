@@ -8,7 +8,7 @@ import { AnnotationStore } from "./engine/annotations";
 import { imageUrlsOf } from "./engine/materials";
 import type { AddSourceResult, AgentContext, AgentEvent, AgentRequest, AgentTask, ItemDecision, MaterialRecord, OpenUrlResult, ReadingEventKind, SearchHit, UpdateState } from "../shared/contracts";
 import { MAX_BYTES, fetchPage } from "./engine/fetch";
-import { openDatabase } from "./engine/db";
+import { DATABASE_FILE, openDatabase } from "./engine/db";
 import { ItemStore } from "./engine/items";
 import { SourceStore, detectSource } from "./engine/sources";
 import { EventStore } from "./engine/events";
@@ -40,7 +40,7 @@ protocol.registerSchemesAsPrivileged([{ scheme: ARTIFACT_SCHEME, privileges: { s
 
 const userData = app.getPath("userData");
 const settings = new SettingsStore(join(userData, "settings.json"), userData, { warn: (message) => console.warn(`[settings] ${message}`), encryptor: electronEncryptor(safeStorage) });
-const db = openDatabase(join(userData, "quire.sqlite"));
+const db = openDatabase(join(userData, DATABASE_FILE));
 // The two stores reference each other: overrides ride on records, and related ids must name records. The checker runs only inside update(), after both exist.
 const meta: MetaStore = new MetaStore(db, { materialExists: (id): Promise<boolean> => store.has(id) });
 // The reflow judge is chosen at every build: Jev only when the setting says so, with the key opened just then (never held).
@@ -304,7 +304,7 @@ ipcMain.handle("agent:login", async () => { const status = await agent.login(); 
 
 // --- M3: metadata, library management, settings, agent sessions. ------------------------------
 registerM3Handlers({
-  store, meta, annotations, items, events, settings, sessions, broadcast, withPrefetch,
+  store, meta, annotations, items, events, settings, sessions, images, dataDirectory: userData, broadcast, withPrefetch,
   onCodexPathChanged: () => codex.stop(),
   warn: (message) => console.warn(message),
 });

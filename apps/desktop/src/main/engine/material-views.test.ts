@@ -218,6 +218,61 @@ describe("MaterialStore.setPrimaryView", () => {
   });
 });
 
+describe("views when a material is added again", () => {
+  it("keeps a fetched PDF and a built Text view when the page is added again", async () => {
+    const fetch = fetcherOf(await pdfFixture());
+    const store = new MaterialStore(root, fetch);
+    const { id } = await openWithPdfView(store);
+    expect((await store.fetchView(id, "pdf")).ok).toBe(true);
+    expect((await store.fetchView(id, "text")).ok).toBe(true);
+    const calls = fetch.calls.length;
+    const again = await store.openUrl("https://arxiv.org/html/2409.12345");
+    expect(again).toMatchObject({ ok: true, existing: true, material: { id, primaryView: "web", readyViews: ["web", "pdf", "text"] } });
+    expect(fetch.calls).toHaveLength(calls);
+    expect((await store.get(id))?.readyViews).toEqual(["web", "pdf", "text"]);
+    expect((await store.getView(id, "text"))?.anchors).toHaveLength(2);
+    expect((await store.bytes(id, "pdf"))?.byteLength).toBeGreaterThan(0);
+  });
+
+  it("keeps the Text view of a PDF dropped again", async () => {
+    const pdf = await pdfFixture();
+    const store = new MaterialStore(root);
+    const first = await store.openFile({ name: "paper.pdf", mediaType: "application/pdf", bytes: pdf });
+    if (!first.ok) throw new Error(first.message);
+    expect((await store.fetchView(first.material.id, "text")).ok).toBe(true);
+    const again = await store.openFile({ name: "renamed.pdf", mediaType: "application/pdf", bytes: pdf });
+    expect(again).toMatchObject({ ok: true, existing: true, material: { id: first.material.id, url: first.material.url, readyViews: ["pdf", "text"] } });
+    expect((await store.getView(first.material.id, "text"))?.anchors).toHaveLength(2);
+  });
+
+  it("fetches a page kept as plain text again, carrying its other views over", async () => {
+    let challenge = true;
+    const pdf = await pdfFixture();
+    const calls: string[] = [];
+    const store = new MaterialStore(root, async (url) => {
+      calls.push(url.toString());
+      if (url.pathname.startsWith("/pdf/")) return { bytes: pdf, mediaType: "application/pdf", finalUrl: url.toString() };
+      const html = challenge ? `<!doctype html><html><head><title>Just a moment</title></head><body><nav>Checking your browser</nav></body></html>` : article("Retrieval Without Regret");
+      return { bytes: new TextEncoder().encode(html), mediaType: "text/html", finalUrl: url.toString() };
+    });
+    const { id, quality } = await openWithPdfView(store);
+    expect(quality.safety).toBe("degraded_plaintext");
+    expect((await store.fetchView(id, "pdf")).ok).toBe(true);
+    expect((await store.fetchView(id, "text")).ok).toBe(true);
+    challenge = false;
+    const again = await store.openUrl("https://arxiv.org/html/2409.12345");
+    expect(again.ok).toBe(true);
+    if (!again.ok) return;
+    expect(again).not.toHaveProperty("existing");
+    expect(calls.filter((url) => url === "https://arxiv.org/html/2409.12345")).toHaveLength(2);
+    expect(again.material).toMatchObject({ id, title: "Retrieval Without Regret", primaryView: "web", readyViews: ["web", "pdf", "text"], quality: { safety: "safe" } });
+    expect(again.material.views.map((view) => [view.id, view.status])).toEqual([["web", "ready"], ["pdf", "ready"], ["text", "ready"]]);
+    expect(await store.get(id)).toMatchObject({ readyViews: ["web", "pdf", "text"] });
+    expect((await store.getView(id, "pdf"))?.pdf?.pages).toBe(2);
+    expect((await store.getView(id, "text"))?.anchors).toHaveLength(2);
+  });
+});
+
 describe("MaterialStore.delete with views", () => {
   it("removes the view files with the record", async () => {
     const store = new MaterialStore(root, fetcherOf(await pdfFixture()));

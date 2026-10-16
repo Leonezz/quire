@@ -44,15 +44,39 @@ export function queryLibrary(summaries: readonly MaterialSummary[], filter: Libr
 }
 
 export interface DeleteDeps {
-  store: { delete: (ids: readonly string[]) => Promise<number> };
+  store: { delete: (ids: readonly string[]) => Promise<number>; imageReferences: (ids?: readonly string[]) => Promise<ReadonlySet<string>> };
   annotations: { deleteAll: (materialId: string) => Promise<void> };
   items: { unlinkMaterial: (materialId: string) => number };
+  images: { forget: (urls: Iterable<string>) => Promise<number> };
 }
 
-/** Removes the records and their bytes, their annotations and overrides, and unlinks the items that were read as them. */
-export async function deleteMaterials(ids: readonly string[], deps: DeleteDeps): Promise<{ deleted: number; unlinkedItems: number }> {
+type Pictures = { urls: ReadonlySet<string> } | { error: unknown };
+
+/**
+ * Removes the records and their bytes, their annotations and overrides, unlinks the items that were
+ * read as them, and forgets the cached pictures that no remaining material (no record, view or kept
+ * revision) shows. Pictures are read before the records go, since afterwards nothing says what they
+ * showed; failing to read them never keeps a material, it only keeps the pictures: the delete still
+ * succeeds and `picturesKept` says why.
+ */
+export async function deleteMaterials(ids: readonly string[], deps: DeleteDeps): Promise<{ deleted: number; unlinkedItems: number; picturesKept?: string }> {
+  const pictures: Pictures = await deps.store.imageReferences(ids).then((urls) => ({ urls }), (error: unknown) => ({ error }));
   const deleted = await deps.store.delete(ids);
   await Promise.all(ids.map((id) => deps.annotations.deleteAll(id)));
   const unlinkedItems = ids.reduce((sum, id) => sum + deps.items.unlinkMaterial(id), 0);
-  return { deleted, unlinkedItems };
+  const picturesKept = await forgetUnshown(pictures, deps);
+  return { deleted, unlinkedItems, ...(picturesKept ? { picturesKept } : {}) };
+}
+
+/** Forgets the pictures no remaining material shows. The materials are gone by now, so a failure is the reason the pictures stay. */
+async function forgetUnshown(pictures: Pictures, deps: DeleteDeps): Promise<string | undefined> {
+  try {
+    if ("error" in pictures) throw pictures.error;
+    if (pictures.urls.size === 0) return undefined;
+    const kept = await deps.store.imageReferences();
+    await deps.images.forget([...pictures.urls].filter((url) => !kept.has(url)));
+    return undefined;
+  } catch (error) {
+    return `The materials were deleted, but their cached pictures were kept: ${error instanceof Error ? error.message : String(error)}`;
+  }
 }

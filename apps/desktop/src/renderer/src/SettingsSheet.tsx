@@ -1,10 +1,11 @@
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import { Button, Kbd, NumberField, Segment, Segmented, Sheet, SheetDialog, Switch, TextField } from "@read/ui";
-import type { AgentStatus, Settings, SettingsPatch } from "../../shared/contracts";
+import type { AgentStatus, Settings, SettingsPatch, StorageUsage } from "../../shared/contracts";
 import { AboutSection } from "./AboutSection";
 import { FeedbackSection } from "./FeedbackSection";
 import { agentStore, needsSignIn, useAgentStatus } from "./agentStore";
 import { read } from "./api";
+import { bytesLabel } from "./InfoFacts";
 import { KEYBOARD_MAP } from "./keyboardMap";
 import { ReadingControls } from "./ReadingSettings";
 import { useReadingPrefs } from "./readingPrefs";
@@ -38,6 +39,26 @@ function Row({ label, hint, children }: { label: string; hint?: string | undefin
   );
 }
 
+const USAGE_PARTS: { key: keyof StorageUsage; label: string }[] = [
+  { key: "materials", label: "Materials" }, { key: "images", label: "Images" }, { key: "figures", label: "Figures" }, { key: "database", label: "Database" },
+];
+
+/** The data directory's bytes by part, then their total. */
+function StorageUsageList({ usage }: { usage: StorageUsage }) {
+  const parts = USAGE_PARTS.map((part) => ({ label: part.label, bytes: usage[part.key] }));
+  const rows = [...parts, { label: "Total", bytes: parts.reduce((total, part) => total + part.bytes, 0) }];
+  return (
+    <dl aria-label="Storage used" className="m-0 grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1 pt-2 text-[13px]">
+      {rows.map((row) => (
+        <Fragment key={row.label}>
+          <dt className={row.label === "Total" ? "font-medium text-label" : "text-label-2"}>{row.label}</dt>
+          <dd className="m-0 text-right tabular-nums text-label">{bytesLabel(row.bytes)}</dd>
+        </Fragment>
+      ))}
+    </dl>
+  );
+}
+
 function agentLine(status: AgentStatus | undefined, error: string | undefined): string {
   if (error) return error;
   if (!status) return "Checking the agent…";
@@ -61,16 +82,21 @@ export function SettingsSheet({ open, onClose, section, onOpenLink }: { open: bo
   const { status: agent, statusError: agentError } = useAgentStatus();
   const refreshAgent = agentStore.refreshStatus;
   const [copied, setCopied] = useState(false);
+  const [usage, setUsage] = useState<{ value?: StorageUsage; error?: string }>({});
   // Text fields are edited locally and saved on blur / Enter, so a half-typed path is not rejected mid-way.
   const [drafts, setDrafts] = useState<{ codexPath: string; agentModel: string; syncIntervalMinutes: number; typesafeApiKey: string }>({ codexPath: "", agentModel: "", syncIntervalMinutes: 30, typesafeApiKey: "" });
 
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    setLoadError(undefined); setErrors({}); setSaved(undefined); setCopied(false);
+    setLoadError(undefined); setErrors({}); setSaved(undefined); setCopied(false); setUsage({});
     read.getSettings()
       .then((loaded) => { if (cancelled) return; setSettings(loaded); setDrafts({ codexPath: loaded.codexPath, agentModel: loaded.agentModel, syncIntervalMinutes: loaded.syncIntervalMinutes, typesafeApiKey: "" }); })
       .catch((cause: unknown) => { if (!cancelled) setLoadError(cause instanceof Error ? cause.message : "Could not load the settings."); });
+    // Measured at every opening: deleting materials or reading new ones changes it between two.
+    read.storageUsage()
+      .then((value) => { if (!cancelled) setUsage({ value }); })
+      .catch((cause: unknown) => { if (!cancelled) setUsage({ error: cause instanceof Error ? cause.message : "Could not measure the storage." }); });
     void refreshAgent();
     return () => { cancelled = true; };
   }, [open, refreshAgent]);
@@ -181,6 +207,11 @@ export function SettingsSheet({ open, onClose, section, onOpenLink }: { open: bo
                 {settings?.dataDirectory ?? "…"}
               </button>
               <span className="text-[11.5px] text-label-3">{copied ? "Copied." : "Click to copy the path."}</span>
+            </Row>
+            <Row label="Storage used" hint="Materials are records, captured pages, PDFs and views; images are cached pictures.">
+              {usage.value ? <StorageUsageList usage={usage.value} />
+                : usage.error ? <p role="alert" className="t-text-in m-0 pt-2 text-[12px] text-red-text">{usage.error}</p>
+                : <span className="pt-2 text-[13px] text-label-3">Measuring…</span>}
             </Row>
           </Section>
 

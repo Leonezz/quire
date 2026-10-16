@@ -20,6 +20,9 @@ function fetcherOf(answer: (url: URL) => Promise<FetchedPage>): Fetcher & { call
   return Object.assign(async (url: URL) => { calls.push(url.toString()); return answer(url); }, { calls });
 }
 
+/** What a bot challenge serves: nothing the extractor can read, so the page is kept as plain text. */
+const challengePage = `<!doctype html><html><head><title>Just a moment</title></head><body><nav>Checking your browser</nav></body></html>`;
+
 const html = (title: string) => new TextEncoder().encode(`<!doctype html><html><head><title>${title}</title></head><body><article><h1>${title}</h1>${"<p>A paragraph long enough for the extractor to keep, repeated so the article has a body worth reading and a few sentences to count.</p>".repeat(8)}</article></body></html>`);
 
 describe("readItem", () => {
@@ -186,6 +189,123 @@ describe("readItem", () => {
     expect(await keepItem(id, { items, events: new EventStore(db), store, warn: () => {} })).toMatchObject({ ok: false, code: "HTTP_500" });
     expect(items.inbox()).toHaveLength(1);
     expect(await keepItem("missing", { items, events: new EventStore(db), store, warn: () => {} })).toMatchObject({ ok: false, code: "ITEM_NOT_FOUND" });
+  });
+
+  it("reads a paper cross-listed in several categories as the one material, keeping the PDF it stored, even as its primary view", async () => {
+    const pdf = new Uint8Array(await readFile(join(__dirname, "__fixtures__", "two-pages.pdf")));
+    const fetch = fetcherOf(async (url) => (url.pathname.startsWith("/pdf/") ? { bytes: pdf, mediaType: "application/pdf", finalUrl: url.toString() } : { bytes: html("Paper"), mediaType: "text/html", finalUrl: url.toString() }));
+    const store = new MaterialStore(root, fetch);
+    const items = new ItemStore(db);
+    const entry = { externalId: "2409.12345", title: "Paper", link: "https://arxiv.org/abs/2409.12345", publishedAt: "2026-09-17T00:00:00.000Z", gist: "", readingMinutes: 20, signals: { math: true }, summaryOnly: false };
+    items.upsert({ id: "cl", title: "arXiv cs.CL", kind: "arxiv" }, [entry]);
+    items.upsert({ id: "ai", title: "arXiv cs.AI", kind: "arxiv" }, [entry]);
+    items.upsert({ id: "lg", title: "arXiv cs.LG", kind: "arxiv" }, [entry]);
+    const [cl, ai, lg] = items.inbox() as [ItemRecord, ItemRecord, ItemRecord];
+    const deps = { items, events: new EventStore(db), store, warn: () => { throw new Error("no warning expected"); } };
+    const first = await readItem(cl.id, deps);
+    if (!first.ok) throw new Error(first.message);
+    expect((await store.fetchView(first.material.id, "pdf")).ok).toBe(true);
+    expect(fetch.calls).toEqual(["https://arxiv.org/html/2409.12345", "https://arxiv.org/pdf/2409.12345"]);
+
+    const second = await readItem(ai.id, deps);
+    expect(second).toMatchObject({ ok: true, material: { id: first.material.id, primaryView: "web", readyViews: ["web", "pdf"] } });
+    expect(fetch.calls).toHaveLength(2);
+
+    await store.setPrimaryView(first.material.id, "pdf");
+    const third = await readItem(lg.id, deps);
+    expect(third).toMatchObject({ ok: true, material: { id: first.material.id, primaryView: "pdf", readyViews: ["web", "pdf"] } });
+    expect(third.ok && third.material.views.map((view) => [view.id, view.status])).toEqual([["web", "ready"], ["pdf", "ready"], ["text", "available"]]);
+    expect(fetch.calls).toHaveLength(2);
+    expect((await store.bytes(first.material.id))?.byteLength).toBe(pdf.byteLength);
+  });
+
+  it("adds the arXiv item's authors and abstract to a paper pasted before", async () => {
+    const fetch = fetcherOf(async (url) => {
+      if (url.pathname.startsWith("/pdf/")) throw new Error("the PDF must not be fetched on Read");
+      return { bytes: html("Paper"), mediaType: "text/html", finalUrl: url.toString() };
+    });
+    const store = new MaterialStore(root, fetch);
+    const pasted = await store.openUrl("https://arxiv.org/html/2409.12345");
+    if (!pasted.ok) throw new Error(pasted.message);
+    const items = new ItemStore(db);
+    const meta = { kind: "preprint" as const, arxivId: "2409.12345", publication: "arXiv", creators: [{ role: "author" as const, name: "Mara Lindqvist" }], abstract: "From the Atom feed.", date: "2026-09-17T17:59:12Z" };
+    items.upsert({ id: "arxiv", title: "arXiv cs.CL", kind: "arxiv" }, [{ externalId: "2409.12345", title: "Paper", link: "https://arxiv.org/abs/2409.12345", publishedAt: "2026-09-17T00:00:00.000Z", gist: "", readingMinutes: 20, signals: { math: true }, summaryOnly: false, meta }]);
+    const result = await readItem(items.inbox()[0]!.id, { items, events: new EventStore(db), store, warn: () => { throw new Error("no warning expected"); } });
+    expect(result).toMatchObject({ ok: true, material: { id: pasted.material.id, kind: "preprint", byline: "Mara Lindqvist", publishedAt: "2026-09-17T17:59:12.000Z", meta: { arxivId: "2409.12345", abstract: "From the Atom feed." } } });
+    expect(result.ok && result.material.views.map((view) => [view.id, view.status])).toEqual([["web", "ready"], ["pdf", "available"], ["text", "available"]]);
+    expect(fetch.calls).toEqual(["https://arxiv.org/html/2409.12345"]);
+    expect(await store.get(pasted.material.id)).toMatchObject({ byline: "Mara Lindqvist", meta: { abstract: "From the Atom feed." } });
+  });
+
+  it("keeps the page fetched for one item when another item with the same link cannot be fetched", async () => {
+    let down = false;
+    const fetch = fetcherOf(async (url) => {
+      if (down) throw new FetchError("NETWORK", "getaddrinfo ENOTFOUND");
+      return { bytes: html("Full page"), mediaType: "text/html", finalUrl: url.toString() };
+    });
+    const store = new MaterialStore(root, fetch);
+    const items = new ItemStore(db);
+    const link = "https://systems.example.test/posts/cache-keys";
+    items.upsert({ id: "a", title: "Systems Notes", kind: "feed" }, [{ externalId: "x", title: "Feed title", link, publishedAt: "2026-09-14T00:00:00.000Z", gist: "", readingMinutes: 2, signals: {}, summaryOnly: true }]);
+    items.upsert({ id: "b", title: "Systems Digest", kind: "feed" }, [{ externalId: "y", title: "Feed title", link, publishedAt: "2026-09-14T00:00:00.000Z", gist: "", readingMinutes: 2, signals: {}, summaryOnly: false, content: { plain: "Only the feed's copy." } }]);
+    const first = items.inbox().find((item) => item.sourceId === "a")!;
+    const second = items.inbox().find((item) => item.sourceId === "b")!;
+    const warnings: string[] = [];
+    const deps = { items, events: new EventStore(db), store, warn: (m: string) => warnings.push(m) };
+    const page = await readItem(first.id, deps);
+    if (!page.ok) throw new Error(page.message);
+    down = true;
+    const again = await readItem(second.id, deps);
+    expect(again).toMatchObject({ ok: true, material: { id: page.material.id, title: "Full page", problems: [] } });
+    expect(await store.get(page.material.id)).toMatchObject({ title: "Full page", problems: [] });
+    expect(warnings).toEqual([]);
+  });
+
+  it("fetches the page again for a material that is only the feed's copy, keeping what the item declared", async () => {
+    let down = true;
+    const fetch = fetcherOf(async (url) => {
+      if (down) throw new FetchError("NETWORK", "getaddrinfo ENOTFOUND");
+      return { bytes: html("Cache keys, the full post"), mediaType: "text/html", finalUrl: url.toString() };
+    });
+    const store = new MaterialStore(root, fetch);
+    const items = new ItemStore(db);
+    const link = "https://systems.example.test/posts/cache-keys";
+    items.upsert({ id: "feed", title: "Systems Notes", kind: "feed" }, [{ externalId: "full", title: "Cache keys", link, publishedAt: "2026-09-14T00:00:00.000Z", gist: "", readingMinutes: 2, signals: {}, summaryOnly: false, content: { plain: "Hello from the feed" }, meta: { kind: "newsletter", publication: "Systems Weekly" } }]);
+    const copy = await readItem(items.inbox()[0]!.id, { items, events: new EventStore(db), store, warn: () => undefined });
+    if (!copy.ok) throw new Error(copy.message);
+    expect(copy.material.problems.map((p) => p.code)).toEqual(["FEED_CONTENT_FALLBACK"]);
+    down = false;
+    const page = await store.openUrl(link);
+    expect(page.ok).toBe(true);
+    if (!page.ok) return;
+    expect(page).not.toHaveProperty("existing");
+    expect(page.material).toMatchObject({ id: copy.material.id, title: "Cache keys, the full post", problems: [], kind: "newsletter", meta: { publication: "Systems Weekly" } });
+    expect(page.material.plain ?? page.material.markdown).not.toContain("Hello from the feed");
+  });
+
+  it("shows the feed's copy in place of a page kept as plain text when the page cannot be fetched again", async () => {
+    let answer: "challenge" | "forbidden" = "challenge";
+    const fetch = fetcherOf(async (url) => {
+      if (answer === "forbidden") throw new FetchError("HTTP_403", "The page answered 403.");
+      return { bytes: new TextEncoder().encode(challengePage), mediaType: "text/html", finalUrl: url.toString() };
+    });
+    const store = new MaterialStore(root, fetch);
+    const link = "https://systems.example.test/posts/cache-keys";
+    const pasted = await store.openUrl(link);
+    if (!pasted.ok) throw new Error(pasted.message);
+    expect(pasted.material.quality.safety).toBe("degraded_plaintext");
+    expect(await store.captureBytes(pasted.material.id)).toBeDefined();
+    const items = new ItemStore(db);
+    items.upsert({ id: "feed", title: "Systems Notes", kind: "feed" }, [{ externalId: "full", title: "Cache keys", link, publishedAt: "2026-09-14T00:00:00.000Z", gist: "", readingMinutes: 2, signals: {}, summaryOnly: false, content: { plain: "The full post as the feed carries it." }, meta: { kind: "newsletter", publication: "Systems Weekly" } }]);
+    answer = "forbidden";
+    const warnings: string[] = [];
+    const result = await readItem(items.inbox()[0]!.id, { items, events: new EventStore(db), store, warn: (m) => warnings.push(m) });
+    expect(result).toMatchObject({ ok: true, material: { id: pasted.material.id, title: "Cache keys", plain: "The full post as the feed carries it.", kind: "newsletter", quality: { safety: "safe" }, meta: { publication: "Systems Weekly" } } });
+    expect(result.ok && result.material.problems.map((p) => p.code)).toEqual(["FEED_CONTENT_FALLBACK"]);
+    expect(warnings).toEqual([`Could not fetch ${link} (HTTP_403: The page answered 403.); showing the feed's copy.`]);
+    // The challenge page it was read from goes with it: a feed's copy has no capture.
+    expect(await store.captureBytes(pasted.material.id)).toBeUndefined();
+    expect(await store.get(pasted.material.id)).toMatchObject({ plain: "The full post as the feed carries it." });
   });
 
   it("answers ITEM_NOT_FOUND for unknown ids", async () => {
