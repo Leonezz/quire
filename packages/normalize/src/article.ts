@@ -1384,12 +1384,13 @@ export function normalizeArticleCapture(
     const producer = { evidence: [], key: "generic", version: "1" };
     const sourceIdentity = sha256Identity(`article\0${source}`);
     const sourceFingerprint = input.capture.contentIdentity;
+    const articleProblems = [...problems, ...representationResult.problems];
     const quality: ContentMaterialization["quality"] = {
       completeness: "declared_full",
       conformance: decoding.problems.length > 0 ? "recoverable" : "conformant",
       identityConfidence: "strong",
       safety: "safe",
-      warnings: problems,
+      warnings: articleProblems,
     };
     const provenance: ContentMaterialization["provenance"] = {
       captureIdentity: input.capture.contentIdentity,
@@ -1439,7 +1440,7 @@ export function normalizeArticleCapture(
       sourceIdentity,
       title,
     };
-    const outcome = { article, ok: true, problems } as const;
+    const outcome = { article, ok: true, problems: articleProblems } as const;
     return serializedBytes(outcome) <= input.budget.maxOutputBytes
       ? outcome
       : articleFailure(

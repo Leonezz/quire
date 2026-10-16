@@ -30,7 +30,10 @@ import {
 import { trackingPixelRule } from "./image-policy";
 import { htmlStructureWithinBudget, Utf8Budget } from "./output-budget";
 
+// <video> and <audio> are here so their fallback text ("Your browser does not support…") never reads as
+// body text; the ones with a URL were already turned into links (embedded-media.ts).
 const ACTIVE_TAGS = new Set([
+  "audio",
   "button",
   "embed",
   "form",
@@ -40,6 +43,7 @@ const ACTIVE_TAGS = new Set([
   "script",
   "style",
   "svg",
+  "video",
 ]);
 const INLINE_CONTAINER_TAGS = new Set(["font", "span", "b", "i", "em", "strong", "small", "big", "center"]);
 const BLOCK_TAGS = new Set([

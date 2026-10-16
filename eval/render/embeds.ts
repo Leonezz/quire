@@ -173,11 +173,13 @@ export function extractEmbeds(html: string, finalUrl: string): Embed[] {
 
 const YOUTUBE_HOSTS = /^(?:youtube\.com|youtube-nocookie\.com|youtu\.be)$/;
 const TWITTER_HOSTS = /^(?:twitter\.com|x\.com)$/;
+const STREAM_HOSTS = /^(?:customer-[a-z0-9]+\.cloudflarestream\.com|(?:iframe\.)?(?:videodelivery\.net|cloudflarestream\.com))$/;
 
 /**
  * A comparable form of a media URL: no protocol, www./m./mobile., query or fragment, no trailing slash;
  * YouTube embed/watch/youtu.be/shorts → youtube.com/watch?v=ID, twitter.com → x.com (status links by
- * id), Vimeo player → vimeo.com/ID, CodePen embed → pen. "" for what is not an http(s) URL.
+ * id), Vimeo player → vimeo.com/ID, CodePen embed → pen, a Cloudflare Stream video's player, watch page,
+ * manifest or thumbnail → cloudflarestream.com/UID. "" for what is not an http(s) URL.
  */
 export function mediaKey(raw: string): string {
   let url: URL;
@@ -196,6 +198,10 @@ export function mediaKey(raw: string): string {
   if (host === "player.vimeo.com") {
     const id = /^\/video\/(\d+)/.exec(path)?.[1];
     if (id) return `vimeo.com/${id}`;
+  }
+  if (STREAM_HOSTS.test(host)) {
+    const uid = /^\/([0-9a-f]{32})(?:\/|$)/.exec(path)?.[1];
+    if (uid) return `cloudflarestream.com/${uid}`;
   }
   if (host === "codepen.io") {
     const hash = /\/(?:embed|pen|full|details)\/(?:preview\/)?([^/]+)/.exec(path)?.[1];

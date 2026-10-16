@@ -10,7 +10,8 @@ import { gfm as turndownGfm } from "turndown-plugin-gfm";
 import { unified } from "unified";
 
 import { resolveDeferredImageSources } from "./deferred-image-sources";
-import type { ContentRepresentation, Sha256Identity } from "./model";
+import { linkEmbeddedMedia } from "./embedded-media";
+import type { ContentRepresentation, NormalizationProblem, Sha256Identity } from "./model";
 import { trackingPixelRule } from "./image-policy";
 import {
   htmlStructureWithinBudget,
@@ -64,7 +65,9 @@ export type MarkdownRepresentationInput = {
   outputBudgetErrorCode: string;
 };
 
-const DROP_TAGS = new Set(["BUTTON", "EMBED", "FORM", "IFRAME", "INPUT", "OBJECT", "SCRIPT", "STYLE", "SVG"]);
+const DROP_TAGS = new Set(["AUDIO", "BUTTON", "EMBED", "FORM", "IFRAME", "INPUT", "OBJECT", "SCRIPT", "STYLE", "SVG", "VIDEO"]);
+/** Tags whose drop loses something the page showed: a player, a demo, a plugin. */
+const EMBED_LOSS_TAGS = new Set(["audio", "embed", "iframe", "object", "video"]);
 const CONTAINER_TYPES = new Set(["blockquote", "delete", "emphasis", "link", "list", "listItem", "paragraph", "root", "strong", "table", "tableCell", "tableRow"]);
 const LEAF_TYPES = new Set(["break", "code", "image", "inlineCode", "text", "thematicBreak"]);
 const FLOW_TYPES = new Set(["blockquote", "code", "heading", "list", "paragraph", "table", "thematicBreak"]);
@@ -594,6 +597,14 @@ function sanitizeNode(node: MdNode, input: {
   return node.value === undefined ? { type: node.type } : { type: node.type, value: input.outputBudget.consumeString(node.value) };
 }
 
+/** A warning when the reader had to drop a player, demo or plugin it could not link to. */
+function embedProblems(losses: readonly { code: string; sourceTag: string }[]): NormalizationProblem[] {
+  const omitted = losses.some((loss) => loss.code === "ACTIVE_CONTENT_DROPPED" && EMBED_LOSS_TAGS.has(loss.sourceTag));
+  return omitted
+    ? [{ code: "SOURCE_EMBEDDED_CONTENT_OMITTED", recoverBy: "none", scope: "representation", severity: "warning" }]
+    : [];
+}
+
 export function createRepresentations(input: {
   baseUri?: string;
   content: string;
@@ -613,9 +624,14 @@ export function createRepresentations(input: {
   )
     throw new Error(input.outputBudgetErrorCode);
   const rulesApplied = ["generic.drop-active-content", "generic.safe-url-policy"];
-  const resolvedImages = input.mediaType === "text/plain"
+  const linkedMedia = input.mediaType === "text/plain"
     ? undefined
-    : resolveDeferredImageSources(input.content);
+    : linkEmbeddedMedia(input.content, input.baseUri);
+  if (linkedMedia?.linked) rulesApplied.push("generic.embedded-media-links@1");
+  if (linkedMedia?.removed) rulesApplied.push("generic.drop-widget-frames@1");
+  const resolvedImages = linkedMedia === undefined
+    ? undefined
+    : resolveDeferredImageSources(linkedMedia.html);
   if (resolvedImages?.replacements) rulesApplied.push("generic.deferred-image-source@1");
   const normalizedHtml = resolvedImages === undefined
     ? undefined
@@ -712,5 +728,5 @@ export function createRepresentations(input: {
   appendRepresentation(agentContent, "agent", "agent.gfm.v1");
   const selectionContent = toString(tree as never).trim();
   appendRepresentation(selectionContent, "selection", "selection.text.v1");
-  return { representations, rulesApplied };
+  return { problems: embedProblems(readerV2Result.document.losses), representations, rulesApplied };
 }

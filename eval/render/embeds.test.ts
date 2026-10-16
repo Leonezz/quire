@@ -85,6 +85,19 @@ describe("mediaKey", () => {
     expect(mediaKey("https://codepen.io/anon/embed/QwKVaYm?height=450&default-tab=css,result")).toBe(mediaKey("https://codepen.io/team/css-tricks/pen/QwKVaYm"));
   });
 
+  it("makes a Cloudflare Stream video's player, watch page, manifest and thumbnails equal, legacy hosts included", () => {
+    const uid = "affebd0d7251da155e5307f19069c944";
+    const stream = `cloudflarestream.com/${uid}`;
+    const customer = `https://customer-eq7kiuol0tk9chox.cloudflarestream.com/${uid}`;
+    expect(mediaKey(`${customer}/iframe?muted=true&poster=x`)).toBe(stream);
+    expect(mediaKey(`${customer}/watch`)).toBe(stream);
+    expect(mediaKey(`${customer}/manifest/video.m3u8`)).toBe(stream);
+    expect(mediaKey(`${customer}/thumbnails/thumbnail.jpg?time=&height=600`)).toBe(stream);
+    expect(mediaKey(`https://iframe.videodelivery.net/${uid}?autoplay=true`)).toBe(stream);
+    expect(mediaKey(`https://videodelivery.net/${uid}/thumbnails/thumbnail.jpg`)).toBe(stream);
+    expect(mediaKey(`https://customer-eq7kiuol0tk9chox.cloudflarestream.com/not-a-video-id`)).toBe("customer-eq7kiuol0tk9chox.cloudflarestream.com/not-a-video-id");
+  });
+
   it("drops protocol, www., query, fragment and trailing slash otherwise", () => {
     expect(mediaKey("https://www.example.com/a/b/?x=1#y")).toBe("example.com/a/b");
     expect(mediaKey("http://example.com/a/b")).toBe("example.com/a/b");
@@ -97,6 +110,12 @@ describe("markRepresented", () => {
   it("marks embeds whose URL the reader shows as a link, image or media source", () => {
     const embeds = extractEmbeds(page(`<iframe src="https://www.youtube.com/embed/k1ILy23t89E"></iframe><video src="https://cdn.e.com/v.mp4"></video><iframe></iframe>`), BASE);
     expect(markRepresented(embeds, ["https://youtu.be/k1ILy23t89E"]).map((e) => e.representedInReader)).toEqual([true, false, false]);
+  });
+
+  it("counts a Stream player as shown when the reader links its watch page", () => {
+    const customer = "https://customer-eq7kiuol0tk9chox.cloudflarestream.com/affebd0d7251da155e5307f19069c944";
+    const embeds = extractEmbeds(page(`<p>Run:</p><iframe src="${customer}/iframe?muted=true"></iframe>`), BASE);
+    expect(markRepresented(embeds, [`${customer}/watch`]).map((e) => e.representedInReader)).toEqual([true]);
   });
 });
 
