@@ -1,10 +1,12 @@
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MaterialSummary } from "../../shared/contracts";
 import { AnnotationStore } from "./annotations";
 import { openDatabase, type Database } from "./db";
+import { ImageCache } from "./images";
 import { ItemStore } from "./items";
 import { deleteMaterials, queryLibrary } from "./library";
 import { MaterialStore } from "./materials";
@@ -85,7 +87,7 @@ describe("deleteMaterials", () => {
     items.markOpened(item.id, id);
     expect((await stat(join(root, "materials", `${id}.html`))).isFile()).toBe(true);
 
-    const result = await deleteMaterials([id, "0000000000000000"], { store, annotations, items });
+    const result = await deleteMaterials([id, "0000000000000000"], { store, annotations, items, images: new ImageCache(root) });
     expect(result).toEqual({ deleted: 1, unlinkedItems: 1 });
     expect(await store.get(id)).toBeUndefined();
     expect(await store.list()).toEqual([]);
@@ -97,6 +99,58 @@ describe("deleteMaterials", () => {
     expect(after.materialId).toBeUndefined();
     expect(after.openedAt).toBeDefined();
     expect(items.inbox()).toEqual([]);
+  });
+
+  it("forgets the cached pictures only the deleted material showed, and keeps those another material still shows", async () => {
+    const shared = "https://img.example.test/shared.png";
+    const own = "https://img.example.test/own.png";
+    const unrelated = "https://img.example.test/cached-before.png";
+    const figure = (src: string) => `<figure><img src="${src}" alt="A chart" width="640" height="480"><figcaption>A chart.</figcaption></figure>`;
+    const page = (title: string, pictures: string[]) => `<!doctype html><html><head><title>${title}</title></head><body><article><h1>${title}</h1>${"<p>Two harnesses cache the tokenised prompt keyed on the question text alone, so a changed system prompt silently reuses the old one.</p>".repeat(6)}${pictures.map(figure).join("")}${"<p>The fix is a cache key that includes the full rendered prompt hash, so nothing stale is ever served again.</p>".repeat(6)}</article></body></html>`;
+    const pages: Record<string, string> = { "https://example.test/first": page("First", [shared, own]), "https://example.test/second": page("Second", [shared]) };
+    const store = new MaterialStore(root, async (url) => ({ bytes: new TextEncoder().encode(pages[url.toString()]!), mediaType: "text/html", finalUrl: url.toString() }));
+    const cached = (url: string) => createHash("sha256").update(url).digest("hex");
+    await mkdir(join(root, "images"), { recursive: true });
+    for (const url of [shared, own, unrelated]) {
+      await writeFile(join(root, "images", `${cached(url)}.bin`), Buffer.from([137, 80, 78, 71]));
+      await writeFile(join(root, "images", `${cached(url)}.json`), JSON.stringify({ mediaType: "image/png", url }));
+    }
+    const onDisk = async () => new Set((await readdir(join(root, "images"))).map((name) => name.replace(/\.(bin|json)$/, "")));
+    const deps = { store, annotations: new AnnotationStore(root), items: new ItemStore(db), images: new ImageCache(root) };
+    const first = await store.openUrl("https://example.test/first");
+    const second = await store.openUrl("https://example.test/second");
+    if (!first.ok || !second.ok) throw new Error("the pages did not open");
+    expect([...(await store.imageReferences([first.material.id]))].sort()).toEqual([own, shared]);
+
+    await deleteMaterials([first.material.id], deps);
+    expect(await onDisk()).toEqual(new Set([cached(shared), cached(unrelated)]));
+
+    await deleteMaterials([second.material.id], deps);
+    // Only what the deleted materials showed is forgotten: an image cached before stays until something sweeps it.
+    expect(await onDisk()).toEqual(new Set([cached(unrelated)]));
+  });
+
+  it.each([
+    ["their own", "deleted"],
+    ["the rest's", "remaining"],
+  ])("deletes the materials and says their pictures were kept when %s pictures cannot be read", async (_whose, failing) => {
+    const store = new MaterialStore(root, async (url) => ({ bytes: new TextEncoder().encode(`# Note\n\n![Chart](https://img.example.test/chart.png)\n`), mediaType: "text/markdown", finalUrl: url.toString() }));
+    const opened = await store.openUrl("https://example.test/note.md");
+    if (!opened.ok) throw new Error(opened.message);
+    const refused = () => Promise.reject(new Error("EACCES: permission denied, open 'materials'"));
+    const unreadable = {
+      delete: (ids: readonly string[]) => store.delete(ids),
+      imageReferences: (ids?: readonly string[]) => ((ids ? "deleted" : "remaining") === failing ? refused() : store.imageReferences(ids)),
+    };
+    const forget = vi.fn(async () => 0);
+    const items = new ItemStore(db);
+    items.upsert({ id: "src", title: "Notes", kind: "feed" }, [{ externalId: "x", title: "Note", link: "https://example.test/note.md", publishedAt: "2026-09-10T00:00:00.000Z", gist: "", readingMinutes: 1, signals: {}, summaryOnly: true }]);
+    items.markOpened(items.inbox()[0]!.id, opened.material.id);
+    // The delete went through, items included; only the pictures stayed, and the result says why.
+    expect(await deleteMaterials([opened.material.id], { store: unreadable, annotations: new AnnotationStore(root), items, images: { forget } }))
+      .toEqual({ deleted: 1, unlinkedItems: 1, picturesKept: "The materials were deleted, but their cached pictures were kept: EACCES: permission denied, open 'materials'" });
+    expect(await store.get(opened.material.id)).toBeUndefined();
+    expect(forget).not.toHaveBeenCalled();
   });
 
   it("refuses ids that are not material ids before touching anything", async () => {

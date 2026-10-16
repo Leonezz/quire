@@ -9,6 +9,7 @@ import TurndownService from "turndown";
 import { gfm as turndownGfm } from "turndown-plugin-gfm";
 import { unified } from "unified";
 
+import { resolveDeferredImageSources } from "./deferred-image-sources";
 import type { ContentRepresentation, Sha256Identity } from "./model";
 import { trackingPixelRule } from "./image-policy";
 import {
@@ -612,9 +613,13 @@ export function createRepresentations(input: {
   )
     throw new Error(input.outputBudgetErrorCode);
   const rulesApplied = ["generic.drop-active-content", "generic.safe-url-policy"];
-  const normalizedHtml = input.mediaType === "text/plain"
+  const resolvedImages = input.mediaType === "text/plain"
     ? undefined
-    : normalizeSyntaxHighlightingHtml(input.content);
+    : resolveDeferredImageSources(input.content);
+  if (resolvedImages?.replacements) rulesApplied.push("generic.deferred-image-source@1");
+  const normalizedHtml = resolvedImages === undefined
+    ? undefined
+    : normalizeSyntaxHighlightingHtml(resolvedImages.html);
   if (normalizedHtml?.replacements) rulesApplied.push("generic.syntax-highlight-table-to-code@1");
   const normalizedContent = normalizedHtml?.html ?? input.content;
   if (

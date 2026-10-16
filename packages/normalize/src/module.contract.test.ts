@@ -3402,3 +3402,236 @@ describe("block code without <pre>", () => {
     expect(nodes.filter((node) => node.type === "inlineCode").map((node) => node.value)).toEqual(["fmt.Println"]);
   });
 });
+
+describe("visible content the extractors would read as hidden", () => {
+  const prose = "Field tools record what real users experience, while lab tools load the page under fixed device and network conditions. ".repeat(8);
+  type V2Node = { type: string; value?: string; children?: V2Node[]; bodies?: V2Node[] };
+  const textOf = (node: V2Node): string => (node.type === "text" || node.type === "inlineCode" ? (node.value ?? "") : (node.children ?? []).map(textOf).join(""));
+  const walk = (nodes: V2Node[]): V2Node[] => nodes.flatMap((node) => [node, ...walk(node.children ?? [])]);
+  const representation = (result: ReturnType<typeof normalizeArticleCapture>, schema: string) =>
+    result.ok ? (result.article.materialization.representations.find((r) => r.schema === schema)?.content ?? "") : "";
+  const readerV2Nodes = (result: ReturnType<typeof normalizeArticleCapture>) => walk((JSON.parse(representation(result, "reader.document.v2")) as V2Node).children ?? []);
+  const bodyCellTexts = (nodes: V2Node[]) =>
+    nodes
+      .filter((node) => node.type === "table")
+      .flatMap((table) => (table.bodies ?? []).flatMap((section) => (section.children ?? []).map((row) => (row.children ?? []).map((cell) => textOf(cell).trim()))));
+
+  it("keeps icon-font check and cross marks in table cells as text glyphs", () => {
+    const icon = (ligature: string) => `<span class="material-icons" aria-hidden="true" translate="no">${ligature}</span>`;
+    const html = `<!doctype html><html lang="en"><head><title>Tool support</title></head><body><main><article>
+      <h1>Tool support for the metrics</h1>
+      <p>${prose}</p>
+      <table><thead><tr><th>Tool</th><th>LCP</th><th>INP</th><th>CLS</th></tr></thead><tbody>
+        <tr><td>Field monitor</td><td>${icon("check")}</td><td>${icon("block")} (use TBT instead)</td><td>${icon("remove")}</td></tr>
+        <tr><td>Lab runner</td><td>${icon("close")}</td><td>${icon("info")}</td><td>${icon("check_circle")}</td></tr>
+      </tbody></table>
+      <p><span class="material-icons" aria-hidden="true">check</span>DECORATIVE_ICON_SENTENCE closes the comparison.</p>
+      <p>${prose}</p>
+    </article></main></body></html>`;
+
+    const result = normalizeArticleCapture(articleCapture(html));
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    expect(result.article.materialization.provenance.selectedCandidate.sourcePath).toBe("article.extractor.defuddle");
+    // An unknown ligature is not guessed at: that cell stays as the extractor leaves it.
+    const nodes = readerV2Nodes(result);
+    expect(bodyCellTexts(nodes)).toEqual([
+      ["Field monitor", "✓", "✗ (use TBT instead)", "–"],
+      ["Lab runner", "✗", "", "✓"],
+    ]);
+    // Outside a table an aria-hidden icon is decoration and still goes.
+    expect(nodes.filter((node) => node.type === "paragraph").map(textOf)).toContain("DECORATIVE_ICON_SENTENCE closes the comparison.");
+    const rules = result.article.materialization.provenance.rulesApplied;
+    expect(rules).toContain("article.preextract.icon-cells@1");
+    expect(rules).not.toContain("article.preextract.pseudo-element-classes@1");
+  });
+
+  it("keeps an element whose hidden variant only targets a pseudo-element, and still drops hidden ones", () => {
+    const html = `<!doctype html><html lang="en"><head><title>Machine understanding</title></head><body><main><article>
+      <h1>Machine understanding</h1>
+      <figure><img src="/lead.png" alt="Lead illustration" /><figcaption><div class="attribution before:block l:before:hidden l:text-right"><p>PSEUDO_VARIANT_CREDIT for the magazine</p></div></figcaption></figure>
+      <p>${prose}</p>
+      <p class="after:hover:invisible">CHAINED_PSEUDO_VARIANT_TEXT stays readable.</p>
+      <p class="hidden">HIDDEN_CLASS_TEXT</p>
+      <p class="text-left sm:hidden">RESPONSIVE_HIDDEN_TEXT</p>
+      <p>${prose}</p>
+    </article></main></body></html>`;
+
+    const result = normalizeArticleCapture(articleCapture(html));
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    expect(result.article.materialization.provenance.selectedCandidate.sourcePath).toBe("article.extractor.defuddle");
+    const plain = representation(result, "selection.text.v1");
+    expect(plain).toContain("PSEUDO_VARIANT_CREDIT");
+    expect(plain).toContain("CHAINED_PSEUDO_VARIANT_TEXT");
+    expect(plain).not.toContain("HIDDEN_CLASS_TEXT");
+    expect(plain).not.toContain("RESPONSIVE_HIDDEN_TEXT");
+    const rules = result.article.materialization.provenance.rulesApplied;
+    expect(rules).toContain("article.preextract.pseudo-element-classes@1");
+    expect(rules).not.toContain("article.preextract.icon-cells@1");
+  });
+});
+
+describe("article images Defuddle would clean up", () => {
+  const prose = "The first year was mostly meetings about meetings, with the actual engineering squeezed into the gaps between them. ".repeat(6);
+  type V2Node = { type: string; url?: string; children?: V2Node[]; media?: V2Node[] };
+  const walk = (nodes: V2Node[]): V2Node[] => nodes.flatMap((node) => [node, ...walk([...(node.media ?? []), ...(node.children ?? [])])]);
+
+  it("keeps the og:image copy in the body and every panel of a multi-image figure", () => {
+    const html = `<!doctype html><html lang="en"><head><title>Why I quit</title>
+      <meta property="og:image" content="https://example.test/research/typical-day.webp">
+    </head><body><main><article>
+      <h1>Why I quit</h1>
+      <p>${prose}</p>
+      <p><img src="https://example.test/research/badge.png" alt="Ten-year badge"></p>
+      <p>${prose}</p>
+      <p><img src="https://example.test/research/typical-day.webp" alt="My typical day"></p>
+      <p>${prose}</p>
+      <figure><div class="images"><img src="https://example.test/research/panels/neuron.png" alt=""><img src="https://example.test/research/panels/channel.png" alt=""></div><figcaption>One objective per panel.</figcaption></figure>
+      <p><img src="https://example.test/research/farewell.png" alt="Farewell cake"></p>
+      <p>${prose}</p>
+    </article></main></body></html>`;
+
+    const result = normalizeArticleCapture(articleCapture(html));
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    const { provenance, representations } = result.article.materialization;
+    expect(provenance.selectedCandidate.sourcePath).toBe("article.extractor.defuddle");
+    const readerV2 = JSON.parse(representations.find((value) => value.schema === "reader.document.v2")?.content ?? "{}") as V2Node;
+    expect(walk(readerV2.children ?? []).filter((node) => node.type === "image").map((node) => node.url)).toEqual([
+      "https://example.test/research/badge.png",
+      "https://example.test/research/typical-day.webp",
+      "https://example.test/research/panels/neuron.png",
+      "https://example.test/research/panels/channel.png",
+      "https://example.test/research/farewell.png",
+    ]);
+    expect(provenance.rulesApplied).toContain("article.extractor.defuddle.options.v2");
+  });
+});
+
+describe("deferred image sources", () => {
+  const prose = "Backpropagation sends each gradient back through the graph one local derivative at a time, so every step stays cheap. ".repeat(6);
+  type V2Node = { type: string; url?: string; children?: V2Node[]; media?: V2Node[] };
+  type Representations = readonly { schema: string; content: string }[];
+  const walk = (nodes: V2Node[]): V2Node[] => nodes.flatMap((node) => [node, ...walk([...(node.media ?? []), ...(node.children ?? [])])]);
+  const content = (representations: Representations, schema: string) => representations.find((value) => value.schema === schema)?.content ?? "";
+  const readerV2ImageUrls = (representations: Representations) =>
+    walk((JSON.parse(content(representations, "reader.document.v2")) as V2Node).children ?? [])
+      .filter((node) => node.type === "image")
+      .map((node) => node.url);
+
+  it("gives lazy-loaded and JPEG XL article images a source every representation keeps", () => {
+    const html = `<!doctype html><html lang="en"><head><title>Backprop by hand</title></head><body><main><article>
+      <h1>Backprop by hand</h1>
+      <p>${prose}</p>
+      <p><img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABIAAAAZCAIAAACza+nD" data-src="https://cdn.example.test/attention.png" class="lazyload" alt="Attention scores"></p>
+      <p>${prose}</p>
+      <p><picture>
+        <source type="image/jxl" srcset="https://cdn.example.test/bear.jxl 1x,https://cdn.example.test/bear.jxl 2x">
+        <source type="image/avif" media="(max-width: 400px)" srcset="https://cdn.example.test/bear.w400.avif 1x,https://cdn.example.test/bear.w800.avif 2x">
+        <source type="image/avif" srcset="https://cdn.example.test/bear.avif 1x,https://cdn.example.test/bear.avif 2x">
+        <img src="https://cdn.example.test/bear.jxl" width="48" height="48" alt="Cool bear">
+      </picture> Cool bear has a question about the gradients.</p>
+      <p>${prose}</p>
+    </article></main></body></html>`;
+
+    const result = normalizeArticleCapture(articleCapture(html));
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    const { provenance, representations } = result.article.materialization;
+    const expected = ["https://cdn.example.test/attention.png", "https://cdn.example.test/bear.avif"];
+    expect(readerV2ImageUrls(representations)).toEqual(expected);
+    const agent = content(representations, "agent.gfm.v1");
+    for (const url of expected) expect(agent).toContain(`](${url})`);
+    expect(agent).not.toContain(".jxl");
+    expect(provenance.rulesApplied).toContain("generic.deferred-image-source@1");
+  });
+
+  it("takes a src-less feed image's URL from its picture source", () => {
+    const xml = `<?xml version="1.0"?>
+      <rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel>
+        <title>Example feed</title><link>https://example.test/</link><description>Updates</description>
+        <item>
+          <guid isPermaLink="false">backprop</guid>
+          <title>Backprop by hand</title>
+          <link>https://example.test/posts/backprop</link>
+          <content:encoded><![CDATA[
+            <p>${prose}</p>
+            <figure><picture>
+              <source srcSet="https://cdn.example.test/fit:640/format:webp/batchnorm.png 640w, https://cdn.example.test/fit:1400/format:webp/batchnorm.png 1400w" sizes="700px" type="image/webp"/>
+              <img alt="Batch norm graph" width="700" height="193" loading="eager"/>
+            </picture><figcaption>The batch norm graph.</figcaption></figure>
+          ]]></content:encoded>
+        </item>
+      </channel></rss>`;
+
+    const result = normalizeFeedCapture(capture(xml));
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    const { provenance, representations } = result.feed.entries[0].materialization;
+    expect(readerV2ImageUrls(representations)).toEqual(["https://cdn.example.test/fit:1400/format:webp/batchnorm.png"]);
+    expect(content(representations, "agent.gfm.v1")).toContain("![Batch norm graph](https://cdn.example.test/fit:1400/format:webp/batchnorm.png)");
+    expect(provenance.rulesApplied).toContain("generic.deferred-image-source@1");
+  });
+
+  const lazyImageWithFallback =
+    `<p><img src="data:image/gif;base64,R0lGODlhAQABAAAAACw=" data-src="https://cdn.example.test/chart.png" class="lazyload" alt="Chart">` +
+    `<noscript><img src="https://cdn.example.test/chart.png" alt="Chart"></noscript></p>`;
+  const expectSingleChartImage = (representations: Representations) => {
+    expect(readerV2ImageUrls(representations)).toEqual(["https://cdn.example.test/chart.png"]);
+    expect(content(representations, "agent.gfm.v1").split("](https://cdn.example.test/chart.png)")).toHaveLength(2);
+  };
+
+  it("shows a lazy image with a <noscript> fallback once when the semantic root keeps the fallback", () => {
+    const html = `<!doctype html><html><body><nav>GLOBAL_NAV_CHROME Subscribe Sign in</nav><main><article><h1>T</h1><p>${"Main content evidence ".repeat(15)}</p>${lazyImageWithFallback}<details><summary>Data</summary><table><tr><td>A</td></tr></table></details></article></main></body></html>`;
+
+    const result = normalizeArticleCapture(articleCapture(html));
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    const { provenance, representations } = result.article.materialization;
+    expect(provenance.selectedCandidate.sourcePath).toBe("article.extractor.semantic-root");
+    expectSingleChartImage(representations);
+  });
+
+  it("shows a feed entry's lazy image with a <noscript> fallback once", () => {
+    const xml = `<?xml version="1.0"?>
+      <rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/"><channel>
+        <title>Example feed</title><link>https://example.test/</link><description>Updates</description>
+        <item>
+          <guid isPermaLink="false">backprop</guid>
+          <title>Backprop by hand</title>
+          <link>https://example.test/posts/backprop</link>
+          <content:encoded><![CDATA[<p>${prose}</p>${lazyImageWithFallback}]]></content:encoded>
+        </item>
+      </channel></rss>`;
+
+    const result = normalizeFeedCapture(capture(xml));
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    expectSingleChartImage(result.feed.entries[0].materialization.representations);
+  });
+
+  it("records no rule when every image already has a displayable source", () => {
+    const html = `<!doctype html><html lang="en"><head><title>Backprop by hand</title></head><body><main><article>
+      <h1>Backprop by hand</h1>
+      <p>${prose}</p>
+      <p><img src="https://cdn.example.test/graph.png" data-src="https://cdn.example.test/other.png" alt="Graph"></p>
+      <p>${prose}</p>
+    </article></main></body></html>`;
+
+    const result = normalizeArticleCapture(articleCapture(html));
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    const { provenance, representations } = result.article.materialization;
+    expect(readerV2ImageUrls(representations)).toEqual(["https://cdn.example.test/graph.png"]);
+    expect(provenance.rulesApplied).not.toContain("generic.deferred-image-source@1");
+  });
+});

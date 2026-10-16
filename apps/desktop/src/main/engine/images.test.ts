@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -8,6 +8,14 @@ import { ImageCache } from "./images";
 let root = "";
 beforeEach(async () => { root = await mkdtemp(join(tmpdir(), "read-images-")); });
 afterEach(async () => { await rm(root, { recursive: true, force: true }); });
+
+const keyOf = (url: string) => createHash("sha256").update(url).digest("hex");
+/** A cached image as ImageCache writes it: <sha256(url)>.bin and .json under images/. */
+async function seedImage(url: string) {
+  await mkdir(join(root, "images"), { recursive: true });
+  await writeFile(join(root, "images", `${keyOf(url)}.bin`), Buffer.from([137, 80, 78, 71]));
+  await writeFile(join(root, "images", `${keyOf(url)}.json`), JSON.stringify({ mediaType: "image/png", url }));
+}
 
 describe("ImageCache", () => {
   it("serves a cached image as a data URL without touching the network", async () => {
@@ -34,5 +42,27 @@ describe("ImageCache", () => {
     expect(await cache.resolve("http://10.0.0.5/x.png")).toBeUndefined();
     expect(await cache.resolve("file:///etc/hosts")).toBeUndefined();
     expect(await cache.resolve("javascript:alert(1)")).toBeUndefined();
+  });
+});
+
+describe("ImageCache.forget", () => {
+  it("removes the cached copies of the given sources and counts them, leaving every other image and the figure crops", async () => {
+    await seedImage("https://example.test/a.png");
+    await seedImage("https://example.test/b.png");
+    await mkdir(join(root, "figures", "8667175ac66aac06"), { recursive: true });
+    await writeFile(join(root, "figures", "8667175ac66aac06", "2.png"), Buffer.from([137, 80, 78, 71]));
+    const cache = new ImageCache(root);
+
+    const removed = await cache.forget(["https://example.test/a.png", "https://example.test/a.png", "https://example.test/never-cached.png", "quire-figure://8667175ac66aac06/2.png", "file:///etc/hosts"]);
+    expect(removed).toBe(1);
+    expect((await readdir(join(root, "images"))).sort()).toEqual([`${keyOf("https://example.test/b.png")}.bin`, `${keyOf("https://example.test/b.png")}.json`].sort());
+    expect(await cache.resolve("https://example.test/b.png")).toBe("data:image/png;base64,iVBORw==");
+    expect(await cache.resolve("quire-figure://8667175ac66aac06/2.png")).toBe("data:image/png;base64,iVBORw==");
+  });
+
+  it("has nothing to remove when nothing was ever cached", async () => {
+    const cache = new ImageCache(root);
+    expect(await cache.forget(["https://example.test/a.png"])).toBe(0);
+    expect(await cache.forget([])).toBe(0);
   });
 });

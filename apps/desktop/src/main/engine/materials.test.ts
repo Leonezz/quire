@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { openDatabase } from "./db";
+import { imageReferencesOf } from "./material-content";
 import { MaterialStore, withoutTitleHeading, imageUrlsOf } from "./materials";
 import { MetaStore } from "./meta";
 
@@ -73,18 +74,122 @@ describe("MaterialStore capture", () => {
     expect(await store.captureText("../x")).toBeUndefined();
   });
 
-  it("writes no capture when the setting is off, and drops a stale one on re-fetch", async () => {
+  it("writes no capture when the setting is off, and drops a stale one when a fallback copy is fetched again", async () => {
     let keep = true;
-    const store = new MaterialStore(root, pageFetcher("Cache keys"), { keepCapture: () => keep });
+    let challenge = true;
+    const store = new MaterialStore(root, async (url) => ({ bytes: new TextEncoder().encode(challenge ? challengePage : article("Cache keys")), mediaType: "text/html", finalUrl: url.toString() }), { keepCapture: () => keep });
     const first = await store.openUrl("https://example.test/cache");
     if (!first.ok) throw new Error(first.message);
+    expect(first.material.quality.safety).toBe("degraded_plaintext");
+    expect(await store.captureText(first.material.id)).toBeDefined();
     keep = false;
+    challenge = false;
     const second = await store.openUrl("https://example.test/cache");
     if (!second.ok) throw new Error(second.message);
+    expect(second.material).toMatchObject({ id: first.material.id, title: "Cache keys" });
     expect(second.material.capture).toBeUndefined();
     expect(await store.captureText(second.material.id)).toBeUndefined();
+    const other = await store.openUrl("https://example.test/other");
+    expect(other.ok && other.material.capture).toBeUndefined();
     const markdown = await store.openFile({ name: "notes.md", mediaType: "", bytes: new TextEncoder().encode("# Notes\n\nText.") });
     expect(markdown.ok && markdown.material.capture).toBeUndefined();
+  });
+});
+
+/** What a bot challenge serves: nothing the extractor can read, so the page is kept as plain text. */
+const challengePage = `<!doctype html><html><head><title>Just a moment</title></head><body><nav>Checking your browser</nav></body></html>`;
+
+/** Serves `html()` as it is at each call, optionally from a redirect target, and records every URL asked for. */
+function countingFetcher(html: () => string, finalUrlOf: (url: URL) => string = (url) => url.toString()) {
+  const calls: string[] = [];
+  const fetcher = async (url: URL) => { calls.push(url.toString()); return { bytes: new TextEncoder().encode(html()), mediaType: "text/html", finalUrl: finalUrlOf(url) }; };
+  return Object.assign(fetcher, { calls });
+}
+
+describe("MaterialStore re-adding", () => {
+  it("returns a page already in the library as stored: no fetch, no write", async () => {
+    let title = "Cache keys";
+    const fetch = countingFetcher(() => article(title));
+    const store = new MaterialStore(root, fetch);
+    const first = await store.openUrl("https://example.test/cache");
+    if (!first.ok) throw new Error(first.message);
+    expect(first).not.toHaveProperty("existing");
+    const path = join(root, "materials", `${first.material.id}.json`);
+    const json = await readFile(path, "utf8");
+    const capture = await store.captureBytes(first.material.id);
+    title = "Cache keys, revised";
+    const again = await store.openUrl("https://example.test/cache#why");
+    expect(again).toMatchObject({ ok: true, existing: true, material: { id: first.material.id, title: "Cache keys", fetchedAt: first.material.fetchedAt } });
+    expect(fetch.calls).toEqual(["https://example.test/cache"]);
+    expect(await readFile(path, "utf8")).toBe(json);
+    expect(await store.captureBytes(first.material.id)).toEqual(capture);
+  });
+
+  it("finds a redirected page once the fetch says where it ended, before anything is written", async () => {
+    let title = "Cache keys";
+    const fetch = countingFetcher(() => article(title), (url) => `https://example.test/posts${url.pathname}`);
+    const store = new MaterialStore(root, fetch);
+    const first = await store.openUrl("https://example.test/cache");
+    if (!first.ok) throw new Error(first.message);
+    const capture = await store.captureBytes(first.material.id);
+    title = "Cache keys, revised";
+    const again = await store.openUrl("https://example.test/cache");
+    expect(again).toMatchObject({ ok: true, existing: true, material: { id: first.material.id, title: "Cache keys" } });
+    // The redirect is only known after one fetch; its answer is dropped, not materialized.
+    expect(fetch.calls).toEqual(["https://example.test/cache", "https://example.test/cache"]);
+    expect(await store.captureBytes(first.material.id)).toEqual(capture);
+    expect((await store.list()).map((m) => m.title)).toEqual(["Cache keys"]);
+  });
+
+  it("adds what an item declared to a stored page, extracted again from its capture, and writes nothing when the item adds nothing", async () => {
+    const fetch = countingFetcher(() => article("Retrieval Without Regret").replace("</head>", '<meta name="citation_doi" content="10.1234/rwr.1"></head>'));
+    const store = new MaterialStore(root, fetch);
+    const pasted = await store.openUrl("https://arxiv.org/html/2409.12345");
+    if (!pasted.ok) throw new Error(pasted.message);
+    expect(pasted.material.byline).toBeUndefined();
+    const item = { kind: "preprint" as const, arxivId: "2409.12345", publication: "arXiv", creators: [{ role: "author" as const, name: "Mara Lindqvist" }], abstract: "From the Atom feed.", date: "2026-09-17T17:59:12.000Z" };
+    const read = await store.openUrl("https://arxiv.org/html/2409.12345", "feed", item);
+    expect(read).toMatchObject({ ok: true, existing: true, material: { id: pasted.material.id, origin: "web", kind: "preprint", title: "Retrieval Without Regret", byline: "Mara Lindqvist", fetchedAt: pasted.material.fetchedAt, meta: { arxivId: "2409.12345", abstract: "From the Atom feed.", doi: "10.1234/rwr.1" } } });
+    expect(fetch.calls).toHaveLength(1);
+    const path = join(root, "materials", `${pasted.material.id}.json`);
+    const json = await readFile(path, "utf8");
+    expect(JSON.parse(json)).toMatchObject({ itemMeta: item, extracted: { kind: "preprint", abstract: "From the Atom feed." }, primaryView: "web", views: [{ id: "web", status: "ready" }] });
+    expect(await store.openUrl("https://arxiv.org/html/2409.12345", "feed", item)).toMatchObject({ ok: true, existing: true });
+    expect(await readFile(path, "utf8")).toBe(json);
+  });
+
+  it("returns a dropped file already in the library as stored", async () => {
+    const store = new MaterialStore(root);
+    const bytes = new TextEncoder().encode("# Notes\n\nText.");
+    const first = await store.openFile({ name: "notes.md", mediaType: "", bytes });
+    if (!first.ok) throw new Error(first.message);
+    expect(first).not.toHaveProperty("existing");
+    const again = await store.openFile({ name: "renamed.md", mediaType: "", bytes });
+    expect(again).toMatchObject({ ok: true, existing: true, material: { id: first.material.id, url: first.material.url, fetchedAt: first.material.fetchedAt } });
+  });
+
+  it("never replaces a stored page with a feed's copy", async () => {
+    const store = new MaterialStore(root, pageFetcher("Cache keys"));
+    const page = await store.openUrl("https://example.test/cache");
+    if (!page.ok) throw new Error(page.message);
+    const copy = await store.saveFromFeed({ url: "https://example.test/cache", title: "Feed title", content: { plain: "Only the feed's summary." } });
+    expect(copy).toMatchObject({ id: page.material.id, title: "Cache keys", problems: [] });
+    expect(await store.get(page.material.id)).toMatchObject({ title: "Cache keys", problems: [] });
+  });
+
+  it("never lets a page the extractor cannot read replace the feed's copy of it", async () => {
+    let challenge = true;
+    const store = new MaterialStore(root, async (url) => ({ bytes: new TextEncoder().encode(challenge ? challengePage : article("Cache keys")), mediaType: "text/html", finalUrl: url.toString() }));
+    const copy = await store.saveFromFeed({ url: "https://example.test/cache", title: "Cache keys", content: { plain: "The full post as the feed carries it." }, meta: { kind: "newsletter" } });
+    const again = await store.openUrl("https://example.test/cache");
+    expect(again).toMatchObject({ ok: true, existing: true, material: { id: copy.id, plain: "The full post as the feed carries it.", kind: "newsletter", quality: { safety: "safe" } } });
+    expect(await store.get(copy.id)).toMatchObject({ plain: "The full post as the feed carries it." });
+    // The challenge page was captured while it was read; the feed's copy keeps none.
+    expect(await store.captureBytes(copy.id)).toBeUndefined();
+    challenge = false;
+    const page = await store.openUrl("https://example.test/cache");
+    expect(page).toMatchObject({ ok: true, material: { id: copy.id, title: "Cache keys", problems: [], kind: "newsletter" } });
+    expect(page).not.toHaveProperty("existing");
   });
 });
 
@@ -165,6 +270,32 @@ describe("MaterialStore metadata", () => {
     expect(refreshed).toMatchObject({ kind: "journalArticle", title: "Calibrated Abstention for Long-Context QA", meta: { doi: "10.1234/jr.2026.0042" } });
     expect(JSON.parse(await readFile(path, "utf8"))).toMatchObject({ extracted: { kind: "journalArticle", doi: "10.1234/jr.2026.0042" } });
     await expect(store.refreshMetadata("0000000000000000")).rejects.toThrow(/is not in the library/);
+  });
+
+  it("keeps what the page declared when an item adds to a page whose capture was not kept, or whose PDF is now its primary view", async () => {
+    const pdf = new Uint8Array(await readFile(join(__dirname, "__fixtures__", "two-pages.pdf")));
+    let keep = false;
+    const store = new MaterialStore(root, async (url) => (url.pathname.endsWith(".pdf")
+      ? { bytes: pdf, mediaType: "application/pdf", finalUrl: url.toString() }
+      : { bytes: new TextEncoder().encode(taggedArticle), mediaType: "text/html", finalUrl: url.toString() }), { keepCapture: () => keep });
+    const declared = { kind: "journalArticle", title: "Calibrated Abstention for Long-Context QA", publication: "Journal of Retrieval", doi: "10.1234/jr.2026.0042", date: "2026-05-12", creators: [{ family: "Lindqvist" }, { family: "Nowak" }] };
+    const item = { abstract: "From the feed.", publication: "Retrieval Weekly", creators: [{ role: "author" as const, name: "Someone Else" }] };
+
+    const uncaptured = await store.openUrl("https://journal.example.test/articles/42");
+    if (!uncaptured.ok) throw new Error(uncaptured.message);
+    expect(await store.captureBytes(uncaptured.material.id)).toBeUndefined();
+    // As with the page at hand: the page's tags win over the item's, and the item fills what the page left out.
+    expect(await store.openUrl("https://journal.example.test/articles/42", "feed", item)).toMatchObject({ ok: true, existing: true, material: { kind: "journalArticle", byline: "Mara Lindqvist, Tomasz Nowak", meta: { ...declared, abstract: "From the feed." } } });
+    expect(await store.exportBibtex([uncaptured.material.id])).toContain("doi = {10.1234/jr.2026.0042}");
+
+    keep = true;
+    const captured = await store.openUrl("https://journal.example.test/articles/43");
+    if (!captured.ok) throw new Error(captured.message);
+    const { id } = captured.material;
+    await store.registerView(id, { id: "pdf", label: "PDF", url: "https://journal.example.test/articles/43.pdf", mediaType: "application/pdf", status: "available" });
+    expect((await store.fetchView(id, "pdf")).ok).toBe(true);
+    expect((await store.setPrimaryView(id, "pdf")).mediaType).toBe("application/pdf");
+    expect(await store.openUrl("https://journal.example.test/articles/43", "feed", item)).toMatchObject({ ok: true, existing: true, material: { id, primaryView: "pdf", kind: "journalArticle", meta: { ...declared, abstract: "From the feed." } } });
   });
 
   it("merges the item's metadata under the page's when a subscription item is read", async () => {
@@ -262,6 +393,67 @@ describe("imageUrlsOf", () => {
     ] });
     expect(imageUrlsOf({ reader: { schema: "reader.document.v2", payload } })).toEqual(["https://x.test/a.png", "https://x.test/b.png"]);
     expect(imageUrlsOf({})).toEqual([]);
+  });
+});
+
+describe("imageReferencesOf", () => {
+  const image = (n: number) => ({ type: "image", url: `https://x.test/${n}.png`, alt: "" });
+  const cell = (n: number) => ({ type: "tableCell", align: null, colSpan: 1, rowSpan: 1, header: false, scope: null, children: [{ type: "paragraph", children: [image(n)] }] });
+
+  it("lists every picture of the reader document, past the prefetch cap and in every container, http(s) only", () => {
+    const payload = JSON.stringify({ type: "root", losses: [], children: [
+      { type: "paragraph", children: Array.from({ length: 95 }, (_, n) => image(n)) },
+      { type: "table", caption: [], head: null, bodies: [], foot: { type: "tableSection", children: [{ type: "tableRow", children: [cell(95)] }] } },
+      { type: "figure", media: [{ type: "image", url: "quire-figure://8667175ac66aac06/1.png", alt: "" }], caption: [], credit: [] },
+    ] });
+    const reader = { schema: "reader.document.v2" as const, payload };
+    expect(imageUrlsOf({ reader })).toHaveLength(80);
+    const all = imageReferencesOf({ reader }, "https://x.test/post");
+    expect(all).toHaveLength(96);
+    expect(all).toContain("https://x.test/95.png");
+    expect(all).not.toContain("quire-figure://8667175ac66aac06/1.png");
+  });
+
+  it("reads the Markdown the reader falls back to with the reader's own parser: escapes resolved, code left alone", () => {
+    const markdown = "Before.\n\n![Chart](https://i0.wp.com/acoup.blog/chart.png?resize=926%2C659\\&ssl=1)\n\nAfter `![not a picture](https://x.test/code.png)`.\n";
+    const chart = "https://i0.wp.com/acoup.blog/chart.png?resize=926%2C659&ssl=1";
+    expect(imageReferencesOf({ markdown }, "https://acoup.blog/post")).toEqual([chart]);
+    // A reader document that cannot be read renders the Markdown instead, so its pictures are the Markdown's.
+    expect(imageReferencesOf({ reader: { schema: "reader.document.v2", payload: "{not json" }, markdown }, "https://acoup.blog/post")).toEqual([chart]);
+    expect(imageReferencesOf({}, "https://acoup.blog/post")).toEqual([]);
+  });
+});
+
+describe("MaterialStore.imageReferences", () => {
+  const encode = (text: string) => new TextEncoder().encode(text);
+  const fetcher = async (url: URL) => (url.pathname.endsWith(".md")
+    ? { bytes: encode("# Cache keys\n\n![Only in this view](https://img.test/view-only.png)\n"), mediaType: "text/markdown", finalUrl: url.toString() }
+    : { bytes: encode(article("Cache keys")), mediaType: "text/html", finalUrl: url.toString() });
+
+  it("reads every picture of the record, its stored views and its kept revisions, for the given materials or for all of them", async () => {
+    const store = new MaterialStore(root, fetcher);
+    // A dropped Markdown file with 95 pictures, more than the 80 a save prefetches.
+    const gallery = await store.openFile({ name: "gallery.md", mediaType: "", bytes: encode(`# Gallery\n\n${Array.from({ length: 95 }, (_, n) => `![${n}](https://img.test/${n}.png)`).join("\n\n")}\n`) });
+    if (!gallery.ok) throw new Error(gallery.message);
+    // A page without pictures, with a stored Markdown view that has one.
+    const page = await store.openUrl("https://example.test/cache");
+    if (!page.ok) throw new Error(page.message);
+    await store.registerView(page.material.id, { id: "markdown", label: "Markdown", url: "https://example.test/cache.md", mediaType: "text/markdown", status: "available" });
+    expect(await store.fetchView(page.material.id, "markdown")).toMatchObject({ ok: true });
+    // A feed's Markdown-only copy, its picture's link escaped the way GFM output writes it.
+    const copy = await store.saveFromFeed({ url: "https://acoup.blog/post", title: "Post", content: { markdown: "Intro.\n\n![Chart](https://i0.wp.com/acoup.blog/chart.png?resize=926%2C659\\&ssl=1)\n" } });
+    expect(copy.reader).toBeUndefined();
+    // An artifact whose first version showed another picture than its current one.
+    const artifact = await store.saveArtifact({ title: "Synthesis", source: "![First](https://img.test/first.png)", lineage: [page.material.id] });
+    await store.updateArtifact(artifact.id, { source: "![Second](https://img.test/second.png)" });
+
+    expect((await store.imageReferences([gallery.material.id])).size).toBe(95);
+    expect([...(await store.imageReferences([page.material.id]))]).toEqual(["https://img.test/view-only.png"]);
+    expect([...(await store.imageReferences([copy.id]))]).toEqual(["https://i0.wp.com/acoup.blog/chart.png?resize=926%2C659&ssl=1"]);
+    expect([...(await store.imageReferences([artifact.id]))].sort()).toEqual(["https://img.test/first.png", "https://img.test/second.png"]);
+    expect((await store.imageReferences()).size).toBe(95 + 1 + 1 + 2);
+    expect((await store.imageReferences(["0000000000000000"])).size).toBe(0);
+    await expect(store.imageReferences(["../x"])).rejects.toThrow("Not a material id: ../x");
   });
 });
 

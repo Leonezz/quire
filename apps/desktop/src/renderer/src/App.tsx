@@ -8,7 +8,7 @@ import { AppSidebar } from "./AppSidebar";
 import { ListToolbar, ShellActions } from "./AppToolbar";
 import type { ShellSlots } from "./ContentPane";
 import { InboxView } from "./InboxView";
-import { LibraryView } from "./LibraryView";
+import { LibraryView, type LibraryNotice } from "./LibraryView";
 import { QueueView } from "./QueueView";
 import { SearchPalette } from "./SearchPalette";
 import { SettingsSheet, type SettingsSection } from "./SettingsSheet";
@@ -28,6 +28,7 @@ const SIDEBAR_KEY = "read:layout:sidebar-collapsed";
 const SIDEBAR_MIN = 180;
 const SIDEBAR_DEFAULT = 220;
 const LIBRARY_CONTEXT: AgentContext = { kind: "library" };
+const ALREADY_IN_LIBRARY = "Already in your library";
 
 function loadSidebarCollapsed(): boolean {
   try { return localStorage.getItem(SIDEBAR_KEY) === "1"; } catch { return false; }
@@ -68,6 +69,8 @@ export function App() {
   const [addOpen, setAddOpen] = useState(false);
   const [addBusy, setAddBusy] = useState(false);
   const [addError, setAddError] = useState<string | undefined>();
+  // Adding a page or file that is in the library already opens the stored one and says so.
+  const [addNotice, setAddNotice] = useState<LibraryNotice | undefined>(undefined);
   const [searchOpen, setSearchOpen] = useState(false);
   const [settings, setSettings] = useState<{ open: boolean; section?: SettingsSection | undefined }>({ open: false });
   const [routeError, setRouteError] = useState<string | undefined>(undefined);
@@ -149,7 +152,7 @@ export function App() {
   // Opening a material from elsewhere (search, a citation, "Open in Library") must show it, whatever the Library was narrowed to.
   // A quote rides along as a jump request; the same material stays mounted, so the jump happens in place.
   const showMaterial = useCallback((id: string, quote?: string) => {
-    library.setQuery(""); setScope({ kind: "library", id: "all" }); setLibrarySelected(new Set([id]));
+    library.setQuery(""); setScope({ kind: "library", id: "all" }); setLibrarySelected(new Set([id])); setAddNotice(undefined);
     jumpNonce.current += 1;
     setQuoteJump(quote ? { materialId: id, quote, nonce: jumpNonce.current } : undefined);
   }, [library, setScope]);
@@ -161,6 +164,7 @@ export function App() {
     setAddOpen(false);
     await library.refresh();
     showMaterial(result.material.id);
+    if (result.existing) setAddNotice({ materialId: result.material.id, text: ALREADY_IN_LIBRARY });
   };
   const submitFile = async (file: File) => {
     setAddBusy(true); setAddError(undefined);
@@ -171,6 +175,7 @@ export function App() {
     setAddOpen(false);
     await library.refresh();
     showMaterial(result.material.id);
+    if (result.existing) setAddNotice({ materialId: result.material.id, text: ALREADY_IN_LIBRARY });
   };
   const subscribed = async ({ source, added }: { source: { id: string }; added: number }) => {
     setAddOpen(false);
@@ -233,7 +238,7 @@ export function App() {
       case "queue":
         return <QueueView items={lists.queue} selectedId={queueSelected} onSelect={setQueueSelected} refresh={lists.refresh} onOpenLink={openLink} onOpenMaterial={showMaterial} shell={shell} error={shellError} />;
       case "library": case "tag":
-        return <LibraryView library={library} selected={librarySelected} onSelectionChange={setLibrarySelected} onOpenLink={openLink} onOpenMaterial={showMaterial} jumpToQuote={quoteJump} onOpenSettings={() => openSettings("agent")} shell={shell} narrowed={scope.kind === "tag" || scope.id !== "all"} />;
+        return <LibraryView library={library} selected={librarySelected} onSelectionChange={(selection) => { setLibrarySelected(selection); setAddNotice(undefined); }} onOpenLink={openLink} onOpenMaterial={showMaterial} jumpToQuote={quoteJump} onOpenSettings={() => openSettings("agent")} shell={shell} narrowed={scope.kind === "tag" || scope.id !== "all"} notice={addNotice} />;
       case "agent":
         return <AgentView sessions={agentSessions} requestedSession={requestedSession} onOpenMaterial={showMaterial} onOpenLink={openLink} onOpenSettings={() => openSettings("agent")} shell={shell} />;
       case "sources":

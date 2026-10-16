@@ -165,6 +165,7 @@ export function createPreviewM3(deps: { getMaterial: (id: string) => Promise<Mat
       writeJson(META_KEY, Object.fromEntries(Object.entries(overridesAll()).filter(([id]) => !ids.includes(id))));
       for (const id of ids) localStorage.removeItem(`read:preview-annotations:${id}`);
       notify();
+      return {};
     },
     keepItem: async (id) => {
       const result = await keepPreviewItem(id, getMaterial);
@@ -178,6 +179,8 @@ export function createPreviewM3(deps: { getMaterial: (id: string) => Promise<Mat
       writeJson(SETTINGS_KEY, { ...current, ...validateSettings(patch, { ...SETTINGS_DEFAULTS, ...current }) });
       return settings();
     },
+    // Nothing is written to disk here (see PREVIEW_DATA_DIRECTORY), so there is nothing to measure.
+    storageUsage: async () => { throw new Error("The browser preview keeps nothing on disk; the desktop app measures its storage."); },
 
     // Sessions the demo agent wrote (previewSessions.ts); none until it has answered once.
     listAgentSessions: async () => listSessions(),

@@ -78,6 +78,17 @@ export function withPrimaryView(record: StoredRecord): StoredRecord {
   return { ...record, views: viewsOf(record), primaryView: primaryViewOf(record) };
 }
 
+/**
+ * A record materialized again over a stored one: its own primary view, then every other view the
+ * stored record listed (a fetched PDF, a built Text view), whose files beside the record stay as
+ * they are. Only the stored primary view's content is replaced, so a rewrite never drops a view.
+ */
+export function mergeViews(previous: StoredRecord, next: StoredRecord): StoredRecord {
+  const primary = primaryViewOf(next);
+  const carried = viewsOf(previous).filter((view) => view.id !== primary && view.id !== primaryViewOf(previous));
+  return { ...next, views: carried.reduce((views, view) => upsertView(views, view), viewsOf(next)), primaryView: primary };
+}
+
 /** The primary view's content, assembled from the record's own fields. */
 export function primaryContentOf(record: StoredRecord): MaterialViewContent {
   return {

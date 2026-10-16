@@ -7,7 +7,7 @@ export function mockRead(overrides: Partial<ReadApi> = {}): ReadApi {
     "onLibraryChanged", "importCorpus", "setTheme", "openUrl", "openFile", "getMaterial", "resolveImage", "listAnnotations", "saveAnnotation", "deleteAnnotation", "getMaterialBytes", "listMaterials",
     "detectSource", "addSource", "listSources", "syncSource", "syncAllSources", "pauseSource", "removeSource", "onSourcesChanged", "listInbox", "listQueue", "getItem", "readItem", "decideItem", "reorderQueue", "recordReadingEvent", "readingStats", "search",
     "agentStatus", "agentAsk", "agentInterrupt", "listAgentRuns", "agentLogin", "onAgentEvent", "onAgentOpenSession",
-    "queryLibrary", "updateMaterialMeta", "refreshMetadata", "exportBibtex", "listTags", "deleteMaterials", "keepItem", "getSettings", "updateSettings", "listAgentSessions", "getAgentSession", "deleteAgentSession", "onAgentSessionsChanged",
+    "queryLibrary", "updateMaterialMeta", "refreshMetadata", "exportBibtex", "listTags", "deleteMaterials", "keepItem", "getSettings", "updateSettings", "storageUsage", "listAgentSessions", "getAgentSession", "deleteAgentSession", "onAgentSessionsChanged",
     "fetchMaterialView", "getMaterialView", "setPrimaryView",
     "getUpdateState", "checkForUpdates", "installUpdate", "openReleasePage", "onUpdateState",
     "feedbackSubmit", "onFeedbackProgress", "feedbackCopyScreenshot", "feedbackCreate", "feedbackList", "feedbackDelete", "feedbackOpenIssue", "feedbackSetIssueUrl", "feedbackReveal", "onFeedbackChanged",

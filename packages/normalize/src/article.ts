@@ -1,5 +1,4 @@
 import { Readability } from "@mozilla/readability";
-import { DefuddleClass } from "defuddle/node";
 import { parseHTML } from "linkedom";
 
 import type {
@@ -16,6 +15,8 @@ import {
   applyArticleSiteAdapter,
   articleSiteAdapterRule,
 } from "./article-site-adapters";
+import { QuireDefuddle } from "./article-defuddle";
+import { preextractArticleDocument } from "./article-preextract";
 import { pruneArticleChrome } from "./article-prune";
 import { createRepresentations, sha256Identity } from "./representations";
 
@@ -37,6 +38,8 @@ type ExtractionCandidate = {
   content: string;
   dir?: "ltr" | "rtl";
   lang?: string;
+  /** Rewrites the extractor's input went through before it ran. */
+  preextractionRules?: readonly string[];
   publishedAt?: string;
   sourcePath:
     | "article.extractor.defuddle"
@@ -44,6 +47,11 @@ type ExtractionCandidate = {
     | "article.extractor.semantic-root"
     | "article.extractor.site-adapter";
   title: string;
+};
+
+type ExtractorInput = {
+  document: DocumentLike;
+  preextractionRules: readonly string[];
 };
 
 type CharsetEvidence = {
@@ -855,13 +863,13 @@ function readabilityPassesQualityGate(
 }
 
 function defuddleCandidate(
-  document: DocumentLike,
+  input: ExtractorInput,
   source: string,
 ): ExtractionCandidate | undefined {
   const offlineFetch: typeof globalThis.fetch = async () => {
     throw new Error("SOURCE_ARTICLE_EXTRACTOR_NETWORK_FORBIDDEN");
   };
-  const result = new DefuddleClass(document, {
+  const result = new QuireDefuddle(input.document, {
     debug: false,
     fetch: offlineFetch,
     includeReplies: false,
@@ -875,6 +883,7 @@ function defuddleCandidate(
     byline: normalizedOptionalString(result.author, 500),
     content: result.content,
     lang: normalizedOptionalString(result.language, 64),
+    preextractionRules: input.preextractionRules,
     publishedAt: normalizedPublishedAt(result.published),
     sourcePath: "article.extractor.defuddle",
     title: normalizedOptionalString(result.title, 500) ?? "",
@@ -882,10 +891,10 @@ function defuddleCandidate(
 }
 
 function readabilityCandidate(
-  document: DocumentLike,
+  input: ExtractorInput,
   maxNodes: number,
 ): ExtractionCandidate | undefined {
-  const result = new Readability(document, {
+  const result = new Readability(input.document, {
     charThreshold: 120,
     keepClasses: true,
     maxElemsToParse: maxNodes,
@@ -896,6 +905,7 @@ function readabilityCandidate(
     content: result.content,
     dir: normalizedDirection(result.dir),
     lang: normalizedOptionalString(result.lang, 64),
+    preextractionRules: input.preextractionRules,
     publishedAt: normalizedPublishedAt(result.publishedTime),
     sourcePath: "article.extractor.readability",
     title: normalizedOptionalString(result.title, 500) ?? "",
@@ -925,14 +935,20 @@ function uniqueSemanticArticleRoot(document: DocumentLike) {
   return containedArticles.length === 1 ? containedArticles[0] : undefined;
 }
 
+/** A fresh copy of the article region for one extractor, with the pre-extraction rewrites applied. */
 function extractorDocumentFor(
   document: DocumentLike,
   root: Element,
   source: string,
-) {
-  return root === document.body
-    ? offlineExtractorDocument(document, source)
-    : boundedExtractorDocument(document, root, source);
+): ExtractorInput {
+  const extractorDocument =
+    root === document.body
+      ? offlineExtractorDocument(document, source)
+      : boundedExtractorDocument(document, root, source);
+  return {
+    document: extractorDocument,
+    preextractionRules: preextractArticleDocument(extractorDocument),
+  };
 }
 
 /** Element-wise maximum of the candidates' rich-structure counts. */
@@ -994,7 +1010,7 @@ function candidateRules(sourcePath: ExtractionCandidate["sourcePath"]) {
       "article.extractor.semantic-boundary.v1",
       "article.extractor.structure-retention.v2",
       "article.extractor.defuddle@0.19.3",
-      "article.extractor.defuddle.options.v1",
+      "article.extractor.defuddle.options.v2",
     ];
   }
   if (sourcePath === "article.extractor.readability") {
@@ -1357,6 +1373,7 @@ export function normalizeArticleCapture(
       "article.normalization@3",
       ...decoding.rulesApplied,
       ...candidateRules(selected.sourcePath),
+      ...(selected.preextractionRules ?? []),
       ...pruned.rulesApplied,
       ...(selected.sourcePath === "article.extractor.site-adapter" &&
       siteAdapterApplication

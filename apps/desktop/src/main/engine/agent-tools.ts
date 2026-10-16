@@ -72,7 +72,7 @@ export const agentTools: readonly DynamicTool[] = [
     inputSchema: { type: "object", properties: { id: idSchema }, required: ["id"], additionalProperties: false } },
   { name: "inbox_list", description: "Undecided items from the reader's subscriptions (id, title, sourceTitle, gist, link, publishedAt): what arrived but has not been read, queued or dismissed. Use it for triage questions; read a full item by importing its link with library_import.",
     inputSchema: { type: "object", properties: { limit: { ...limitSchema, description: `How many, default ${DEFAULT_RECENT}.` } }, additionalProperties: false } },
-  { name: "library_import", description: "Fetch a public http(s) page and add it to the library as a material, returning its id, title and readingMinutes. Use it only when the reader asked for an outside page or an inbox item's full text; then read it with material_read, and cite the new material as [id] after its title.",
+  { name: "library_import", description: "Fetch a public http(s) page and add it to the library as a material, returning its id, title and readingMinutes. A page already in the library is not fetched again: it comes back as stored, with existing: true. Use it only when the reader asked for an outside page or an inbox item's full text; then read it with material_read, and cite the new material as [id] after its title.",
     inputSchema: { type: "object", properties: { url: { type: "string", minLength: 8, maxLength: 4096 } }, required: ["url"], additionalProperties: false } },
   { name: "material_source", description: `The captured raw page of a material as readable text with its structure (blank lines between blocks, # headings, - list items, fenced code, [text](href) links), ${PAGE_CHARS} characters per call, navigation and chrome included. Use it for a rebuild when the extracted text is broken; page with nextOffset until it is null. Only materials fetched with capture on have it.`,
     inputSchema: { type: "object", properties: { id: idSchema, offset: { type: "integer", minimum: 0, description: "Character offset; use the previous call's nextOffset." } }, required: ["id"], additionalProperties: false } },
@@ -229,10 +229,12 @@ async function execute(tool: string, raw: unknown, deps: ToolDeps, scope: TurnSc
     const url = text(record(raw, ["url"]), "url", 4096);
     const result = await deps.store.openUrl(url, "web");
     if (!result.ok) throw new Error(`Could not import ${url}: ${result.message} (${result.code})`);
-    deps.onMaterialized?.(result.material);
-    deps.onChanged();
     const { id, title, readingMinutes } = result.material;
     scope.seen.add(id);
+    // A page in the library already comes back as stored: nothing was fetched or written.
+    if (result.existing) return { value: { id, title, readingMinutes, existing: true }, summary: `library_import → ${quoteOf(title)} (already in the library)` };
+    deps.onMaterialized?.(result.material);
+    deps.onChanged();
     return { value: { id, title, readingMinutes }, summary: `library_import → ${quoteOf(title)}` };
   }
   if (tool === "artifact_write") {

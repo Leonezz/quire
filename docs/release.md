@@ -69,7 +69,11 @@ from CI instead).
    - runs `electron-builder --mac --publish always`, which packages `Quire.app` for `arm64` and
      `x64`, produces a `.dmg` and a `.zip` per architecture plus `latest-mac.yml`, and creates a
      release `v<version>` on this repository with those files;
-   - uploads the same files as a workflow artifact (`quire-v<version>-mac`);
+   - fails unless the release carries all nine assets: electron-builder skips every upload, with
+     exit code 0, to a release published more than two hours ago, so the publish step sets
+     `EP_GH_IGNORE_TIME=true` and re-running a failed job (or a new run for the same tag) still
+     uploads;
+   - uploads the same files, blockmaps included, as a workflow artifact (`quire-v<version>-mac`);
    - writes the release notes from the `feat:`/`fix:` commits since the previous tag and marks the
      release as a prerelease when the tag contains `alpha` or `beta` (otherwise it becomes the
      latest release).

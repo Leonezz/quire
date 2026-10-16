@@ -12,6 +12,9 @@ export type Database = DatabaseSync;
  */
 export const SCHEMA_VERSION = 4;
 
+/** The database's file name in the data directory. */
+export const DATABASE_FILE = "quire.sqlite";
+
 const SCHEMA_V1 = `
 CREATE TABLE IF NOT EXISTS sources (
   id TEXT PRIMARY KEY,

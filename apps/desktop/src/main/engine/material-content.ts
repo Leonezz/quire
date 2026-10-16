@@ -66,20 +66,37 @@ export function withoutTitleHeading(markdown: string, title: string): string {
 
 /** Image sources referenced by the reader document, in reading order, for caching at save time. */
 export function imageUrlsOf(record: Pick<StoredRecord, "reader">): string[] {
-  if (!record.reader) return [];
+  return readerImageUrls(record.reader, MAX_PREFETCH_IMAGES) ?? [];
+}
+
+/**
+ * Every picture a rendering shows through the image cache, uncapped: the reader document's or, when
+ * there is no reader document to render, those of the Markdown the reader falls back to, read by the
+ * same remark parser so escapes such as `\&` come out as the reader sees them.
+ */
+export function imageReferencesOf(content: Pick<ContentFields, "reader" | "markdown">, baseUri: string): string[] {
+  const fromReader = readerImageUrls(content.reader, Number.POSITIVE_INFINITY);
+  if (fromReader) return fromReader;
+  return content.markdown ? readerImageUrls(markdownParts(content.markdown, baseUri).reader, Number.POSITIVE_INFINITY) ?? [] : [];
+}
+
+/** The http(s) image sources of a reader document, in reading order, once each, at most `limit`; undefined when there is none to read. */
+function readerImageUrls(reader: ReaderRepresentation | undefined, limit: number): string[] | undefined {
+  if (!reader) return undefined;
   let root: unknown;
-  try { root = JSON.parse(record.reader.payload); } catch { return []; }
-  const urls: string[] = [];
-  const seen = new Set<string>();
+  // The reader falls back to the Markdown for a payload it cannot read; so does the caller.
+  try { root = JSON.parse(reader.payload); } catch { return undefined; }
+  const urls = new Set<string>();
   const visit = (node: unknown) => {
-    if (urls.length >= MAX_PREFETCH_IMAGES || !node || typeof node !== "object") return;
+    if (urls.size >= limit || !node || typeof node !== "object") return;
     if (Array.isArray(node)) { node.forEach(visit); return; }
     const value = node as Record<string, unknown>;
-    if (value.type === "image" && typeof value.url === "string" && /^https?:/.test(value.url) && !seen.has(value.url)) { seen.add(value.url); urls.push(value.url); }
-    for (const key of ["children", "caption", "credit", "media", "bodies", "head", "foot"]) visit(value[key]);
+    if (value.type === "image" && typeof value.url === "string" && /^https?:/.test(value.url)) urls.add(value.url);
+    // Every key, not the containers known today: a picture in a new one must never count as unused.
+    Object.values(value).forEach(visit);
   };
   visit(root);
-  return urls;
+  return [...urls];
 }
 
 export function looksLikePdf(bytes: Uint8Array): boolean {

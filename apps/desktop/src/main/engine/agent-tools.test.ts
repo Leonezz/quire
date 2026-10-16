@@ -120,6 +120,18 @@ describe("createToolHandler", () => {
     expect(changes).toHaveLength(2);
   });
 
+  it("says when an imported page was in the library already, and changes nothing", async () => {
+    const { handle, changes } = await setup();
+    const first = parse((await handle({ tool: "library_import", arguments: { url: "https://example.test/new-page" }, callId: "c1" })).text);
+    expect(first).not.toHaveProperty("existing");
+    const again = await handle({ tool: "library_import", arguments: { url: "https://example.test/new-page" }, callId: "c2" });
+    expect(again.success).toBe(true);
+    expect(parse(again.text)).toMatchObject({ ok: true, id: first.id, title: "Imported page", existing: true });
+    expect(again.summary).toBe('library_import → "Imported page" (already in the library)');
+    expect(changes).toEqual(["materialized Imported page", "changed"]);
+    expect(agentTools.find((t) => t.name === "library_import")?.description).toContain("existing: true");
+  });
+
   it("writes typed artifacts and edits them in place, one version per change", async () => {
     const { handle, store, material } = await setup();
     const html = "<!doctype html><html><body><h1>Momentum</h1><p id=\"n\">Old figure</p><script>document.title = 'x'</script></body></html>";

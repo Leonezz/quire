@@ -115,8 +115,33 @@ jobs:
             gh release create "$tag" --repo "$RELEASE_REPO" --title "Quire $tag" --notes "Building…" --prerelease
           fi
 
+      # electron-builder skips every upload, and still exits 0, when the existing release was published
+      # more than two hours ago. The step above creates that release on purpose, so a re-run of a failed
+      # job (alpha.5) must not be refused for its age.
       - name: Package and publish
+        env:
+          EP_GH_IGNORE_TIME: "true"
         run: pnpm --filter @read/desktop exec electron-builder --mac --publish always
+
+      - name: Check the release has every asset
+        shell: bash
+        run: |
+          tag="${{ inputs.tag }}"
+          version="${tag#v}"
+          have="$(gh release view "$tag" --repo "$RELEASE_REPO" --json assets --jq '.assets[].name')"
+          missing=""
+          for arch in arm64 x64; do
+            for ext in dmg dmg.blockmap zip zip.blockmap; do
+              name="Quire-${version}-${arch}.${ext}"
+              grep -qxF "$name" <<< "$have" || missing="$missing $name"
+            done
+          done
+          grep -qxF latest-mac.yml <<< "$have" || missing="$missing latest-mac.yml"
+          if [ -n "$missing" ]; then
+            echo "::error::Release $tag is missing:$missing"
+            exit 1
+          fi
+          echo "Release $tag has all 9 assets."
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -126,6 +151,7 @@ jobs:
           path: |
             apps/desktop/release/*.dmg
             apps/desktop/release/*.zip
+            apps/desktop/release/*.blockmap
             apps/desktop/release/*.yml
 
       # electron-builder created the release; this fills in its notes from the feat/fix commits since
