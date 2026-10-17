@@ -835,7 +835,7 @@ function normalizeEntry(input: {
       if (!legacyExternalIds.includes(oldDerived)) legacyExternalIds.push(oldDerived);
     }
     const conforms = entryConformance({ candidateResult, dialect, entry, feedConformant, feedHasAuthor });
-    const warnings: NormalizationProblem[] = [...candidateResult.warnings, ...candidateWarnings];
+    const warnings: NormalizationProblem[] = [...candidateResult.warnings, ...candidateWarnings, ...representationResult.problems];
     if (selectedCandidate.role === "ambiguous") warnings.push(problem("SOURCE_CONTENT_COMPLETENESS_AMBIGUOUS", "warning", "acquire-linked-source", "candidate"));
     if (selectedCandidate.role === "external") warnings.push(problem("SOURCE_CONTENT_EXTERNAL", "warning", "acquire-linked-source", "candidate"));
     if (!declaredIdentity && !link) warnings.push(problem("SOURCE_IDENTITY_DERIVED", "warning", "none", "candidate"));

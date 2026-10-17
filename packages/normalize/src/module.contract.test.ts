@@ -1443,7 +1443,6 @@ describe("ContentNormalizationModule", () => {
           fallback: "children",
           sourceTag: "custom-safe",
         }),
-        expect.objectContaining({ fallback: "omitted", sourceTag: "iframe" }),
       ]),
       type: "root",
     });
@@ -1480,11 +1479,51 @@ describe("ContentNormalizationModule", () => {
       header: true,
       scope: "row",
     });
-    expect(readerV2?.content).not.toContain("attacker.test");
+    // The iframe itself never survives: only an inert link to what it showed does, without its fallback text.
     expect(readerV2?.content).not.toContain("active fallback must not survive");
+    expect(section.children).toContainEqual({
+      children: [
+        {
+          children: [{ type: "text", value: "Embedded content · attacker.test" }],
+          title: null,
+          type: "link",
+          url: "https://attacker.test/embed",
+        },
+      ],
+      type: "paragraph",
+    });
+    expect(document.losses).not.toContainEqual(
+      expect.objectContaining({ sourceTag: "iframe" }),
+    );
     expect(
       result.feed.entries[0].materialization.provenance.rulesApplied,
     ).toContain("generic.remove-duplicate-page-title");
+  });
+
+  it("warns on a feed entry whose embedded content had to be dropped", () => {
+    const xml = `<?xml version="1.0"?>
+      <rss version="2.0" xmlns:content="http://purl.org/rss/1.0/modules/content/">
+        <channel><title>Demos</title><item>
+          <guid isPermaLink="false">demo-entry</guid>
+          <title>Interactive demo</title>
+          <link>https://example.test/posts/demo</link>
+          <content:encoded><![CDATA[
+            <p>Try it below.</p>
+            <iframe class="sp-preview-iframe" title="Sandpack Preview"></iframe>
+          ]]></content:encoded>
+        </item></channel>
+      </rss>`;
+
+    const result = normalizeFeedCapture(capture(xml));
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.feed.entries[0].materialization.quality.warnings).toContainEqual({
+      code: "SOURCE_EMBEDDED_CONTENT_OMITTED",
+      recoverBy: "none",
+      scope: "representation",
+      severity: "warning",
+    });
   });
 
   it("preserves unsafe-image alt text and normalizes GitHub footnotes without repeating figure credits", () => {

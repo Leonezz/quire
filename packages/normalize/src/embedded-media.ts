@@ -1,0 +1,207 @@
+import { parseHTML } from "linkedom";
+
+/**
+ * Players and widgets (iframe, video, audio) need script or a plugin, so the reader cannot show them
+ * and drops them. This pass puts back what they showed as something the reader can show: a link to the
+ * video, demo or file, under its poster frame when there is one. Frames that are not article content
+ * (ads, analytics, comment and newsletter widgets, hidden or 1-pixel boxes) are removed. An embed with
+ * no URL worth linking is left alone: the reader drops it and the article is flagged for it.
+ */
+type Kind = "Audio" | "Demo" | "Embedded content" | "Video";
+type Embed = { kind: Kind; poster?: string; provider: string; url: string };
+
+const EMBED_SELECTOR = "iframe, video, audio";
+const EMBED_TAG = /<(?:iframe|video|audio)\b/iu;
+const MAX_TITLE_CHARS = 120;
+/** /embed/ paths that are YouTube player modes, not video ids. */
+const YOUTUBE_PLAYER_MODES = new Set(["live_stream", "videoseries"]);
+const STREAM_UID = /^\/([0-9a-f]{32})(?:\/|$)/u;
+const CUSTOMER_STREAM_HOST = /^customer-[a-z0-9]+\.cloudflarestream\.com$/u;
+const LEGACY_STREAM_HOST = /^iframe\.(?:videodelivery\.net|cloudflarestream\.com)$/u;
+const YOUTUBE_HOST = /^(?:www\.|m\.)?youtube(?:-nocookie)?\.com$/u;
+/** Titles that name the widget, not what it shows ("YouTube video player", "Spotify Embed", "CodePen Embed QwKVaYm"). */
+const GENERIC_TITLE = /^(?:(?:[\w.-]+\s+)?(?:(?:video|audio|media)\s+)?(?:player|embed|iframe|embedded content|video|audio)|[\w.-]+\s+embed\s+\S+)$/iu;
+/** Frames that are never article content, as a host (matching its subdomains) with an optional path prefix. */
+const NOT_CONTENT = [
+  "doubleclick.net", "googlesyndication.com", "googleadservices.com", "googletagmanager.com", "google-analytics.com",
+  "amazon-adsystem.com", "facebook.com/tr", "facebook.com/plugins/like.php", "facebook.com/plugins/share_button.php",
+  "platform.twitter.com/widgets", "cookielaw.org", "onetrust.com", "cookiebot.com", "consensu.org", "hotjar.com", "clarity.ms",
+  "disqus.com/embed", "utteranc.es", "giscus.app", "substack.com/embed", "embeds.beehiiv.com", "buttondown.email", "buttondown.com",
+  "list-manage.com", "mailchi.mp",
+];
+
+function absoluteUrl(raw: string | null | undefined, baseUri: string | undefined) {
+  const value = raw?.trim();
+  if (!value) return undefined;
+  try {
+    const url = new URL(value, baseUri);
+    return ["http:", "https:"].includes(url.protocol) && !url.username && !url.password ? url : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function isNotContent(url: URL) {
+  const host = url.hostname.toLowerCase();
+  return NOT_CONTENT.some((entry) => {
+    const slash = entry.indexOf("/");
+    const entryHost = slash < 0 ? entry : entry.slice(0, slash);
+    const entryPath = slash < 0 ? "" : entry.slice(slash);
+    const hostMatches = host === entryHost || host.endsWith(`.${entryHost}`);
+    return hostMatches && (!entryPath || url.pathname === entryPath || url.pathname.startsWith(`${entryPath}/`));
+  });
+}
+
+function isHidden(element: Element) {
+  const style = (element.getAttribute("style") ?? "").replace(/\s+/gu, "").toLowerCase();
+  if (/display:none|visibility:hidden/u.test(style) || element.hasAttribute("hidden")) return true;
+  return ["width", "height"].some((name) => {
+    const value = /^\s*(\d+)(?:px)?\s*$/u.exec(element.getAttribute(name) ?? "")?.[1];
+    return value !== undefined && Number(value) <= 1;
+  });
+}
+
+function streamEmbed(url: URL, baseUri: string | undefined): Embed | undefined {
+  const customer = CUSTOMER_STREAM_HOST.test(url.hostname);
+  if (!customer && !LEGACY_STREAM_HOST.test(url.hostname)) return undefined;
+  const uid = STREAM_UID.exec(url.pathname)?.[1];
+  if (!uid) return undefined;
+  const thumbnailHost = customer ? url.hostname : "videodelivery.net";
+  const poster = absoluteUrl(url.searchParams.get("poster"), baseUri)?.href ?? `https://${thumbnailHost}/${uid}/thumbnails/thumbnail.jpg`;
+  // The customer subdomain has a share page; the legacy players are only their own page.
+  const page = customer ? `https://${url.hostname}/${uid}/watch` : `https://${url.hostname}/${uid}`;
+  return { kind: "Video", poster, provider: "Cloudflare Stream", url: page };
+}
+
+/** A known player or demo host's own page (and thumbnail), or a link to the frame itself. */
+function frameEmbed(url: URL, baseUri: string | undefined): Embed {
+  const stream = streamEmbed(url, baseUri);
+  if (stream) return stream;
+  const youtubeId = YOUTUBE_HOST.test(url.hostname) ? /^\/embed\/([\w-]{6,})\/?$/u.exec(url.pathname)?.[1] : undefined;
+  if (youtubeId && !YOUTUBE_PLAYER_MODES.has(youtubeId)) {
+    return { kind: "Video", poster: `https://i.ytimg.com/vi/${youtubeId}/hqdefault.jpg`, provider: "YouTube", url: `https://www.youtube.com/watch?v=${youtubeId}` };
+  }
+  const vimeoId = url.hostname === "player.vimeo.com" ? /^\/video\/(\d+)\/?$/u.exec(url.pathname)?.[1] : undefined;
+  if (vimeoId) {
+    // An unlisted video's page needs its hash, which only the player URL carries.
+    return { kind: "Video", provider: "Vimeo", url: url.searchParams.has("h") ? url.href : `https://vimeo.com/${vimeoId}` };
+  }
+  const pen = /^(?:www\.)?codepen\.io$/u.test(url.hostname) ? /^(\/.+?)\/embed\/(?:preview\/)?([^/]+)\/?$/u.exec(url.pathname) : null;
+  if (pen) return { kind: "Demo", provider: "CodePen", url: `https://codepen.io${pen[1]}/pen/${pen[2]}` };
+  return { kind: "Embedded content", provider: url.hostname.replace(/^www\./u, ""), url: url.href };
+}
+
+function frameUrl(element: Element, baseUri: string | undefined) {
+  return ["src", "data-src", "data-lazy-src"]
+    .map((name) => absoluteUrl(element.getAttribute(name), baseUri))
+    .find((url) => url !== undefined);
+}
+
+function mediaUrl(element: Element, baseUri: string | undefined) {
+  const sources = Array.from(element.querySelectorAll("source"));
+  return [element, ...sources]
+    .flatMap((candidate) => ["src", "data-src"].map((name) => candidate.getAttribute(name)))
+    .map((value) => absoluteUrl(value, baseUri))
+    .find((url) => url !== undefined);
+}
+
+function titleOf(element: Element) {
+  const title = (element.getAttribute("title") || element.getAttribute("aria-label") || "").replace(/\s+/gu, " ").trim();
+  if (!title || GENERIC_TITLE.test(title)) return undefined;
+  return title.length > MAX_TITLE_CHARS ? `${title.slice(0, MAX_TITLE_CHARS - 1)}…` : title;
+}
+
+function labelOf(embed: Embed, title: string | undefined) {
+  const play = embed.kind === "Video" || embed.kind === "Audio" ? "▶ " : "";
+  return `${play}${embed.kind} · ${embed.provider}${title ? `: ${title}` : ""}`;
+}
+
+/**
+ * The embed an element shows, "noise" for one that is not content, or undefined when it has no URL to link
+ * (then the reader drops it and reports it: a placeholder a script would have filled is not known to be noise).
+ */
+function classify(element: Element, baseUri: string | undefined): Embed | "noise" | undefined {
+  const tag = element.tagName.toLowerCase();
+  const url = tag === "iframe" ? frameUrl(element, baseUri) : mediaUrl(element, baseUri);
+  if (!url) return undefined;
+  if (isNotContent(url) || isHidden(element)) return "noise";
+  if (tag === "iframe") return frameEmbed(url, baseUri);
+  const poster = tag === "video"
+    ? ["poster", "data-poster"].map((name) => absoluteUrl(element.getAttribute(name), baseUri)).find((value) => value !== undefined)?.href
+    : undefined;
+  // A fragment on a media file is a player hint (WordPress's "#t=0.001" first-frame trick), not part of the link.
+  const file = new URL(url.href);
+  file.hash = "";
+  return { kind: tag === "video" ? "Video" : "Audio", ...(poster ? { poster } : {}), provider: url.hostname.replace(/^www\./u, ""), url: file.href };
+}
+
+/** Whether a paragraph says something besides its embeds (their fallback content does not count). */
+function hasProse(paragraph: Element) {
+  const rest = paragraph.cloneNode(true) as Element;
+  for (const embed of Array.from(rest.querySelectorAll(EMBED_SELECTOR))) embed.remove();
+  return Boolean(rest.textContent?.trim()) || rest.querySelector("img") !== null;
+}
+
+function wrapped(document: Document, tag: string, ...children: Node[]) {
+  const element = document.createElement(tag);
+  element.append(...children);
+  return element;
+}
+
+/**
+ * Inline in a paragraph that says something besides it; otherwise a poster figure (or the poster inside the
+ * page's own figure, the link heading its caption), or a paragraph with the link when there is no poster.
+ * The embed's paragraph goes with it only when the embed is all the paragraph holds.
+ */
+function replaceEmbed(document: Document, element: Element, embed: Embed, title: string | undefined) {
+  const link = document.createElement("a");
+  link.setAttribute("href", embed.url);
+  link.textContent = labelOf(embed, title);
+  const paragraph = element.closest("p");
+  if (paragraph && hasProse(paragraph)) {
+    element.replaceWith(link);
+    return;
+  }
+  const target = paragraph && paragraph.querySelectorAll(EMBED_SELECTOR).length === 1 ? paragraph : element;
+  if (!embed.poster) {
+    target.replaceWith(wrapped(document, "p", link));
+    return;
+  }
+  const poster = document.createElement("img");
+  poster.setAttribute("src", embed.poster);
+  poster.setAttribute("alt", title ?? `${embed.kind} poster`);
+  const pageFigure = target.parentElement?.closest("figure");
+  if (!pageFigure) {
+    target.replaceWith(wrapped(document, "figure", poster, wrapped(document, "figcaption", link)));
+    return;
+  }
+  target.replaceWith(poster);
+  const caption = Array.from(pageFigure.children).find((child) => child.tagName.toLowerCase() === "figcaption");
+  if (caption) caption.prepend(link, document.createElement("br"));
+  else pageFigure.append(wrapped(document, "figcaption", link));
+}
+
+export function linkEmbeddedMedia(html: string, baseUri: string | undefined) {
+  if (!EMBED_TAG.test(html)) return { html, linked: 0, removed: 0 };
+  const document = parseHTML(`<html><body>${html}</body></html>`).document;
+  let linked = 0;
+  let removed = 0;
+  for (const element of Array.from(document.body.querySelectorAll(EMBED_SELECTOR))) {
+    // Only an embed inside another one's fallback content (never shown by a browser) goes with that one.
+    if (!element.isConnected) continue;
+    const embed = classify(element, baseUri);
+    if (embed === undefined) continue;
+    if (embed === "noise") {
+      element.remove();
+      removed += 1;
+      continue;
+    }
+    replaceEmbed(document, element, embed, titleOf(element));
+    linked += 1;
+  }
+  return {
+    html: linked + removed > 0 ? document.body.innerHTML : html,
+    linked,
+    removed,
+  };
+}
