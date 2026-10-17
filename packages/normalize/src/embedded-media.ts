@@ -1,13 +1,16 @@
 import { parseHTML } from "linkedom";
 
+import { DISPLAYABLE_SOURCE_TYPE } from "./deferred-image-sources";
+
 /**
  * Players and widgets (iframe, video, audio) need script or a plugin, so the reader cannot show them
  * and drops them. This pass puts back what they showed as something the reader can show: a link to the
  * video, demo or file, under its poster frame when there is one. A player facade (lite-youtube) links like
  * the player it loads, and interactive content only script fills (an empty Distill figure, a Sandpack
- * preview) becomes a link to its place on the original page. Frames that are not article content
- * (ads, analytics, comment and newsletter widgets, hidden or 1-pixel boxes) are removed. An embed with
- * no URL worth linking is left alone: the reader drops it and the article is flagged for it.
+ * preview) becomes a link to its place on the original page. An <object> of an image type is only an
+ * image and becomes one. Frames that are not article content (ads, analytics, comment and newsletter
+ * widgets, hidden or 1-pixel boxes) are removed. An embed with no URL worth linking is left alone: the
+ * reader drops it and the article is flagged for it.
  */
 type Kind = "Audio" | "Demo" | "Embedded content" | "Video";
 type Embed = { kind: Kind; poster?: string; provider: string; url: string };
@@ -25,7 +28,9 @@ const PLACEHOLDER_SUFFIX = " — open in the original";
 /** Content that would make a d-figure the figure itself rather than an empty box for script to fill. */
 const SERVER_RENDERED_MEDIA = "img, picture, svg, canvas, video, audio, iframe, object, embed";
 const EMBED_SELECTOR = `iframe, video, audio, ${FACADE_SELECTOR}`;
-const EMBED_TAG = /<(?:iframe|video|audio|lite-youtube|lite-vimeo|d-figure)\b/iu;
+const EMBED_TAG = /<(?:iframe|video|audio|lite-youtube|lite-vimeo|d-figure|object)\b/iu;
+/** What an image object keeps on its <img>: what identifies and sizes it (a LaTeXML panel's id and ltx_graphics class). */
+const IMAGE_OBJECT_ATTRIBUTES = ["id", "class", "width", "height", "title"];
 const MAX_TITLE_CHARS = 120;
 /** /embed/ paths that are YouTube player modes, not video ids. */
 const YOUTUBE_PLAYER_MODES = new Set(["live_stream", "videoseries"]);
@@ -204,6 +209,41 @@ export function placeInteractivePlaceholders(document: Document, baseUri: string
   return placed;
 }
 
+/** The URL of the image an <object> shows: one of an image type an <img> can show, visible, with an http(s) URL; else undefined. */
+function objectImageUrl(element: Element, baseUri: string | undefined) {
+  const type = element.getAttribute("type")?.split(";")[0]?.trim().toLowerCase();
+  if (type === undefined || !DISPLAYABLE_SOURCE_TYPE.test(type) || isHidden(element)) return undefined;
+  return absoluteUrl(element.getAttribute("data"), baseUri);
+}
+
+/**
+ * An <object> of an image type is only an image (arXiv's LaTeXML HTML renders SVG figure panels this way), but
+ * the extractors and the reader drop every object as a plugin. Each one with an image URL becomes an <img> of it
+ * with its id, class, size and title; the alt is its fallback text, else its aria-label or title. Objects of any
+ * other type are left alone. Returns how many it replaced.
+ */
+export function replaceImageObjects(document: Document, baseUri: string | undefined) {
+  const replaced: Element[] = [];
+  for (const element of Array.from(document.querySelectorAll("object"))) {
+    // One in a replaced object's fallback content went with it. (Not isConnected: linkedom's is false
+    // throughout a cloned document, and the extractors read clones.)
+    if (replaced.some((object) => object.contains(element))) continue;
+    const url = objectImageUrl(element, baseUri);
+    if (!url) continue;
+    const image = document.createElement("img");
+    image.setAttribute("src", url.href);
+    const fallback = (element.textContent ?? "").replace(/\s+/gu, " ").trim();
+    image.setAttribute("alt", fallback || element.getAttribute("aria-label")?.trim() || element.getAttribute("title")?.trim() || "");
+    for (const name of IMAGE_OBJECT_ATTRIBUTES) {
+      const value = element.getAttribute(name);
+      if (value !== null) image.setAttribute(name, value);
+    }
+    element.replaceWith(image);
+    replaced.push(element);
+  }
+  return replaced.length;
+}
+
 /** Whether an element is a link placeInteractivePlaceholders made. */
 export function isInteractivePlaceholder(element: Element) {
   return element.tagName.toLowerCase() === "a" && (element.textContent ?? "").trim().endsWith(PLACEHOLDER_SUFFIX);
@@ -256,8 +296,9 @@ function replaceEmbed(document: Document, element: Element, embed: Embed, title:
 }
 
 export function linkEmbeddedMedia(html: string, baseUri: string | undefined) {
-  if (!EMBED_TAG.test(html)) return { html, linked: 0, removed: 0 };
+  if (!EMBED_TAG.test(html)) return { html, images: 0, linked: 0, removed: 0 };
   const document = parseHTML(`<html><body>${html}</body></html>`).document;
+  const images = replaceImageObjects(document, baseUri);
   // A d-figure that got no placeholder holds server-rendered content: it is the figure, and its players are linked below.
   let linked = placeInteractivePlaceholders(document, baseUri);
   let removed = 0;
@@ -275,7 +316,8 @@ export function linkEmbeddedMedia(html: string, baseUri: string | undefined) {
     linked += 1;
   }
   return {
-    html: linked + removed > 0 ? document.body.innerHTML : html,
+    html: images + linked + removed > 0 ? document.body.innerHTML : html,
+    images,
     linked,
     removed,
   };

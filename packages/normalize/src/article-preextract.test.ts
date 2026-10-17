@@ -50,4 +50,33 @@ describe("preextractArticleDocument", () => {
         `<div class="sp-preview-container"><p><a href="${PAGE}">Code playground — open in the original</a></p></div><iframe title="Live chart"></iframe>`,
     );
   });
+
+  it("turns an <object> of an image type into an <img> of its URL, as for arXiv's SVG figure panels", () => {
+    const document = documentFor(
+      `<figure id="A2.F3" class="ltx_figure"><div class="ltx_flex_cell"><object type="image/svg+xml" data="2609.24983v1/fig_strip.svg" id="A2.F3.g1" class="ltx_graphics ltx_figure_panel" style="aspect-ratio:438/240;" width="438" height="240"></object></div>` +
+        `<object type="Image/PNG; charset=binary" data="https://cdn.example.test/loss.png" title="Loss curve">Training loss by epoch.</object>` +
+        `<object type="image/svg+xml" data="/arch.svg" aria-label="Model architecture"><object type="image/png" data="/arch.png"></object></object>` +
+        `<figcaption>Figure 3: Annotation agreement.</figcaption></figure>`,
+    );
+
+    expect(preextractArticleDocument(document, "https://arxiv.example.test/html/2609.24983")).toEqual(["article.preextract.image-objects@1"]);
+    // (linkedom writes attributes newest first.)
+    expect(document.body.innerHTML).toBe(
+      `<figure id="A2.F3" class="ltx_figure"><div class="ltx_flex_cell"><img height="240" width="438" class="ltx_graphics ltx_figure_panel" id="A2.F3.g1" alt="" src="https://arxiv.example.test/html/2609.24983v1/fig_strip.svg"></div>` +
+        `<img title="Loss curve" alt="Training loss by epoch." src="https://cdn.example.test/loss.png">` +
+        `<img alt="Model architecture" src="https://arxiv.example.test/arch.svg">` +
+        `<figcaption>Figure 3: Annotation agreement.</figcaption></figure>`,
+    );
+  });
+
+  it("leaves objects of other types, without an http(s) URL, or hidden alone", () => {
+    const body =
+      `<object type="application/pdf" data="/paper.pdf"></object><object data="/figure.svg"></object><object type="image/tiff" data="/scan.tiff"></object>` +
+      `<object type="image/svg+xml"></object><object type="image/svg+xml" data="data:image/svg+xml,%3Csvg%3E%3C/svg%3E"></object><object type="image/png" data="ftp://files.example.test/plot.png"></object>` +
+      `<object type="image/svg+xml" data="/hidden.svg" style="display: none"></object><object type="image/svg+xml" data="/pixel.svg" width="1" height="1"></object>`;
+    const document = documentFor(body);
+
+    expect(preextractArticleDocument(document, PAGE)).toEqual([]);
+    expect(document.body.innerHTML).toBe(body);
+  });
 });

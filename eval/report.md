@@ -7,7 +7,7 @@
 | ✅ acoup-gondor1 | wordpress | WordPress (inferred) | extractor.semantic-boundary.v1 | 3599 | reviewed | 3 lossy conversions | - |
 | ✅ acx-sleeper | substack | Substack | extractor.semantic-boundary.v1 | 2317 | reviewed | 83 lossy conversions | - |
 | ✅ anthropic-mapping | next | Next.js (inferred) | extractor.semantic-boundary.v1 | 1751 | reviewed | no byline; 9 lossy conversions | - |
-| ✅ arxiv-2609-24983 | unknown | - | extractor.semantic-boundary.v1 | 6050 | unreviewed | no byline; 653 lossy conversions | - |
+| ✅ arxiv-2609-24983 | unknown | - | extractor.semantic-boundary.v1 | 5970 | unreviewed | no byline; 650 lossy conversions | - |
 | ✅ brendangregg-cpu | custom | - | extractor.semantic-boundary.v1 | 1216 | reviewed | no byline; 2 lossy conversions | - |
 | ✅ ciechanowski-gps | custom | - | extractor.semantic-boundary.v1 | 9640 | reviewed | 355 lossy conversions | - |
 | ✅ cloudflare-deploy-with-void | unknown | - | extractor.semantic-boundary.v1 | 1159 | unreviewed | 23 lossy conversions | - |
