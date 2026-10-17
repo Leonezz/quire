@@ -1,3 +1,5 @@
+import { placeInteractivePlaceholders, replaceImageObjects } from "./embedded-media";
+
 /**
  * Rewrites made to the extractors' working copy of the page before Defuddle
  * and Readability read it: markup they would misread is put into a form they
@@ -6,8 +8,8 @@
  */
 interface PreextractionPass {
   readonly rule: string;
-  /** Rewrites the document in place; true when anything changed. */
-  readonly apply: (document: Document) => boolean;
+  /** Rewrites the document of the page at `source` in place; true when anything changed. */
+  readonly apply: (document: Document, source: string) => boolean;
 }
 
 const ICON_FONT_CLASS = /^material-(?:icons|symbols)(?:-[\w-]+)?$/u;
@@ -61,12 +63,31 @@ function pseudoElementHiddenClasses(document: Document) {
   return changed;
 }
 
+/**
+ * Interactive content only script fills gets its link to the original page before the extractors run: they
+ * remove a src-less Sandpack preview like any empty iframe, so the link pass would never see it. (They keep
+ * an empty Distill figure, which gets the same link here rather than in the link pass.)
+ */
+function interactivePlaceholders(document: Document, source: string) {
+  return placeInteractivePlaceholders(document, source) > 0;
+}
+
+/**
+ * An <object> of an image type (arXiv's SVG figure panels) becomes an <img> before the extractors run: they
+ * remove objects as plugins, so the figure would lose its panels before the reader saw them.
+ */
+function imageObjects(document: Document, source: string) {
+  return replaceImageObjects(document, source) > 0;
+}
+
 const PREEXTRACTION_PASSES: readonly PreextractionPass[] = [
   { rule: "article.preextract.icon-cells@1", apply: iconLigatureCells },
   { rule: "article.preextract.pseudo-element-classes@1", apply: pseudoElementHiddenClasses },
+  { rule: "article.preextract.interactive-placeholders@1", apply: interactivePlaceholders },
+  { rule: "article.preextract.image-objects@1", apply: imageObjects },
 ];
 
-/** Runs every pass over the extractor's own copy of the page and returns the rules of the passes that changed it. */
-export function preextractArticleDocument(document: Document): string[] {
-  return PREEXTRACTION_PASSES.flatMap((pass) => (pass.apply(document) ? [pass.rule] : []));
+/** Runs every pass over the extractor's own copy of the page at `source` and returns the rules of the passes that changed it. */
+export function preextractArticleDocument(document: Document, source: string): string[] {
+  return PREEXTRACTION_PASSES.flatMap((pass) => (pass.apply(document, source) ? [pass.rule] : []));
 }

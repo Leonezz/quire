@@ -67,6 +67,18 @@ describe("extractEmbeds", () => {
     expect(extractEmbeds(page(`<p>x</p>${"<iframe src='https://codepen.io/anon/embed/abc'></iframe>".repeat(MAX_EMBEDS + 5)}`), BASE)).toHaveLength(MAX_EMBEDS);
   });
 
+  it("gives an embed with no URL an anchor, where a placeholder for it links: the page with its id as fragment, or the page", () => {
+    const embeds = extractEmbeds(page(`
+      <figure><d-figure id="opt-progress"></d-figure></figure>
+      <iframe class="sp-preview-iframe" title="Sandpack Preview"></iframe>
+      <iframe src="https://www.youtube.com/embed/k1ILy23t89E"></iframe>`), `${BASE}#comments`);
+    expect(embeds.map(({ tag, src, anchor }) => ({ tag, src, anchor }))).toEqual([
+      { tag: "d-figure", src: "", anchor: `${BASE}#opt-progress` },
+      { tag: "iframe", src: "", anchor: BASE },
+      { tag: "iframe", src: "https://www.youtube.com/embed/k1ILy23t89E", anchor: "" },
+    ]);
+  });
+
   it("resolves srcs against the page's own base", () => {
     expect(extractEmbeds(`<html><head><base href="/sub/"></head><body><iframe src="frame.html"></iframe></body></html>`, BASE)[0]?.src).toBe("https://blog.example.com/sub/frame.html");
   });
@@ -110,6 +122,13 @@ describe("markRepresented", () => {
   it("marks embeds whose URL the reader shows as a link, image or media source", () => {
     const embeds = extractEmbeds(page(`<iframe src="https://www.youtube.com/embed/k1ILy23t89E"></iframe><video src="https://cdn.e.com/v.mp4"></video><iframe></iframe>`), BASE);
     expect(markRepresented(embeds, ["https://youtu.be/k1ILy23t89E"]).map((e) => e.representedInReader)).toEqual([true, false, false]);
+  });
+
+  it("marks an embed with no URL as shown when the reader links its anchor, one link per embed", () => {
+    const embeds = extractEmbeds(page(`<d-figure id="a"></d-figure><d-figure id="b"></d-figure><iframe title="Sandpack Preview"></iframe><iframe title="Sandpack Preview"></iframe>`), BASE);
+    expect(markRepresented(embeds, [`${BASE}#a`, BASE]).map((e) => e.representedInReader)).toEqual([true, false, true, false]);
+    // Any link into the page is not enough: the fragment names the figure.
+    expect(markRepresented(embeds, [`${BASE}#intro`]).map((e) => e.representedInReader)).toEqual([false, false, false, false]);
   });
 
   it("counts a Stream player as shown when the reader links its watch page", () => {

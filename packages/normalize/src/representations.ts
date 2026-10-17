@@ -597,12 +597,15 @@ function sanitizeNode(node: MdNode, input: {
   return node.value === undefined ? { type: node.type } : { type: node.type, value: input.outputBudget.consumeString(node.value) };
 }
 
+/** The warning that the reader shows nothing for a player, demo or plugin of the source. */
+export function embeddedContentOmitted(): NormalizationProblem {
+  return { code: "SOURCE_EMBEDDED_CONTENT_OMITTED", recoverBy: "none", scope: "representation", severity: "warning" };
+}
+
 /** A warning when the reader had to drop a player, demo or plugin it could not link to. */
 function embedProblems(losses: readonly { code: string; sourceTag: string }[]): NormalizationProblem[] {
   const omitted = losses.some((loss) => loss.code === "ACTIVE_CONTENT_DROPPED" && EMBED_LOSS_TAGS.has(loss.sourceTag));
-  return omitted
-    ? [{ code: "SOURCE_EMBEDDED_CONTENT_OMITTED", recoverBy: "none", scope: "representation", severity: "warning" }]
-    : [];
+  return omitted ? [embeddedContentOmitted()] : [];
 }
 
 export function createRepresentations(input: {
@@ -627,6 +630,7 @@ export function createRepresentations(input: {
   const linkedMedia = input.mediaType === "text/plain"
     ? undefined
     : linkEmbeddedMedia(input.content, input.baseUri);
+  if (linkedMedia?.images) rulesApplied.push("generic.image-objects@1");
   if (linkedMedia?.linked) rulesApplied.push("generic.embedded-media-links@1");
   if (linkedMedia?.removed) rulesApplied.push("generic.drop-widget-frames@1");
   const resolvedImages = linkedMedia === undefined

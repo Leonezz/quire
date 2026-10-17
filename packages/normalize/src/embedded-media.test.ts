@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { normalizeArticleCapture } from "./article";
 import { linkEmbeddedMedia } from "./embedded-media";
+import { createRepresentations } from "./representations";
 
 const BASE = "https://blog.example.test/post/";
 const STREAM = "https://customer-eq7kiuol0tk9chox.cloudflarestream.com/affebd0d7251da155e5307f19069c944";
@@ -143,9 +144,117 @@ describe("linkEmbeddedMedia", () => {
     expect(result).toMatchObject({ html: "<p>Body.</p>", linked: 0, removed: 5 });
   });
 
+  it("removes a page's read-aloud or voiceover player, which is not article content (#24), and still links an audio clip", () => {
+    const result = linkEmbeddedMedia(
+      `<audio preload="none"></audio>` +
+        `<audio data-testid="audio-element" src="/api/v1/audio/upload/f5696e46/src" preload="none">Audio playback is not supported on your browser.</audio>` +
+        `<audio controls preload="none"><source src="https://static.example.test/2024/clip.mp3" type="audio/mp3"></audio>`,
+      BASE,
+    );
+    expect(result).toMatchObject({ linked: 1, removed: 2 });
+    expect(result.html).toBe(`<p><a href="https://static.example.test/2024/clip.mp3">▶ Audio · static.example.test</a></p>`);
+  });
+
   it("leaves embeds without a usable URL for the reader to drop and report, even zero-sized placeholders", () => {
-    const html = `<iframe class="sp-preview-iframe" title="Sandpack Preview"></iframe><iframe src="javascript:void(0)"></iframe><video controls></video><iframe src="" width="0" height="0"></iframe>`;
-    expect(linkEmbeddedMedia(html, BASE)).toEqual({ html, linked: 0, removed: 0 });
+    const html = `<iframe title="Live chart"></iframe><iframe src="javascript:void(0)"></iframe><video controls></video><iframe src="" width="0" height="0"></iframe>`;
+    expect(linkEmbeddedMedia(html, BASE)).toEqual({ html, images: 0, linked: 0, removed: 0 });
+  });
+
+  it("links a lite-youtube or lite-vimeo facade like the player it loads, and leaves one without a usable video id", () => {
+    const result = linkEmbeddedMedia(
+      `<lite-youtube videoid="mpgWH9KulUU" title="Gemini 2.0 streaming demo" playlabel="Play: Gemini 2.0 streaming demo">\n</lite-youtube>` +
+        `<lite-youtube videoid="k1ILy23t89E" videotitle="Course intro"></lite-youtube>` +
+        `<lite-vimeo videoid="364402896"></lite-vimeo>` +
+        `<lite-youtube videoid="a b/c"></lite-youtube><lite-youtube></lite-youtube>`,
+      BASE,
+    );
+    expect(result.linked).toBe(3);
+    expect(result.html).toBe(
+      `<figure><img alt="Gemini 2.0 streaming demo" src="https://i.ytimg.com/vi/mpgWH9KulUU/hqdefault.jpg"><figcaption><a href="https://www.youtube.com/watch?v=mpgWH9KulUU">▶ Video · YouTube: Gemini 2.0 streaming demo</a></figcaption></figure>` +
+        `<figure><img alt="Course intro" src="https://i.ytimg.com/vi/k1ILy23t89E/hqdefault.jpg"><figcaption><a href="https://www.youtube.com/watch?v=k1ILy23t89E">▶ Video · YouTube: Course intro</a></figcaption></figure>` +
+        `<p><a href="https://vimeo.com/364402896">▶ Video · Vimeo</a></p>` +
+        `<lite-youtube videoid="a b/c"></lite-youtube><lite-youtube></lite-youtube>`,
+    );
+  });
+
+  it("stands a link to its place on the page in for an empty d-figure or a Sandpack preview, which only script fills", () => {
+    const result = linkEmbeddedMedia(
+      `<figure><figcaption>Starting from random noise, we optimize an image.</figcaption><d-figure id="opt-progress"></d-figure></figure>` +
+        `<d-figure>\n</d-figure>` +
+        `<div class="sp-preview-container"><iframe class="sp-c-fgviib sp-preview-iframe" title="Sandpack Preview"></iframe></div>` +
+        `<d-figure id="static"><img src="/fig.png" alt="Static figure"></d-figure>` +
+        `<d-figure id="clip"><video><source src="/clip.mp4"></video></d-figure>`,
+      `${BASE}#comments`,
+    );
+    expect(result).toMatchObject({ linked: 4, removed: 0 });
+    expect(result.html).toBe(
+      `<figure><figcaption>Starting from random noise, we optimize an image.</figcaption><p><a href="${BASE}#opt-progress">Interactive figure — open in the original</a></p></figure>` +
+        `<p><a href="${BASE}">Interactive figure — open in the original</a></p>` +
+        `<div class="sp-preview-container"><p><a href="${BASE}">Code playground — open in the original</a></p></div>` +
+        // Server-rendered content is the figure itself, and its players are linked like any other.
+        `<d-figure id="static"><img src="/fig.png" alt="Static figure"></d-figure>` +
+        `<d-figure id="clip"><p><a href="https://blog.example.test/clip.mp4">▶ Video · blog.example.test</a></p></d-figure>`,
+    );
+  });
+
+  it("leaves interactive content alone when there is no page to link to", () => {
+    const html = `<d-figure id="opt-progress"></d-figure><iframe class="sp-preview-iframe" title="Sandpack Preview"></iframe>`;
+    expect(linkEmbeddedMedia(html, undefined)).toEqual({ html, images: 0, linked: 0, removed: 0 });
+  });
+
+  it("shows an <object> of an image type as an image and leaves other objects alone", () => {
+    const flash = `<object type="application/x-shockwave-flash" data="/game.swf"></object>`;
+    expect(linkEmbeddedMedia(
+      `<figure><object type="image/svg+xml" data="fig_strip.svg" id="F3.g1" width="438" height="240"></object><figcaption>Figure 3.</figcaption></figure>${flash}`,
+      BASE,
+    )).toEqual({
+      html: `<figure><img height="240" width="438" id="F3.g1" alt="" src="${BASE}fig_strip.svg"><figcaption>Figure 3.</figcaption></figure>${flash}`,
+      images: 1,
+      linked: 0,
+      removed: 0,
+    });
+  });
+});
+
+/** A figure as arXiv's LaTeXML HTML renders it: SVG panels in <object type="image/svg+xml">, each with its sub-caption. */
+const latexmlFigure =
+  `<figure id="A2.F3" class="ltx_figure"><div class="ltx_flex_figure">` +
+  `<div class="ltx_flex_cell ltx_flex_size_1"><object type="image/svg+xml" data="2609.24983v1/fig_strip.svg" id="A2.F3.g1" class="ltx_graphics ltx_centering ltx_figure_panel ltx_img_landscape" style="aspect-ratio:438/240;" width="438" height="240"></object></div>` +
+  `<div class="ltx_flex_break"></div><div class="ltx_flex_cell ltx_flex_size_1"><p id="A2.F3.2" class="ltx_p ltx_figure_panel ltx_align_center">(a)</p></div><div class="ltx_flex_break"></div>` +
+  `<div class="ltx_flex_cell ltx_flex_size_1"><object type="image/svg+xml" data="2609.24983v1/fig_tolerance.svg" id="A2.F3.g2" class="ltx_graphics ltx_centering ltx_figure_panel ltx_img_landscape" style="aspect-ratio:438/219;" width="438" height="219"></object></div>` +
+  `<div class="ltx_flex_break"></div><div class="ltx_flex_cell ltx_flex_size_1"><p id="A2.F3.3" class="ltx_p ltx_figure_panel ltx_align_center">(b)</p></div></div>` +
+  `<figcaption class="ltx_caption ltx_centering"><span class="ltx_tag ltx_tag_figure">Figure 3: </span>Annotation agreement on the reference set.</figcaption></figure>`;
+
+const latexmlPanels = [
+  { alt: "", height: 240, title: null, type: "image", url: `${BASE}2609.24983v1/fig_strip.svg`, width: 438 },
+  { alt: "", height: 219, title: null, type: "image", url: `${BASE}2609.24983v1/fig_tolerance.svg`, width: 438 },
+];
+
+type ReaderNode = { type: string; media?: unknown[] };
+const figureMedia = (reader: { children: ReaderNode[] }) =>
+  reader.children.filter((node) => node.type === "figure").flatMap((figure) => figure.media ?? []);
+
+describe("image objects in content the extractors never saw", () => {
+  it("shows them as images without warning: a semantic root or a feed entry skips the pre-extraction rewrite", () => {
+    const result = createRepresentations({
+      baseUri: BASE,
+      content: `<p>Both panels are below.</p>${latexmlFigure}`,
+      maxDepth: 200,
+      maxNodes: 100_000,
+      maxOutputBytes: 8e6,
+      mediaType: "text/html",
+      outputBudgetErrorCode: "SOURCE_REPRESENTATION_BUDGET_EXCEEDED",
+      producerKey: "generic",
+      title: "Annotation agreement",
+    });
+    const content = (schema: string) => result.representations.find((value) => value.schema === schema)?.content ?? "";
+
+    const reader = JSON.parse(content("reader.document.v2"));
+    expect(figureMedia(reader)).toEqual(latexmlPanels);
+    expect(reader.losses).not.toContainEqual(expect.objectContaining({ sourceTag: "object" }));
+    expect(content("agent.gfm.v1")).toContain(`(${BASE}2609.24983v1/fig_tolerance.svg)`);
+    expect(result.rulesApplied).toContain("generic.image-objects@1");
+    expect(result.problems).toEqual([]);
   });
 });
 
@@ -222,5 +331,100 @@ describe("embedded media in a normalized article", () => {
     expect(outcome.problems).toEqual([omitted]);
     expect(representation(outcome, "reader.document.v2")).not.toContain("does not support");
     expect(representation(outcome, "agent.gfm.v1")).not.toContain("does not support");
+  });
+
+  /** A Sandpack playground as joshwcomeau.com renders it: a header, the server-rendered code, and a src-less live preview. */
+  const sandpack = `<div class="sp-wrapper"><div class="playground"><header><p>Code Playground</p><button title="Reset code">Reset</button></header>
+    <div class="sp-editor"><div class="sp-code-editor" role="tabpanel"><div role="textbox" aria-label="Code Editor for App.js">
+    <pre class="sp-pre-placeholder"><span class="sp-syntax-keyword">function</span> App() { return &lt;p&gt;Count: 1&lt;/p&gt;; }</pre></div></div></div>
+    <div class="sp-preview"><div class="sp-preview-container"><iframe class="sp-c-fgviib sp-preview-iframe" title="Sandpack Preview"></iframe></div></div></div></div>`;
+
+  it("shows a lite-youtube facade as its poster and watch link, and empty interactive content as a link to the original (issue #14)", () => {
+    const outcome = articleCapture(
+      `${prose("live video")}<lite-youtube videoid="mpgWH9KulUU" title="Gemini 2.0 streaming demo"></lite-youtube>${prose("figures")}` +
+        `<figure><figcaption>Starting from random noise, we optimize an image to activate a neuron.</figcaption><d-figure id="opt-progress"></d-figure></figure>` +
+        `${prose("playgrounds")}<p>Let's look at an example:</p>${sandpack}${prose("the end")}`,
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const reader = JSON.parse(representation(outcome, "reader.document.v2"));
+    expect(reader.children.filter((node: { type: string }) => node.type === "figure")).toEqual([{
+      caption: [{ children: [{ type: "text", value: "▶ Video · YouTube: Gemini 2.0 streaming demo" }], title: null, type: "link", url: "https://www.youtube.com/watch?v=mpgWH9KulUU" }],
+      credit: [],
+      media: [{ alt: "Gemini 2.0 streaming demo", title: null, type: "image", url: "https://i.ytimg.com/vi/mpgWH9KulUU/hqdefault.jpg" }],
+      type: "figure",
+    }]);
+    const agent = representation(outcome, "agent.gfm.v1");
+    expect(agent).toContain(`[Interactive figure — open in the original](${BASE}#opt-progress)`);
+    expect(agent).toContain(`[Code playground — open in the original](${BASE})`);
+    expect(agent).toContain("Count: 1");
+    expect(outcome.article.materialization.provenance.rulesApplied).toEqual(expect.arrayContaining([
+      "article.preextract.interactive-placeholders@1",
+      "generic.embedded-media-links@1",
+    ]));
+    expect(outcome.article.materialization.quality.warnings).toEqual([]);
+  });
+
+  it("warns when the extractor dropped an embed that sat inside the article, before the reader could report it", () => {
+    const outcome = articleCapture(
+      `${prose("charts")}<p>The live chart below updates every second.</p><iframe title="Live chart" width="600" height="400"></iframe>` +
+        `<p>As the chart shows, the load stays flat.</p>${prose("the end")}`,
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const omitted = { code: "SOURCE_EMBEDDED_CONTENT_OMITTED", recoverBy: "none", scope: "representation", severity: "warning" };
+    // The reader never saw it, so it has no loss to report.
+    expect(JSON.parse(representation(outcome, "reader.document.v2")).losses).not.toContainEqual(expect.objectContaining({ sourceTag: "iframe" }));
+    expect(outcome.article.materialization.quality.warnings).toEqual([omitted]);
+    expect(outcome.problems).toEqual([omitted]);
+  });
+
+  it("shows the SVG panels of an arXiv figure as its images instead of warning that the extractor dropped them", () => {
+    const outcome = articleCapture(`${prose("agreement")}${latexmlFigure}${prose("the end")}`);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const reader = JSON.parse(representation(outcome, "reader.document.v2"));
+    expect(figureMedia(reader)).toEqual(latexmlPanels);
+    expect(reader.losses).not.toContainEqual(expect.objectContaining({ sourceTag: "object" }));
+    expect(outcome.article.materialization.provenance.rulesApplied).toContain("article.preextract.image-objects@1");
+    expect(outcome.article.materialization.quality.warnings).toEqual([]);
+  });
+
+  /** A "listen to this post" player above the article body, as openai.com and Substack render one around their <audio>. */
+  const listenPlayer = (audio: string) =>
+    `<p>The dek that introduces the post in a sentence or two.</p><div class="audio-player"><button type="button" aria-label="Play audio of page text">` +
+    `<svg viewBox="0 0 16 16"><path d="M0 0h16v16z"></path></svg></button><span>Loading…</span>${audio}</div>`;
+
+  it.each([
+    ["an empty <audio preload=none> read-aloud player", `<audio preload="none"></audio>`],
+    ["Substack's voiceover <audio>", `<audio data-testid="audio-element" src="/api/v1/audio/upload/f5696e46-1984-4510-9a6e-6984233f2d06/src" preload="none">Audio playback is not supported on your browser. Please upgrade.</audio>`],
+  ])("does not warn for a page's own narration the extractor drops (#24): %s", (_name, audio) => {
+    const outcome = articleCapture(`${listenPlayer(audio)}${prose("narration")}${prose("the end")}`);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(representation(outcome, "agent.gfm.v1")).not.toContain("/api/v1/audio/");
+    expect(outcome.article.materialization.quality.warnings).toEqual([]);
+  });
+
+  it("still warns when the extractor drops an audio clip of the article itself", () => {
+    const outcome = articleCapture(
+      `${prose("interviews")}<p>Listen to the interview:</p><audio controls></audio><p>That was the whole interview, unedited.</p>${prose("the end")}`,
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const omitted = { code: "SOURCE_EMBEDDED_CONTENT_OMITTED", recoverBy: "none", scope: "representation", severity: "warning" };
+    expect(outcome.article.materialization.quality.warnings).toEqual([omitted]);
+  });
+
+  it("does not warn for widgets the extractor rightly drops: a comment section's frames, a newsletter sign-up", () => {
+    const outcome = articleCapture(
+      `${prose("widgets")}<iframe src="https://example.substack.com/embed" width="480" height="320"></iframe>${prose("the end")}` +
+        `<section class="comments" id="comments"><h3>3 comments</h3><p>Great post, thanks for writing it up!</p>` +
+        `<iframe title="Leave a reply" width="600" height="300"></iframe><p>Agreed with all of this, especially the end.</p></section>`,
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(representation(outcome, "agent.gfm.v1")).not.toContain("Great post");
+    expect(outcome.article.materialization.quality.warnings).toEqual([]);
   });
 });

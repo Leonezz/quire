@@ -71,7 +71,15 @@ export interface Embed {
   host: string;
   /** Up to 160 characters of the nearest preceding heading or paragraph, so the judge can find where it belonged. */
   context: string;
-  /** Whether the reader shows something for it: the embed's URL (or its host + path) appears as a link, image or media source in the reader. */
+  /**
+   * For an embed with no URL, where a placeholder for it links: the page with the embed's id as fragment, or the
+   * page when it has none; "" for an embed with a URL. Absent in captures made before it existed.
+   */
+  anchor?: string;
+  /**
+   * Whether the reader shows something for it: the embed's URL (or its host + path) appears as a link, image or
+   * media source in the reader; for one with no URL, a link to its anchor does.
+   */
   representedInReader: boolean;
 }
 
