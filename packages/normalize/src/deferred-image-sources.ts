@@ -11,7 +11,7 @@ type SrcsetCandidate = { readonly url: string; readonly width?: number; readonly
 
 const LAZY_SOURCE_ATTRIBUTES = ["data-src", "data-original", "data-lazy-src"] as const;
 const SRCSET_ATTRIBUTES = ["data-srcset", "srcset"] as const;
-const DISPLAYABLE_SOURCE_TYPE = /^image\/(?:avif|webp|png|jpe?g|gif|svg\+xml)$/u;
+export const DISPLAYABLE_SOURCE_TYPE = /^image\/(?:avif|webp|png|jpe?g|gif|svg\+xml)$/u;
 const UNDISPLAYABLE_IMAGE = /\.jxl(?:$|[?#])/iu;
 const DATA_URL = /^data:/iu;
 const ASCII_WHITESPACE = /[\t\n\f\r ]/u;

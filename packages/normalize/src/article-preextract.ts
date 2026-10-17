@@ -1,4 +1,4 @@
-import { placeInteractivePlaceholders } from "./embedded-media";
+import { placeInteractivePlaceholders, replaceImageObjects } from "./embedded-media";
 
 /**
  * Rewrites made to the extractors' working copy of the page before Defuddle
@@ -72,10 +72,19 @@ function interactivePlaceholders(document: Document, source: string) {
   return placeInteractivePlaceholders(document, source) > 0;
 }
 
+/**
+ * An <object> of an image type (arXiv's SVG figure panels) becomes an <img> before the extractors run: they
+ * remove objects as plugins, so the figure would lose its panels before the reader saw them.
+ */
+function imageObjects(document: Document, source: string) {
+  return replaceImageObjects(document, source) > 0;
+}
+
 const PREEXTRACTION_PASSES: readonly PreextractionPass[] = [
   { rule: "article.preextract.icon-cells@1", apply: iconLigatureCells },
   { rule: "article.preextract.pseudo-element-classes@1", apply: pseudoElementHiddenClasses },
   { rule: "article.preextract.interactive-placeholders@1", apply: interactivePlaceholders },
+  { rule: "article.preextract.image-objects@1", apply: imageObjects },
 ];
 
 /** Runs every pass over the extractor's own copy of the page at `source` and returns the rules of the passes that changed it. */

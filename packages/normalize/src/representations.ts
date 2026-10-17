@@ -630,6 +630,7 @@ export function createRepresentations(input: {
   const linkedMedia = input.mediaType === "text/plain"
     ? undefined
     : linkEmbeddedMedia(input.content, input.baseUri);
+  if (linkedMedia?.images) rulesApplied.push("generic.image-objects@1");
   if (linkedMedia?.linked) rulesApplied.push("generic.embedded-media-links@1");
   if (linkedMedia?.removed) rulesApplied.push("generic.drop-widget-frames@1");
   const resolvedImages = linkedMedia === undefined

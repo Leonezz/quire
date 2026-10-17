@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import { normalizeArticleCapture } from "./article";
 import { linkEmbeddedMedia } from "./embedded-media";
+import { createRepresentations } from "./representations";
 
 const BASE = "https://blog.example.test/post/";
 const STREAM = "https://customer-eq7kiuol0tk9chox.cloudflarestream.com/affebd0d7251da155e5307f19069c944";
@@ -145,7 +146,7 @@ describe("linkEmbeddedMedia", () => {
 
   it("leaves embeds without a usable URL for the reader to drop and report, even zero-sized placeholders", () => {
     const html = `<iframe title="Live chart"></iframe><iframe src="javascript:void(0)"></iframe><video controls></video><iframe src="" width="0" height="0"></iframe>`;
-    expect(linkEmbeddedMedia(html, BASE)).toEqual({ html, linked: 0, removed: 0 });
+    expect(linkEmbeddedMedia(html, BASE)).toEqual({ html, images: 0, linked: 0, removed: 0 });
   });
 
   it("links a lite-youtube or lite-vimeo facade like the player it loads, and leaves one without a usable video id", () => {
@@ -187,7 +188,62 @@ describe("linkEmbeddedMedia", () => {
 
   it("leaves interactive content alone when there is no page to link to", () => {
     const html = `<d-figure id="opt-progress"></d-figure><iframe class="sp-preview-iframe" title="Sandpack Preview"></iframe>`;
-    expect(linkEmbeddedMedia(html, undefined)).toEqual({ html, linked: 0, removed: 0 });
+    expect(linkEmbeddedMedia(html, undefined)).toEqual({ html, images: 0, linked: 0, removed: 0 });
+  });
+
+  it("shows an <object> of an image type as an image and leaves other objects alone", () => {
+    const flash = `<object type="application/x-shockwave-flash" data="/game.swf"></object>`;
+    expect(linkEmbeddedMedia(
+      `<figure><object type="image/svg+xml" data="fig_strip.svg" id="F3.g1" width="438" height="240"></object><figcaption>Figure 3.</figcaption></figure>${flash}`,
+      BASE,
+    )).toEqual({
+      html: `<figure><img height="240" width="438" id="F3.g1" alt="" src="${BASE}fig_strip.svg"><figcaption>Figure 3.</figcaption></figure>${flash}`,
+      images: 1,
+      linked: 0,
+      removed: 0,
+    });
+  });
+});
+
+/** A figure as arXiv's LaTeXML HTML renders it: SVG panels in <object type="image/svg+xml">, each with its sub-caption. */
+const latexmlFigure =
+  `<figure id="A2.F3" class="ltx_figure"><div class="ltx_flex_figure">` +
+  `<div class="ltx_flex_cell ltx_flex_size_1"><object type="image/svg+xml" data="2609.24983v1/fig_strip.svg" id="A2.F3.g1" class="ltx_graphics ltx_centering ltx_figure_panel ltx_img_landscape" style="aspect-ratio:438/240;" width="438" height="240"></object></div>` +
+  `<div class="ltx_flex_break"></div><div class="ltx_flex_cell ltx_flex_size_1"><p id="A2.F3.2" class="ltx_p ltx_figure_panel ltx_align_center">(a)</p></div><div class="ltx_flex_break"></div>` +
+  `<div class="ltx_flex_cell ltx_flex_size_1"><object type="image/svg+xml" data="2609.24983v1/fig_tolerance.svg" id="A2.F3.g2" class="ltx_graphics ltx_centering ltx_figure_panel ltx_img_landscape" style="aspect-ratio:438/219;" width="438" height="219"></object></div>` +
+  `<div class="ltx_flex_break"></div><div class="ltx_flex_cell ltx_flex_size_1"><p id="A2.F3.3" class="ltx_p ltx_figure_panel ltx_align_center">(b)</p></div></div>` +
+  `<figcaption class="ltx_caption ltx_centering"><span class="ltx_tag ltx_tag_figure">Figure 3: </span>Annotation agreement on the reference set.</figcaption></figure>`;
+
+const latexmlPanels = [
+  { alt: "", height: 240, title: null, type: "image", url: `${BASE}2609.24983v1/fig_strip.svg`, width: 438 },
+  { alt: "", height: 219, title: null, type: "image", url: `${BASE}2609.24983v1/fig_tolerance.svg`, width: 438 },
+];
+
+type ReaderNode = { type: string; media?: unknown[] };
+const figureMedia = (reader: { children: ReaderNode[] }) =>
+  reader.children.filter((node) => node.type === "figure").flatMap((figure) => figure.media ?? []);
+
+describe("image objects in content the extractors never saw", () => {
+  it("shows them as images without warning: a semantic root or a feed entry skips the pre-extraction rewrite", () => {
+    const result = createRepresentations({
+      baseUri: BASE,
+      content: `<p>Both panels are below.</p>${latexmlFigure}`,
+      maxDepth: 200,
+      maxNodes: 100_000,
+      maxOutputBytes: 8e6,
+      mediaType: "text/html",
+      outputBudgetErrorCode: "SOURCE_REPRESENTATION_BUDGET_EXCEEDED",
+      producerKey: "generic",
+      title: "Annotation agreement",
+    });
+    const content = (schema: string) => result.representations.find((value) => value.schema === schema)?.content ?? "";
+
+    const reader = JSON.parse(content("reader.document.v2"));
+    expect(figureMedia(reader)).toEqual(latexmlPanels);
+    expect(reader.losses).not.toContainEqual(expect.objectContaining({ sourceTag: "object" }));
+    expect(content("agent.gfm.v1")).toContain(`(${BASE}2609.24983v1/fig_tolerance.svg)`);
+    expect(result.rulesApplied).toContain("generic.image-objects@1");
+    expect(result.problems).toEqual([]);
   });
 });
 
@@ -310,6 +366,17 @@ describe("embedded media in a normalized article", () => {
     expect(JSON.parse(representation(outcome, "reader.document.v2")).losses).not.toContainEqual(expect.objectContaining({ sourceTag: "iframe" }));
     expect(outcome.article.materialization.quality.warnings).toEqual([omitted]);
     expect(outcome.problems).toEqual([omitted]);
+  });
+
+  it("shows the SVG panels of an arXiv figure as its images instead of warning that the extractor dropped them", () => {
+    const outcome = articleCapture(`${prose("agreement")}${latexmlFigure}${prose("the end")}`);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const reader = JSON.parse(representation(outcome, "reader.document.v2"));
+    expect(figureMedia(reader)).toEqual(latexmlPanels);
+    expect(reader.losses).not.toContainEqual(expect.objectContaining({ sourceTag: "object" }));
+    expect(outcome.article.materialization.provenance.rulesApplied).toContain("article.preextract.image-objects@1");
+    expect(outcome.article.materialization.quality.warnings).toEqual([]);
   });
 
   it("does not warn for widgets the extractor rightly drops: a comment section's frames, a newsletter sign-up", () => {
