@@ -15,6 +15,7 @@ import {
   applyArticleSiteAdapter,
   articleSiteAdapterRule,
 } from "./article-site-adapters";
+import { FALLBACK_DROP_SELECTOR, memoizedContentStats, type ContentStats } from "./article-content-stats";
 import { QuireDefuddle } from "./article-defuddle";
 import { droppedEmbedCount, embedSites, type EmbedSite } from "./article-embed-omissions";
 import { preextractArticleDocument } from "./article-preextract";
@@ -26,9 +27,6 @@ const DEFUDDLE_MIN_RELATIVE_TEXT_RATIO = 0.5;
 const MIN_RICH_CATEGORY_RETENTION_RATIO = 0.6;
 const MIN_SELECTED_ARTICLE_TEXT_CHARACTERS = 80;
 const MAX_FALLBACK_TEXT_BYTES = 64 * 1024;
-const MAX_MATH_SPAN_CHARACTERS = 16 * 1024;
-const FALLBACK_DROP_SELECTOR =
-  "script,style,noscript,template,iframe,object,embed,svg,canvas";
 
 type DocumentLike = Document & {
   cloneNode(deep?: boolean): DocumentLike;
@@ -657,173 +655,15 @@ function assertDocumentBudget(
   }
 }
 
-function contentStats(html: string) {
-  const document = parseHTML(`<html><body>${html}</body></html>`).document;
-  return contentStatsFromDocument(document as unknown as DocumentLike);
-}
-
-function countBoundedDelimitedMath(
-  value: string,
-  opening: string,
-  closing: string,
-) {
-  // `$$` uses the same token to open and close a unit. Keeping a single
-  // cursor for the other delimiters is important: searching a 16 KiB window
-  // again for every opener makes a page with many unmatched tokens quadratic.
-  let count = 0;
-  let openerIndex = -1;
-  let cursor = 0;
-  while (cursor < value.length) {
-    const hasOpening = value.startsWith(opening, cursor);
-    const hasClosing = value.startsWith(closing, cursor);
-    const isOpening =
-      hasOpening && (cursor === 0 || value[cursor - 1] !== "\\");
-    const isClosing =
-      hasClosing && (cursor === 0 || value[cursor - 1] !== "\\");
-
-    if ((hasOpening && !isOpening) || (hasClosing && !isClosing)) {
-      cursor += Math.max(
-        hasOpening ? opening.length : 0,
-        hasClosing ? closing.length : 0,
-        1,
-      );
-      continue;
-    }
-
-    if (opening === closing && isOpening) {
-      if (openerIndex < 0) {
-        openerIndex = cursor;
-      } else {
-        const maxClosingIndex =
-          openerIndex + opening.length + MAX_MATH_SPAN_CHARACTERS;
-        if (cursor <= maxClosingIndex) count += 1;
-        openerIndex = -1;
-      }
-      cursor += opening.length;
-      continue;
-    }
-
-    if (openerIndex >= 0) {
-      const maxClosingIndex =
-        openerIndex + opening.length + MAX_MATH_SPAN_CHARACTERS;
-      if (cursor > maxClosingIndex) openerIndex = -1;
-    }
-    if (isOpening) {
-      if (openerIndex < 0) openerIndex = cursor;
-      cursor += opening.length;
-      continue;
-    }
-    if (isClosing) {
-      if (openerIndex >= 0) count += 1;
-      openerIndex = -1;
-      cursor += closing.length;
-      continue;
-    }
-    cursor += 1;
-  }
-  return count;
-}
-
-function countBoundedDisplayMathEnvironments(value: string) {
-  type PendingEnvironment = { limit: number };
-  type PendingEnvironmentQueue = {
-    entries: PendingEnvironment[];
-    head: number;
-  };
-
-  let count = 0;
-  const pending = new Map<string, PendingEnvironmentQueue>();
-  const tokens =
-    /\\(begin|end)\{(equation|align|gather|multline|flalign|alignat)(\*)?\}/gu;
-  for (const match of value.matchAll(tokens)) {
-    const index = match.index ?? -1;
-    if (index < 0 || (index > 0 && value[index - 1] === "\\")) continue;
-    const environment = `${match[2]}${match[3] ?? ""}`;
-    const queue =
-      pending.get(environment) ??
-      ({ entries: [], head: 0 } satisfies PendingEnvironmentQueue);
-    const { entries } = queue;
-    while (queue.head < entries.length && entries[queue.head]!.limit < index) {
-      queue.head += 1;
-    }
-
-    if (match[1] === "begin") {
-      if (queue.head === entries.length) {
-        queue.entries = [];
-        queue.head = 0;
-      }
-      queue.entries.push({
-        limit: index + match[0].length + MAX_MATH_SPAN_CHARACTERS,
-      });
-      pending.set(environment, queue);
-      continue;
-    }
-
-    count += entries.length - queue.head;
-    pending.delete(environment);
-  }
-  return count;
-}
-
-function countBoundedMath(value: string) {
-  return (
-    countBoundedDelimitedMath(value, "\\(", "\\)") +
-    countBoundedDelimitedMath(value, "\\[", "\\]") +
-    countBoundedDelimitedMath(value, "$$", "$$") +
-    countBoundedDisplayMathEnvironments(value)
-  );
-}
-
-function contentStatsFromDocument(sourceDocument: DocumentLike) {
-  const document = sourceDocument.cloneNode(true) as unknown as DocumentLike;
-  document
-    .querySelectorAll(FALLBACK_DROP_SELECTOR)
-    .forEach((element) => element.remove());
-  const text =
-    document.body?.textContent ?? document.documentElement?.textContent ?? "";
-  const mathUnits = countBoundedMath(text);
-  const standaloneImages = Array.from(document.querySelectorAll("img")).filter(
-    (image) => image.closest("picture") === null,
-  ).length;
-  const richUnits = [
-    document.querySelectorAll("pre").length,
-    document.querySelectorAll("figure").length,
-    document.querySelectorAll("picture").length,
-    standaloneImages,
-    document.querySelectorAll("table").length,
-    Math.max(
-      document.querySelectorAll("math, .math, .katex").length,
-      mathUnits,
-    ),
-    document.querySelectorAll(
-      "[role='doc-noteref'], a.footnote-ref, sup[id^='fnref'] > a[href^='#fn']",
-    ).length,
-    document.querySelectorAll("[role='doc-endnotes'], .footnotes, #footnotes")
-      .length,
-    document.querySelectorAll("a[href]").length,
-    document.querySelectorAll(
-      "cite, [role='doc-bibliography'], [role='doc-biblioentry'], .bibliography, .references, #bibliography, #references",
-    ).length,
-    document.querySelectorAll("h1, h2, h3, h4, h5, h6").length,
-    document.querySelectorAll("ul, ol, dl").length,
-    document.querySelectorAll("details").length,
-  ];
-  return {
-    richUnits,
-    textCharacters: text.replace(/\s+/gu, " ").trim().length,
-  };
-}
-
 // richUnits order: pre, figure, picture, image, table, math, noteref, endnotes, link, citation, heading, list, details.
 // Links, headings and lists are exactly what site footers and related-post widgets are made of, so a
 // semantic <article> that wraps them inflates those three; only the content categories are enforced.
 const NAVIGATION_HEAVY_RICH_UNITS = new Set([8, 10, 11]);
 
 function candidateRetainsSourceRichStructure(
-  candidate: ExtractionCandidate,
+  candidateRichUnits: readonly number[],
   sourceRichUnits: readonly number[],
 ) {
-  const candidateRichUnits = contentStats(candidate.content).richUnits;
   return sourceRichUnits.every(
     (sourceCount, index) =>
       sourceCount === 0 ||
@@ -834,14 +674,11 @@ function candidateRetainsSourceRichStructure(
 }
 
 function defuddlePassesQualityGate(input: {
-  candidate: ExtractionCandidate;
-  readability?: ExtractionCandidate;
+  stats: ContentStats;
+  readabilityStats?: ContentStats;
   sourceRichUnits: readonly number[];
 }) {
-  const stats = contentStats(input.candidate.content);
-  const readabilityStats = input.readability
-    ? contentStats(input.readability.content)
-    : undefined;
+  const { stats, readabilityStats } = input;
   const retainsText =
     readabilityStats === undefined ||
     stats.textCharacters >=
@@ -849,7 +686,7 @@ function defuddlePassesQualityGate(input: {
   return (
     stats.textCharacters >= DEFUDDLE_MIN_TEXT_CHARACTERS &&
     candidateRetainsSourceRichStructure(
-      input.candidate,
+      stats.richUnits,
       input.sourceRichUnits,
     ) &&
     retainsText
@@ -857,13 +694,12 @@ function defuddlePassesQualityGate(input: {
 }
 
 function readabilityPassesQualityGate(
-  candidate: ExtractionCandidate,
+  stats: ContentStats,
   sourceRichUnits: readonly number[],
 ) {
   return (
-    contentStats(candidate.content).textCharacters >=
-      MIN_SELECTED_ARTICLE_TEXT_CHARACTERS &&
-    candidateRetainsSourceRichStructure(candidate, sourceRichUnits)
+    stats.textCharacters >= MIN_SELECTED_ARTICLE_TEXT_CHARACTERS &&
+    candidateRetainsSourceRichStructure(stats.richUnits, sourceRichUnits)
   );
 }
 
@@ -962,10 +798,13 @@ function extractorDocumentFor(
 }
 
 /** Element-wise maximum of the candidates' rich-structure counts. */
-function unionRichUnits(candidates: readonly (ExtractionCandidate | undefined)[]) {
+function unionRichUnits(
+  candidates: readonly (ExtractionCandidate | undefined)[],
+  statsOf: (html: string) => ContentStats,
+) {
   return candidates
     .filter((candidate): candidate is ExtractionCandidate => candidate !== undefined)
-    .map((candidate) => contentStats(candidate.content).richUnits)
+    .map((candidate) => statsOf(candidate.content).richUnits)
     .reduce<number[]>(
       (union, units) => units.map((count, index) => Math.max(count, union[index] ?? 0)),
       [],
@@ -1256,16 +1095,18 @@ export function normalizeArticleCapture(
     // <main> is a page region, not an article boundary: it routinely holds the
     // site's related-post widgets, whose images would be "lost" by any correct extraction.
     const rootIsArticleBoundary = semanticRoot !== undefined && semanticRoot.tagName.toLowerCase() !== "main" && semanticRoot.getAttribute("role") !== "main";
+    // Every check from here on measures one of the same few extractions; each is parsed once.
+    const statsOf = memoizedContentStats();
     const sourceRichUnits = siteAdapterExtraction
-      ? contentStats(siteAdapterExtraction.content).richUnits
+      ? statsOf(siteAdapterExtraction.content).richUnits
       : semanticRootExtraction && rootIsArticleBoundary
-        ? contentStats(semanticRootExtraction.content).richUnits
-        : unionRichUnits([defuddle, readability]);
+        ? statsOf(semanticRootExtraction.content).richUnits
+        : unionRichUnits([defuddle, readability], statsOf);
     const defuddleIsHealthy =
       defuddle !== undefined &&
       defuddlePassesQualityGate({
-        candidate: defuddle,
-        readability,
+        stats: statsOf(defuddle.content),
+        readabilityStats: readability && statsOf(readability.content),
         sourceRichUnits,
       });
     if (defuddle && !defuddleIsHealthy) {
@@ -1280,7 +1121,7 @@ export function normalizeArticleCapture(
     }
     const readabilityIsHealthy =
       readability !== undefined &&
-      readabilityPassesQualityGate(readability, sourceRichUnits);
+      readabilityPassesQualityGate(statsOf(readability.content), sourceRichUnits);
     if (readability && !readabilityIsHealthy) {
       problems.push(
         problem(
@@ -1296,13 +1137,13 @@ export function normalizeArticleCapture(
     // and is reported with both quality warnings attached rather than refused.
     const longerCandidate = [defuddle, readability]
       .filter((candidate): candidate is ExtractionCandidate => candidate !== undefined)
-      .sort((a, b) => contentStats(b.content).textCharacters - contentStats(a.content).textCharacters)[0];
+      .sort((a, b) => statsOf(b.content).textCharacters - statsOf(a.content).textCharacters)[0];
     // A semantic root far larger than what the extractors found is a page-wide
     // wrapper (article + footer widgets), not the article: the extraction wins then.
     const rootIsPageWide =
       semanticRootExtraction !== undefined &&
       longerCandidate !== undefined &&
-      contentStats(semanticRootExtraction.content).textCharacters > contentStats(longerCandidate.content).textCharacters * 1.5;
+      statsOf(semanticRootExtraction.content).textCharacters > statsOf(longerCandidate.content).textCharacters * 1.5;
     const selected = siteAdapterExtraction
       ? siteAdapterExtraction
       : defuddleIsHealthy
@@ -1328,7 +1169,7 @@ export function normalizeArticleCapture(
       );
     }
     if (
-      contentStats(selected.content).textCharacters <
+      statsOf(selected.content).textCharacters <
       MIN_SELECTED_ARTICLE_TEXT_CHARACTERS
     ) {
       return articleFailure(
