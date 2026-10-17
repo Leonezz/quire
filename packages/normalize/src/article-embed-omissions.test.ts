@@ -42,6 +42,15 @@ describe("embedSites", () => {
     expect(sites).toEqual([{ after: "After.", before: "Before.", key: "iframe https://blog.example.test/x.html" }]);
   });
 
+  it("leaves out a page's read-aloud or voiceover player (#24) but keeps an audio clip with a file URL", () => {
+    const sites = embedSites(bodyOf(`<p>Before.</p><audio preload="none"></audio><audio src="/api/v1/audio/upload/f56/src" preload="none"></audio>
+      <audio><source src="https://example.substack.com/api/v1/audio/upload/x/src"></audio><audio src="/clip.mp3" preload="none"></audio><p>After.</p>`), BASE);
+
+    expect(sites).toEqual([{ after: "After.", before: "Before.", key: "audio https://blog.example.test/clip.mp3" }]);
+    // The clip still counts when the extractor drops it.
+    expect(droppedEmbedCount(sites, "<p>Before.</p><p>After.</p>", BASE)).toBe(1);
+  });
+
   it("finds nothing on a page without embeds", () => {
     expect(embedSites(bodyOf("<p>Just text.</p><p><a href='/elsewhere'>A link</a></p>"), BASE)).toEqual([]);
   });

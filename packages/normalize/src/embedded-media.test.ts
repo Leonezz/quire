@@ -144,6 +144,17 @@ describe("linkEmbeddedMedia", () => {
     expect(result).toMatchObject({ html: "<p>Body.</p>", linked: 0, removed: 5 });
   });
 
+  it("removes a page's read-aloud or voiceover player, which is not article content (#24), and still links an audio clip", () => {
+    const result = linkEmbeddedMedia(
+      `<audio preload="none"></audio>` +
+        `<audio data-testid="audio-element" src="/api/v1/audio/upload/f5696e46/src" preload="none">Audio playback is not supported on your browser.</audio>` +
+        `<audio controls preload="none"><source src="https://static.example.test/2024/clip.mp3" type="audio/mp3"></audio>`,
+      BASE,
+    );
+    expect(result).toMatchObject({ linked: 1, removed: 2 });
+    expect(result.html).toBe(`<p><a href="https://static.example.test/2024/clip.mp3">▶ Audio · static.example.test</a></p>`);
+  });
+
   it("leaves embeds without a usable URL for the reader to drop and report, even zero-sized placeholders", () => {
     const html = `<iframe title="Live chart"></iframe><iframe src="javascript:void(0)"></iframe><video controls></video><iframe src="" width="0" height="0"></iframe>`;
     expect(linkEmbeddedMedia(html, BASE)).toEqual({ html, images: 0, linked: 0, removed: 0 });
@@ -377,6 +388,32 @@ describe("embedded media in a normalized article", () => {
     expect(reader.losses).not.toContainEqual(expect.objectContaining({ sourceTag: "object" }));
     expect(outcome.article.materialization.provenance.rulesApplied).toContain("article.preextract.image-objects@1");
     expect(outcome.article.materialization.quality.warnings).toEqual([]);
+  });
+
+  /** A "listen to this post" player above the article body, as openai.com and Substack render one around their <audio>. */
+  const listenPlayer = (audio: string) =>
+    `<p>The dek that introduces the post in a sentence or two.</p><div class="audio-player"><button type="button" aria-label="Play audio of page text">` +
+    `<svg viewBox="0 0 16 16"><path d="M0 0h16v16z"></path></svg></button><span>Loading…</span>${audio}</div>`;
+
+  it.each([
+    ["an empty <audio preload=none> read-aloud player", `<audio preload="none"></audio>`],
+    ["Substack's voiceover <audio>", `<audio data-testid="audio-element" src="/api/v1/audio/upload/f5696e46-1984-4510-9a6e-6984233f2d06/src" preload="none">Audio playback is not supported on your browser. Please upgrade.</audio>`],
+  ])("does not warn for a page's own narration the extractor drops (#24): %s", (_name, audio) => {
+    const outcome = articleCapture(`${listenPlayer(audio)}${prose("narration")}${prose("the end")}`);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(representation(outcome, "agent.gfm.v1")).not.toContain("/api/v1/audio/");
+    expect(outcome.article.materialization.quality.warnings).toEqual([]);
+  });
+
+  it("still warns when the extractor drops an audio clip of the article itself", () => {
+    const outcome = articleCapture(
+      `${prose("interviews")}<p>Listen to the interview:</p><audio controls></audio><p>That was the whole interview, unedited.</p>${prose("the end")}`,
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const omitted = { code: "SOURCE_EMBEDDED_CONTENT_OMITTED", recoverBy: "none", scope: "representation", severity: "warning" };
+    expect(outcome.article.materialization.quality.warnings).toEqual([omitted]);
   });
 
   it("does not warn for widgets the extractor rightly drops: a comment section's frames, a newsletter sign-up", () => {

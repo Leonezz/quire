@@ -8,9 +8,9 @@ import { DISPLAYABLE_SOURCE_TYPE } from "./deferred-image-sources";
  * video, demo or file, under its poster frame when there is one. A player facade (lite-youtube) links like
  * the player it loads, and interactive content only script fills (an empty Distill figure, a Sandpack
  * preview) becomes a link to its place on the original page. An <object> of an image type is only an
- * image and becomes one. Frames that are not article content (ads, analytics, comment and newsletter
- * widgets, hidden or 1-pixel boxes) are removed. An embed with no URL worth linking is left alone: the
- * reader drops it and the article is flagged for it.
+ * image and becomes one. Frames and players that are not article content (ads, analytics, comment and
+ * newsletter widgets, a page's read-aloud player, hidden or 1-pixel boxes) are removed. An embed with no URL
+ * worth linking is left alone: the reader drops it and the article is flagged for it.
  */
 type Kind = "Audio" | "Demo" | "Embedded content" | "Video";
 type Embed = { kind: Kind; poster?: string; provider: string; url: string };
@@ -35,6 +35,8 @@ const MAX_TITLE_CHARS = 120;
 /** /embed/ paths that are YouTube player modes, not video ids. */
 const YOUTUBE_PLAYER_MODES = new Set(["live_stream", "videoseries"]);
 const STREAM_UID = /^\/([0-9a-f]{32})(?:\/|$)/u;
+/** Where Substack's "listen to this post" player loads the post's voiceover from. */
+const VOICEOVER_PATH = /\/api\/v1\/audio\//u;
 const CUSTOMER_STREAM_HOST = /^customer-[a-z0-9]+\.cloudflarestream\.com$/u;
 const LEGACY_STREAM_HOST = /^iframe\.(?:videodelivery\.net|cloudflarestream\.com)$/u;
 const YOUTUBE_HOST = /^(?:www\.|m\.)?youtube(?:-nocookie)?\.com$/u;
@@ -150,12 +152,22 @@ function labelOf(embed: Embed, title: string | undefined) {
 }
 
 /**
+ * A "listen to this page" or voiceover player, the page read aloud and not article content (issue #24): an audio
+ * that names nothing to play and preloads nothing (script fetches the speech on click), or Substack's voiceover.
+ */
+function isPageNarration(element: Element, url: URL | undefined) {
+  if (element.tagName.toLowerCase() !== "audio") return false;
+  return url ? VOICEOVER_PATH.test(url.pathname) : element.getAttribute("preload")?.trim().toLowerCase() === "none";
+}
+
+/**
  * The embed an element shows, "noise" for one that is not content, or undefined when it has no URL to link
  * (then the reader drops it and reports it: a placeholder a script would have filled is not known to be noise).
  */
 function classify(element: Element, baseUri: string | undefined): Embed | "noise" | undefined {
   const tag = element.tagName.toLowerCase();
   const url = embedSourceUrl(element, baseUri);
+  if (isPageNarration(element, url)) return "noise";
   if (!url) return undefined;
   if (isNotContent(url) || isHidden(element)) return "noise";
   if (tag === "iframe" || FACADE_PLAYERS.has(tag)) return frameEmbed(url, baseUri);
@@ -168,10 +180,13 @@ function classify(element: Element, baseUri: string | undefined): Embed | "noise
   return { kind: tag === "video" ? "Video" : "Audio", ...(poster ? { poster } : {}), provider: url.hostname.replace(/^www\./u, ""), url: file.href };
 }
 
-/** Whether an embed is not article content: an ad, analytics, comment or newsletter frame, or a hidden or 1-pixel box. */
+/**
+ * Whether an embed is not article content: an ad, analytics, comment or newsletter frame, a page's read-aloud or
+ * voiceover player, or a hidden or 1-pixel box.
+ */
 export function isNoiseEmbed(element: Element, baseUri: string | undefined) {
   const url = embedSourceUrl(element, baseUri);
-  return (url !== undefined && isNotContent(url)) || isHidden(element);
+  return isPageNarration(element, url) || (url !== undefined && isNotContent(url)) || isHidden(element);
 }
 
 /** What the reader calls interactive content only script fills, or undefined for anything else (a d-figure with content is a figure). */
