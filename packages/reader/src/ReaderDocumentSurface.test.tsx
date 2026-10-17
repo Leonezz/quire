@@ -1228,7 +1228,11 @@ describe("ReaderDocumentSurface", () => {
     const container = document.createElement("div");
     document.body.replaceChildren(container);
     const root = createRoot(container);
-    await act(async () => {
+    // A synchronous act commits the first render and flushes its effects, but
+    // the highlighter result only lands in a later promise callback. The source
+    // fallback is therefore observable even when the highlighter is already
+    // loaded, which an async act would race (it keeps flushing across tasks).
+    act(() => {
       root.render(
         <ReaderDocumentSurface
           fallback={{ content: "fallback", format: "plain" }}
@@ -1292,6 +1296,9 @@ describe("ReaderDocumentSurface", () => {
       });
     }
 
+    expect(
+      container.querySelector('[data-reader-code="highlighted"]')?.textContent,
+    ).toBe("const result: number = 1;");
     expect(
       container.querySelectorAll(".reader-code-token").length,
     ).toBeGreaterThan(1);
