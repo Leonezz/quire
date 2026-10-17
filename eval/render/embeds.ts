@@ -143,6 +143,13 @@ function baseOf(document: { querySelector(selector: string): El | null }, finalU
   return absolute(href, finalUrl) || finalUrl;
 }
 
+/** The page with the element's id as fragment (the page when it has none): where a placeholder for an embed with no URL links. */
+function anchorOf(element: El, finalUrl: string): string {
+  const anchor = new URL(finalUrl);
+  anchor.hash = element.getAttribute("id") ?? "";
+  return anchor.href;
+}
+
 /**
  * The embeds of a snapshot page, in document order within <body>, at most MAX_EMBEDS; representedInReader
  * is false until markRepresented. Content inside a listed iframe, video, audio, tweet, instagram post or
@@ -166,7 +173,8 @@ export function extractEmbeds(html: string, finalUrl: string): Embed[] {
     const found = classify(element, tag, base);
     if (!found || isHidden(element) || (found.src && isNoiseUrl(found.src))) continue;
     listed.push(element);
-    embeds.push({ kind: found.kind, tag, src: found.src, host: hostOf(found.src), context: contextBefore(all, index), representedInReader: false });
+    const anchor = found.src ? "" : anchorOf(element, finalUrl);
+    embeds.push({ kind: found.kind, tag, src: found.src, host: hostOf(found.src), context: contextBefore(all, index), anchor, representedInReader: false });
   }
   return embeds;
 }
@@ -210,11 +218,22 @@ export function mediaKey(raw: string): string {
   return `${host}${path}`;
 }
 
-/** Sets representedInReader: the embed's URL (as mediaKey) is among the reader's links, image srcs or media srcs. */
+const exactHref = (raw: string) => { try { return new URL(raw).href; } catch { return ""; } };
+
+/**
+ * Sets representedInReader: the embed's URL (as mediaKey) is among the reader's links, image srcs or media srcs.
+ * An embed with no URL needs a reader link to exactly its anchor (fragment included: any link into the page is
+ * not one to the figure), and each such link stands for one embed.
+ */
 export function markRepresented(embeds: readonly Embed[], readerUrls: readonly string[]): Embed[] {
   const shown = new Set(readerUrls.map(mediaKey).filter(Boolean));
+  const anchors = new Map<string, number>();
+  for (const href of readerUrls.map(exactHref).filter(Boolean)) anchors.set(href, (anchors.get(href) ?? 0) + 1);
   return embeds.map((embed) => {
-    const key = embed.src ? mediaKey(embed.src) : "";
-    return { ...embed, representedInReader: key !== "" && shown.has(key) };
+    if (embed.src) return { ...embed, representedInReader: shown.has(mediaKey(embed.src)) };
+    const anchor = embed.anchor ? exactHref(embed.anchor) : "";
+    const left = anchors.get(anchor) ?? 0;
+    if (left > 0) anchors.set(anchor, left - 1);
+    return { ...embed, representedInReader: left > 0 };
   });
 }

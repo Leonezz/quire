@@ -1,4 +1,4 @@
-# Rendering evaluation — 2026-10-16
+# Rendering evaluation — 2026-10-17
 
 67/67 pass (100%), gate 85%. Reviewed goldens: 64.
 
@@ -16,7 +16,7 @@
 | ✅ colah-lstm | jekyll | - | extractor.semantic-boundary.v1 | 2244 | reviewed | no byline; 22 lossy conversions | - |
 | ✅ csstricks-flexbox | wordpress | Site Kit by Google 1.186.0 | extractor.semantic-boundary.v1 | 2968 | reviewed | 74 lossy conversions | - |
 | ✅ danluu-files | custom | - | extractor.semantic-boundary.v1 | 6339 | reviewed | no date; no byline; 3 lossy conversions | - |
-| ✅ distill-featurevis | distill | - | extractor.semantic-boundary.v1 | 4140 | reviewed | expected footnotes, found none; 317 lossy conversions | - |
+| ✅ distill-featurevis | distill | - | extractor.semantic-boundary.v1 | 4224 | reviewed | expected footnotes, found none; 305 lossy conversions | - |
 | ✅ eugeneyan-llm-patterns | jekyll | - | extractor.semantic-boundary.v1 | 12822 | reviewed | 15 lossy conversions | - |
 | ✅ fasterthanlime-golang | custom | - | extractor.semantic-boundary.v1 | 4873 | reviewed | 2011 lossy conversions | - |
 | ✅ githubblog-copilotx | wordpress | WordPress 7.1 | extractor.semantic-boundary.v1 | 1074 | reviewed | 1 lossy conversions | - |
@@ -32,7 +32,7 @@
 | ✅ jalammar-transformer | jekyll | - | extractor.semantic-boundary.v1 | 3979 | reviewed | 55 lossy conversions | - |
 | ✅ jaykmody-gpt | custom | WordPress (inferred) | extractor.semantic-boundary.v1 | 6070 | reviewed | no byline; 1 lossy conversions | - |
 | ✅ joelonsoftware-test | wordpress | WordPress (inferred) | extractor.semantic-boundary.v1 | 3558 | reviewed | 14 lossy conversions | - |
-| ✅ joshwcomeau-rerender | next | Next.js (inferred) | extractor.semantic-boundary.v1 | 2764 | reviewed | no date; 175 lossy conversions | - |
+| ✅ joshwcomeau-rerender | next | Next.js (inferred) | extractor.semantic-boundary.v1 | 2792 | reviewed | no date; 175 lossy conversions | - |
 | ✅ jvns-firecracker | hugo | - | extractor.semantic-boundary.v1 | 2300 | reviewed | 2 lossy conversions | - |
 | ✅ jxnl-rag | mkdocs | - | extractor.semantic-boundary.v1 | 2515 | reviewed | 3 lossy conversions | - |
 | ✅ karpathy-recipe | jekyll | - | extractor.semantic-boundary.v1 | 3748 | reviewed | no byline; 5 lossy conversions | - |
@@ -64,7 +64,7 @@
 | ✅ ruder-optim | ghost | Ghost 6.64 | extractor.semantic-boundary.v1 | 5782 | reviewed | 1 lossy conversions | - |
 | ✅ rustblog-1.0 | custom | - | extractor.semantic-boundary.v1 | 1095 | reviewed | 1 lossy conversions | - |
 | ✅ samaltman-ia | custom | Next.js (inferred) | extractor.semantic-boundary.v1 | 1109 | reviewed | no byline; 5 lossy conversions | - |
-| ✅ simonw-llms-2024 | django | - | extractor.semantic-boundary.v1 | 6521 | reviewed | 5 lossy conversions | - |
+| ✅ simonw-llms-2024 | django | - | extractor.semantic-boundary.v1 | 6521 | reviewed | 4 lossy conversions | - |
 | ✅ simonw-wordcamp | django | - | extractor.semantic-boundary.v1 | 9699 | reviewed | 97 lossy conversions | - |
 | ✅ sivers-ff | custom | - | extractor.semantic-boundary.v1 | 495 | reviewed | 1 lossy conversions | - |
 | ✅ stratechery-endbeginning | wordpress | Site Kit by Google 1.187.0 | extractor.semantic-boundary.v1 | 1484 | reviewed | no byline; 1 lossy conversions | - |

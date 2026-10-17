@@ -1509,7 +1509,7 @@ describe("ContentNormalizationModule", () => {
           <link>https://example.test/posts/demo</link>
           <content:encoded><![CDATA[
             <p>Try it below.</p>
-            <iframe class="sp-preview-iframe" title="Sandpack Preview"></iframe>
+            <iframe title="Live demo"></iframe>
           ]]></content:encoded>
         </item></channel>
       </rss>`;

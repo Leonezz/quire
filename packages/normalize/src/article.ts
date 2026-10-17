@@ -16,9 +16,10 @@ import {
   articleSiteAdapterRule,
 } from "./article-site-adapters";
 import { QuireDefuddle } from "./article-defuddle";
+import { droppedEmbedCount, embedSites, type EmbedSite } from "./article-embed-omissions";
 import { preextractArticleDocument } from "./article-preextract";
 import { pruneArticleChrome } from "./article-prune";
-import { createRepresentations, sha256Identity } from "./representations";
+import { createRepresentations, embeddedContentOmitted, sha256Identity } from "./representations";
 
 const DEFUDDLE_MIN_TEXT_CHARACTERS = 600;
 const DEFUDDLE_MIN_RELATIVE_TEXT_RATIO = 0.5;
@@ -37,6 +38,8 @@ type ExtractionCandidate = {
   byline?: string;
   content: string;
   dir?: "ltr" | "rtl";
+  /** Embeds of the article the extractor removed, which the reader can then neither show nor report. */
+  droppedEmbeds?: number;
   lang?: string;
   /** Rewrites the extractor's input went through before it ran. */
   preextractionRules?: readonly string[];
@@ -51,6 +54,8 @@ type ExtractionCandidate = {
 
 type ExtractorInput = {
   document: DocumentLike;
+  /** The embeds of the extractor's input, taken before it runs (Readability rewrites the document it reads). */
+  embedSites: readonly EmbedSite[];
   preextractionRules: readonly string[];
 };
 
@@ -882,6 +887,7 @@ function defuddleCandidate(
   return {
     byline: normalizedOptionalString(result.author, 500),
     content: result.content,
+    droppedEmbeds: droppedEmbedCount(input.embedSites, result.content, source),
     lang: normalizedOptionalString(result.language, 64),
     preextractionRules: input.preextractionRules,
     publishedAt: normalizedPublishedAt(result.published),
@@ -892,6 +898,7 @@ function defuddleCandidate(
 
 function readabilityCandidate(
   input: ExtractorInput,
+  source: string,
   maxNodes: number,
 ): ExtractionCandidate | undefined {
   const result = new Readability(input.document, {
@@ -904,6 +911,7 @@ function readabilityCandidate(
     byline: normalizedOptionalString(result.byline, 500),
     content: result.content,
     dir: normalizedDirection(result.dir),
+    droppedEmbeds: droppedEmbedCount(input.embedSites, result.content, source),
     lang: normalizedOptionalString(result.lang, 64),
     preextractionRules: input.preextractionRules,
     publishedAt: normalizedPublishedAt(result.publishedTime),
@@ -945,9 +953,11 @@ function extractorDocumentFor(
     root === document.body
       ? offlineExtractorDocument(document, source)
       : boundedExtractorDocument(document, root, source);
+  const preextractionRules = preextractArticleDocument(extractorDocument, source);
   return {
     document: extractorDocument,
-    preextractionRules: preextractArticleDocument(extractorDocument),
+    embedSites: extractorDocument.body ? embedSites(extractorDocument.body, source) : [],
+    preextractionRules,
   };
 }
 
@@ -1201,6 +1211,7 @@ export function normalizeArticleCapture(
       try {
         readability = readabilityCandidate(
           extractorDocumentFor(document, extractorRoot, source),
+          source,
           input.budget.maxNodes,
         );
       } catch {
@@ -1384,7 +1395,13 @@ export function normalizeArticleCapture(
     const producer = { evidence: [], key: "generic", version: "1" };
     const sourceIdentity = sha256Identity(`article\0${source}`);
     const sourceFingerprint = input.capture.contentIdentity;
-    const articleProblems = [...problems, ...representationResult.problems];
+    // The reader reports only the embeds it had to drop; ones the extractor dropped never reached it.
+    const extractionProblems =
+      (selected.droppedEmbeds ?? 0) > 0 &&
+      !representationResult.problems.some((entry) => entry.code === "SOURCE_EMBEDDED_CONTENT_OMITTED")
+        ? [embeddedContentOmitted()]
+        : [];
+    const articleProblems = [...problems, ...representationResult.problems, ...extractionProblems];
     const quality: ContentMaterialization["quality"] = {
       completeness: "declared_full",
       conformance: decoding.problems.length > 0 ? "recoverable" : "conformant",

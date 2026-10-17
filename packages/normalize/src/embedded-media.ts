@@ -3,15 +3,29 @@ import { parseHTML } from "linkedom";
 /**
  * Players and widgets (iframe, video, audio) need script or a plugin, so the reader cannot show them
  * and drops them. This pass puts back what they showed as something the reader can show: a link to the
- * video, demo or file, under its poster frame when there is one. Frames that are not article content
+ * video, demo or file, under its poster frame when there is one. A player facade (lite-youtube) links like
+ * the player it loads, and interactive content only script fills (an empty Distill figure, a Sandpack
+ * preview) becomes a link to its place on the original page. Frames that are not article content
  * (ads, analytics, comment and newsletter widgets, hidden or 1-pixel boxes) are removed. An embed with
  * no URL worth linking is left alone: the reader drops it and the article is flagged for it.
  */
 type Kind = "Audio" | "Demo" | "Embedded content" | "Video";
 type Embed = { kind: Kind; poster?: string; provider: string; url: string };
 
-const EMBED_SELECTOR = "iframe, video, audio";
-const EMBED_TAG = /<(?:iframe|video|audio)\b/iu;
+/** Facades that show a thumbnail and load the player iframe on click: the player URL for a video id. */
+const FACADE_PLAYERS: ReadonlyMap<string, (id: string) => string> = new Map([
+  ["lite-youtube", (id: string) => `https://www.youtube.com/embed/${id}`],
+  ["lite-vimeo", (id: string) => `https://player.vimeo.com/video/${id}`],
+]);
+const FACADE_SELECTOR = Array.from(FACADE_PLAYERS.keys()).join(", ");
+const FACADE_VIDEO_ID = /^[\w-]{6,}$/u;
+/** Distill's lazily drawn figures and Sandpack's live preview: script fills them, and the page is the only way to see them. */
+const INTERACTIVE_SELECTOR = "d-figure, iframe.sp-preview-iframe, iframe[title='Sandpack Preview']";
+const PLACEHOLDER_SUFFIX = " — open in the original";
+/** Content that would make a d-figure the figure itself rather than an empty box for script to fill. */
+const SERVER_RENDERED_MEDIA = "img, picture, svg, canvas, video, audio, iframe, object, embed";
+const EMBED_SELECTOR = `iframe, video, audio, ${FACADE_SELECTOR}`;
+const EMBED_TAG = /<(?:iframe|video|audio|lite-youtube|lite-vimeo|d-figure)\b/iu;
 const MAX_TITLE_CHARS = 120;
 /** /embed/ paths that are YouTube player modes, not video ids. */
 const YOUTUBE_PLAYER_MODES = new Set(["live_stream", "videoseries"]);
@@ -91,6 +105,13 @@ function frameEmbed(url: URL, baseUri: string | undefined): Embed {
   return { kind: "Embedded content", provider: url.hostname.replace(/^www\./u, ""), url: url.href };
 }
 
+/** The player a facade loads, or undefined without a video id that could be one. */
+function facadePlayerUrl(element: Element) {
+  const player = FACADE_PLAYERS.get(element.tagName.toLowerCase());
+  const id = element.getAttribute("videoid")?.trim();
+  return player && id && FACADE_VIDEO_ID.test(id) ? new URL(player(id)) : undefined;
+}
+
 function frameUrl(element: Element, baseUri: string | undefined) {
   return ["src", "data-src", "data-lazy-src"]
     .map((name) => absoluteUrl(element.getAttribute(name), baseUri))
@@ -105,8 +126,15 @@ function mediaUrl(element: Element, baseUri: string | undefined) {
     .find((url) => url !== undefined);
 }
 
+/** The http(s) URL an embed loads: an iframe's frame, a facade's player, a media element's file. */
+export function embedSourceUrl(element: Element, baseUri: string | undefined) {
+  const tag = element.tagName.toLowerCase();
+  if (FACADE_PLAYERS.has(tag)) return facadePlayerUrl(element);
+  return tag === "iframe" ? frameUrl(element, baseUri) : mediaUrl(element, baseUri);
+}
+
 function titleOf(element: Element) {
-  const title = (element.getAttribute("title") || element.getAttribute("aria-label") || "").replace(/\s+/gu, " ").trim();
+  const title = (element.getAttribute("title") || element.getAttribute("aria-label") || element.getAttribute("videotitle") || "").replace(/\s+/gu, " ").trim();
   if (!title || GENERIC_TITLE.test(title)) return undefined;
   return title.length > MAX_TITLE_CHARS ? `${title.slice(0, MAX_TITLE_CHARS - 1)}…` : title;
 }
@@ -122,10 +150,10 @@ function labelOf(embed: Embed, title: string | undefined) {
  */
 function classify(element: Element, baseUri: string | undefined): Embed | "noise" | undefined {
   const tag = element.tagName.toLowerCase();
-  const url = tag === "iframe" ? frameUrl(element, baseUri) : mediaUrl(element, baseUri);
+  const url = embedSourceUrl(element, baseUri);
   if (!url) return undefined;
   if (isNotContent(url) || isHidden(element)) return "noise";
-  if (tag === "iframe") return frameEmbed(url, baseUri);
+  if (tag === "iframe" || FACADE_PLAYERS.has(tag)) return frameEmbed(url, baseUri);
   const poster = tag === "video"
     ? ["poster", "data-poster"].map((name) => absoluteUrl(element.getAttribute(name), baseUri)).find((value) => value !== undefined)?.href
     : undefined;
@@ -133,6 +161,52 @@ function classify(element: Element, baseUri: string | undefined): Embed | "noise
   const file = new URL(url.href);
   file.hash = "";
   return { kind: tag === "video" ? "Video" : "Audio", ...(poster ? { poster } : {}), provider: url.hostname.replace(/^www\./u, ""), url: file.href };
+}
+
+/** Whether an embed is not article content: an ad, analytics, comment or newsletter frame, or a hidden or 1-pixel box. */
+export function isNoiseEmbed(element: Element, baseUri: string | undefined) {
+  const url = embedSourceUrl(element, baseUri);
+  return (url !== undefined && isNotContent(url)) || isHidden(element);
+}
+
+/** What the reader calls interactive content only script fills, or undefined for anything else (a d-figure with content is a figure). */
+function interactiveLabel(element: Element) {
+  if (!element.matches(INTERACTIVE_SELECTOR)) return undefined;
+  if (element.tagName.toLowerCase() !== "d-figure") return "Code playground";
+  const blank = !element.textContent?.trim() && element.querySelector(SERVER_RENDERED_MEDIA) === null;
+  return blank ? "Interactive figure" : undefined;
+}
+
+/**
+ * A link to where interactive content sits on the original page (its id as the fragment), inline in a paragraph and
+ * a paragraph of its own otherwise; undefined for other elements or without a page to link to.
+ */
+function interactivePlaceholder(document: Document, element: Element, baseUri: string | undefined) {
+  const label = interactiveLabel(element);
+  const page = label ? absoluteUrl(baseUri, undefined) : undefined;
+  if (!label || !page) return undefined;
+  page.hash = element.id;
+  const link = document.createElement("a");
+  link.setAttribute("href", page.href);
+  link.textContent = `${label}${PLACEHOLDER_SUFFIX}`;
+  return element.parentElement?.closest("p") ? link : wrapped(document, "p", link);
+}
+
+/** Puts a link to the original page where each piece of interactive content was; returns how many it replaced. */
+export function placeInteractivePlaceholders(document: Document, baseUri: string | undefined) {
+  let placed = 0;
+  for (const element of Array.from(document.querySelectorAll(INTERACTIVE_SELECTOR))) {
+    const placeholder = interactivePlaceholder(document, element, baseUri);
+    if (!placeholder) continue;
+    element.replaceWith(placeholder);
+    placed += 1;
+  }
+  return placed;
+}
+
+/** Whether an element is a link placeInteractivePlaceholders made. */
+export function isInteractivePlaceholder(element: Element) {
+  return element.tagName.toLowerCase() === "a" && (element.textContent ?? "").trim().endsWith(PLACEHOLDER_SUFFIX);
 }
 
 /** Whether a paragraph says something besides its embeds (their fallback content does not count). */
@@ -184,7 +258,8 @@ function replaceEmbed(document: Document, element: Element, embed: Embed, title:
 export function linkEmbeddedMedia(html: string, baseUri: string | undefined) {
   if (!EMBED_TAG.test(html)) return { html, linked: 0, removed: 0 };
   const document = parseHTML(`<html><body>${html}</body></html>`).document;
-  let linked = 0;
+  // A d-figure that got no placeholder holds server-rendered content: it is the figure, and its players are linked below.
+  let linked = placeInteractivePlaceholders(document, baseUri);
   let removed = 0;
   for (const element of Array.from(document.body.querySelectorAll(EMBED_SELECTOR))) {
     // Only an embed inside another one's fallback content (never shown by a browser) goes with that one.

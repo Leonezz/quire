@@ -144,8 +144,50 @@ describe("linkEmbeddedMedia", () => {
   });
 
   it("leaves embeds without a usable URL for the reader to drop and report, even zero-sized placeholders", () => {
-    const html = `<iframe class="sp-preview-iframe" title="Sandpack Preview"></iframe><iframe src="javascript:void(0)"></iframe><video controls></video><iframe src="" width="0" height="0"></iframe>`;
+    const html = `<iframe title="Live chart"></iframe><iframe src="javascript:void(0)"></iframe><video controls></video><iframe src="" width="0" height="0"></iframe>`;
     expect(linkEmbeddedMedia(html, BASE)).toEqual({ html, linked: 0, removed: 0 });
+  });
+
+  it("links a lite-youtube or lite-vimeo facade like the player it loads, and leaves one without a usable video id", () => {
+    const result = linkEmbeddedMedia(
+      `<lite-youtube videoid="mpgWH9KulUU" title="Gemini 2.0 streaming demo" playlabel="Play: Gemini 2.0 streaming demo">\n</lite-youtube>` +
+        `<lite-youtube videoid="k1ILy23t89E" videotitle="Course intro"></lite-youtube>` +
+        `<lite-vimeo videoid="364402896"></lite-vimeo>` +
+        `<lite-youtube videoid="a b/c"></lite-youtube><lite-youtube></lite-youtube>`,
+      BASE,
+    );
+    expect(result.linked).toBe(3);
+    expect(result.html).toBe(
+      `<figure><img alt="Gemini 2.0 streaming demo" src="https://i.ytimg.com/vi/mpgWH9KulUU/hqdefault.jpg"><figcaption><a href="https://www.youtube.com/watch?v=mpgWH9KulUU">▶ Video · YouTube: Gemini 2.0 streaming demo</a></figcaption></figure>` +
+        `<figure><img alt="Course intro" src="https://i.ytimg.com/vi/k1ILy23t89E/hqdefault.jpg"><figcaption><a href="https://www.youtube.com/watch?v=k1ILy23t89E">▶ Video · YouTube: Course intro</a></figcaption></figure>` +
+        `<p><a href="https://vimeo.com/364402896">▶ Video · Vimeo</a></p>` +
+        `<lite-youtube videoid="a b/c"></lite-youtube><lite-youtube></lite-youtube>`,
+    );
+  });
+
+  it("stands a link to its place on the page in for an empty d-figure or a Sandpack preview, which only script fills", () => {
+    const result = linkEmbeddedMedia(
+      `<figure><figcaption>Starting from random noise, we optimize an image.</figcaption><d-figure id="opt-progress"></d-figure></figure>` +
+        `<d-figure>\n</d-figure>` +
+        `<div class="sp-preview-container"><iframe class="sp-c-fgviib sp-preview-iframe" title="Sandpack Preview"></iframe></div>` +
+        `<d-figure id="static"><img src="/fig.png" alt="Static figure"></d-figure>` +
+        `<d-figure id="clip"><video><source src="/clip.mp4"></video></d-figure>`,
+      `${BASE}#comments`,
+    );
+    expect(result).toMatchObject({ linked: 4, removed: 0 });
+    expect(result.html).toBe(
+      `<figure><figcaption>Starting from random noise, we optimize an image.</figcaption><p><a href="${BASE}#opt-progress">Interactive figure — open in the original</a></p></figure>` +
+        `<p><a href="${BASE}">Interactive figure — open in the original</a></p>` +
+        `<div class="sp-preview-container"><p><a href="${BASE}">Code playground — open in the original</a></p></div>` +
+        // Server-rendered content is the figure itself, and its players are linked like any other.
+        `<d-figure id="static"><img src="/fig.png" alt="Static figure"></d-figure>` +
+        `<d-figure id="clip"><p><a href="https://blog.example.test/clip.mp4">▶ Video · blog.example.test</a></p></d-figure>`,
+    );
+  });
+
+  it("leaves interactive content alone when there is no page to link to", () => {
+    const html = `<d-figure id="opt-progress"></d-figure><iframe class="sp-preview-iframe" title="Sandpack Preview"></iframe>`;
+    expect(linkEmbeddedMedia(html, undefined)).toEqual({ html, linked: 0, removed: 0 });
   });
 });
 
@@ -222,5 +264,63 @@ describe("embedded media in a normalized article", () => {
     expect(outcome.problems).toEqual([omitted]);
     expect(representation(outcome, "reader.document.v2")).not.toContain("does not support");
     expect(representation(outcome, "agent.gfm.v1")).not.toContain("does not support");
+  });
+
+  /** A Sandpack playground as joshwcomeau.com renders it: a header, the server-rendered code, and a src-less live preview. */
+  const sandpack = `<div class="sp-wrapper"><div class="playground"><header><p>Code Playground</p><button title="Reset code">Reset</button></header>
+    <div class="sp-editor"><div class="sp-code-editor" role="tabpanel"><div role="textbox" aria-label="Code Editor for App.js">
+    <pre class="sp-pre-placeholder"><span class="sp-syntax-keyword">function</span> App() { return &lt;p&gt;Count: 1&lt;/p&gt;; }</pre></div></div></div>
+    <div class="sp-preview"><div class="sp-preview-container"><iframe class="sp-c-fgviib sp-preview-iframe" title="Sandpack Preview"></iframe></div></div></div></div>`;
+
+  it("shows a lite-youtube facade as its poster and watch link, and empty interactive content as a link to the original (issue #14)", () => {
+    const outcome = articleCapture(
+      `${prose("live video")}<lite-youtube videoid="mpgWH9KulUU" title="Gemini 2.0 streaming demo"></lite-youtube>${prose("figures")}` +
+        `<figure><figcaption>Starting from random noise, we optimize an image to activate a neuron.</figcaption><d-figure id="opt-progress"></d-figure></figure>` +
+        `${prose("playgrounds")}<p>Let's look at an example:</p>${sandpack}${prose("the end")}`,
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const reader = JSON.parse(representation(outcome, "reader.document.v2"));
+    expect(reader.children.filter((node: { type: string }) => node.type === "figure")).toEqual([{
+      caption: [{ children: [{ type: "text", value: "▶ Video · YouTube: Gemini 2.0 streaming demo" }], title: null, type: "link", url: "https://www.youtube.com/watch?v=mpgWH9KulUU" }],
+      credit: [],
+      media: [{ alt: "Gemini 2.0 streaming demo", title: null, type: "image", url: "https://i.ytimg.com/vi/mpgWH9KulUU/hqdefault.jpg" }],
+      type: "figure",
+    }]);
+    const agent = representation(outcome, "agent.gfm.v1");
+    expect(agent).toContain(`[Interactive figure — open in the original](${BASE}#opt-progress)`);
+    expect(agent).toContain(`[Code playground — open in the original](${BASE})`);
+    expect(agent).toContain("Count: 1");
+    expect(outcome.article.materialization.provenance.rulesApplied).toEqual(expect.arrayContaining([
+      "article.preextract.interactive-placeholders@1",
+      "generic.embedded-media-links@1",
+    ]));
+    expect(outcome.article.materialization.quality.warnings).toEqual([]);
+  });
+
+  it("warns when the extractor dropped an embed that sat inside the article, before the reader could report it", () => {
+    const outcome = articleCapture(
+      `${prose("charts")}<p>The live chart below updates every second.</p><iframe title="Live chart" width="600" height="400"></iframe>` +
+        `<p>As the chart shows, the load stays flat.</p>${prose("the end")}`,
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const omitted = { code: "SOURCE_EMBEDDED_CONTENT_OMITTED", recoverBy: "none", scope: "representation", severity: "warning" };
+    // The reader never saw it, so it has no loss to report.
+    expect(JSON.parse(representation(outcome, "reader.document.v2")).losses).not.toContainEqual(expect.objectContaining({ sourceTag: "iframe" }));
+    expect(outcome.article.materialization.quality.warnings).toEqual([omitted]);
+    expect(outcome.problems).toEqual([omitted]);
+  });
+
+  it("does not warn for widgets the extractor rightly drops: a comment section's frames, a newsletter sign-up", () => {
+    const outcome = articleCapture(
+      `${prose("widgets")}<iframe src="https://example.substack.com/embed" width="480" height="320"></iframe>${prose("the end")}` +
+        `<section class="comments" id="comments"><h3>3 comments</h3><p>Great post, thanks for writing it up!</p>` +
+        `<iframe title="Leave a reply" width="600" height="300"></iframe><p>Agreed with all of this, especially the end.</p></section>`,
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(representation(outcome, "agent.gfm.v1")).not.toContain("Great post");
+    expect(outcome.article.materialization.quality.warnings).toEqual([]);
   });
 });
