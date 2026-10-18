@@ -41,6 +41,17 @@ export interface ToolDeps {
 }
 
 export const PAGE_CHARS = 24_000;
+/** A read with exactly the same arguments is answered this many times per turn; later repeats are refused. */
+export const REPEAT_LIMIT = 2;
+/** A turn that keeps repeating one read this many times is stopped: something (usually a code loop) is not making progress. */
+export const REPEAT_STOP = 12;
+/** Tool calls answered per turn; later calls are refused. */
+export const CALL_LIMIT = 250;
+/** Tool calls after which the turn is stopped. */
+export const CALL_STOP = 300;
+/** Reads: the same arguments give the same answer within a turn, so repeating them only burns the turn. */
+const READ_TOOLS = new Set(["library_search", "library_recent", "material_read", "material_source", "material_annotations", "inbox_list"]);
+const PAGING = "The result is JSON text: in code, JSON.parse it before reading its fields. Start at offset 0 and pass each result's nextOffset as the next offset; stop when nextOffset is null. A page is answered at most twice per turn, so keep what you read.";
 const SEARCH_HITS = 20;
 const DEFAULT_RECENT = 20;
 const MAX_LIST = 100;
@@ -66,7 +77,7 @@ export const agentTools: readonly DynamicTool[] = [
     inputSchema: { type: "object", properties: { query: { type: "string", minLength: 1, maxLength: 200 } }, required: ["query"], additionalProperties: false } },
   { name: "library_recent", description: "The newest materials in the library (id, title, kind, creators, publication, date, doi, arxivId, byline, publishedAt, url, readingMinutes, origin). Use it to see what the reader has been reading, or when a question is about the library as a whole.",
     inputSchema: { type: "object", properties: { limit: { ...limitSchema, description: `How many, default ${DEFAULT_RECENT}.` } }, additionalProperties: false } },
-  { name: "material_read", description: `Read a material's text as Markdown (an artifact as its source: Markdown, code, HTML, React, Mermaid or SVG), ${PAGE_CHARS} characters per call. Start at offset 0 and continue with nextOffset until it is null; read before you summarise, verify or quote. ${CITE}`,
+  { name: "material_read", description: `Read a material's text as Markdown (an artifact as its source: Markdown, code, HTML, React, Mermaid or SVG), ${PAGE_CHARS} characters per call. ${PAGING} Read before you summarise, verify or quote. ${CITE}`,
     inputSchema: { type: "object", properties: { id: idSchema, offset: { type: "integer", minimum: 0, description: "Character offset; use the previous call's nextOffset." } }, required: ["id"], additionalProperties: false } },
   { name: "material_annotations", description: "The reader's own highlights and notes on a material (quote, note, kind, color, createdAt). Use it to learn what the reader marked as important or asked about before answering about the material.",
     inputSchema: { type: "object", properties: { id: idSchema }, required: ["id"], additionalProperties: false } },
@@ -74,7 +85,7 @@ export const agentTools: readonly DynamicTool[] = [
     inputSchema: { type: "object", properties: { limit: { ...limitSchema, description: `How many, default ${DEFAULT_RECENT}.` } }, additionalProperties: false } },
   { name: "library_import", description: "Fetch a public http(s) page and add it to the library as a material, returning its id, title and readingMinutes. A page already in the library is not fetched again: it comes back as stored, with existing: true. Use it only when the reader asked for an outside page or an inbox item's full text; then read it with material_read, and cite the new material as [id] after its title.",
     inputSchema: { type: "object", properties: { url: { type: "string", minLength: 8, maxLength: 4096 } }, required: ["url"], additionalProperties: false } },
-  { name: "material_source", description: `The captured raw page of a material as readable text with its structure (blank lines between blocks, # headings, - list items, fenced code, [text](href) links), ${PAGE_CHARS} characters per call, navigation and chrome included. Use it for a rebuild when the extracted text is broken; page with nextOffset until it is null. Only materials fetched with capture on have it.`,
+  { name: "material_source", description: `The captured raw page of a material as readable text with its structure (blank lines between blocks, # headings, - list items, fenced code, [text](href) links), ${PAGE_CHARS} characters per call, navigation and chrome included. Use it for a rebuild when the extracted text is broken. ${PAGING} Only materials fetched with capture on have it.`,
     inputSchema: { type: "object", properties: { id: idSchema, offset: { type: "integer", minimum: 0, description: "Character offset; use the previous call's nextOffset." } }, required: ["id"], additionalProperties: false } },
   { name: "artifact_write", description: `Save a document you made into the library as an artifact the reader can open, keep and cite. \`type\` says what it is: "markdown" (the default: a synthesis, a summary, notes, a rebuilt article), "code" (one source file; give \`language\`), "html" (a page that needs layout or interaction), "react" (an interactive component: a chart with recharts, a calculator, a dashboard, a sortable or filterable table, a quiz), "mermaid" (a flowchart, sequence, timeline, mind map or other diagram from text), or "svg" (a drawn figure). ${ARTIFACT_RULES} \`sources\` must list the id of every material you drew on; only ids you retrieved in this turn (library_search, library_recent, material_read, material_source, material_annotations, library_import) or the material the conversation is about are accepted. Every claim should carry [material-id] (several as [id, id]) after its exact quote. Quire renders each citation as a numbered reference and appends a Sources list built from \`sources\`, so do not write a references, bibliography or sources section, and do not mention ids in the prose. Returns { id, title, type, version } and, when an editor would flag something, \`review\` notes to fix with artifact_update before you reply; cite it as [id] after a one-line summary of what you saved. ${CITE}`,
     inputSchema: { type: "object", properties: { title: { type: "string", minLength: 1, maxLength: MAX_TITLE }, type: { type: "string", enum: [...ARTIFACT_TYPES], description: "What the artifact is; markdown when omitted." }, language: { type: "string", maxLength: 40, description: "code artifacts: the source's language, e.g. python." }, content: { type: "string", minLength: 1, maxLength: MAX_ARTIFACT_SOURCE, description: "The whole artifact: Markdown, the code, a complete HTML document, a React component file, Mermaid source, or an <svg> element." }, sources: { type: "array", items: idSchema, minItems: 1, maxItems: MAX_LINEAGE, uniqueItems: true } }, required: ["title", "content", "sources"], additionalProperties: false } },
@@ -272,11 +283,47 @@ async function execute(tool: string, raw: unknown, deps: ToolDeps, scope: TurnSc
   throw new Error(`Unknown tool ${tool}. Available: ${agentTools.map((t) => t.name).join(", ")}.`);
 }
 
+/** What identifies a read: the tool and its arguments with the defaults filled in, keys sorted. Writes have no key. */
+function readKey(tool: string, raw: unknown): string | undefined {
+  if (!READ_TOOLS.has(tool) || typeof raw !== "object" || raw === null || Array.isArray(raw)) return undefined;
+  const args: Record<string, unknown> = { ...(raw as Record<string, unknown>) };
+  if ((tool === "material_read" || tool === "material_source") && args.offset === undefined) args.offset = 0;
+  return `${tool} ${JSON.stringify(Object.keys(args).sort().map((key) => [key, args[key]]))}`;
+}
+
+function refusal(tool: string, error: string, summary: string, stopTurn?: string): ToolReply {
+  return { success: false, text: JSON.stringify({ ok: false, error }), summary: `${tool} ${summary}`, ...(stopTurn ? { stopTurn } : {}) };
+}
+
+/**
+ * Guards a turn against runaway tool use: a read repeated with identical arguments is refused after
+ * REPEAT_LIMIT answers and stops the turn at REPEAT_STOP; every call past CALL_LIMIT is refused and
+ * the turn stops at CALL_STOP. Undefined means the call may run.
+ */
+function guard(call: ToolCall, counts: { calls: number; reads: Map<string, number> }): ToolReply | undefined {
+  counts.calls += 1;
+  if (counts.calls > CALL_LIMIT) {
+    return refusal(call.tool, `This turn has made ${counts.calls} tool calls; at most ${CALL_LIMIT} are answered. Stop calling tools and answer with what you have.`, "refused: too many tool calls in this turn",
+      counts.calls >= CALL_STOP ? `The agent made ${CALL_STOP} tool calls in one turn and was stopped. Ask again with a narrower request.` : undefined);
+  }
+  const key = readKey(call.tool, call.arguments);
+  if (!key) return undefined;
+  const seen = (counts.reads.get(key) ?? 0) + 1;
+  counts.reads.set(key, seen);
+  if (seen <= REPEAT_LIMIT) return undefined;
+  return refusal(call.tool, `${call.tool} was already answered ${REPEAT_LIMIT} times with these exact arguments in this turn, and the answer has not changed. Use the result you have. ${PAGING}`, "refused: repeated with the same arguments",
+    seen >= REPEAT_STOP ? `The agent called ${call.tool} with the same arguments ${seen} times without making progress and was stopped.` : undefined);
+}
+
 /** One handler per turn: its calls run one after another so imports and writes have a clear order, and its capture cache is its own. */
 function turnHandler(deps: ToolDeps, scope: TurnScope): ToolHandler {
   let queue: Promise<unknown> = Promise.resolve();
   const cache: CaptureCache = {};
+  const counts = { calls: 0, reads: new Map<string, number>() };
   return (call) => {
+    // Judged on arrival, in call order, before the call waits in the queue: a loop is refused without touching the library.
+    const refused = guard(call, counts);
+    if (refused) return Promise.resolve(refused);
     const run = queue.then(async (): Promise<ToolReply> => {
       try {
         const outcome = await execute(call.tool, call.arguments, deps, scope, cache);

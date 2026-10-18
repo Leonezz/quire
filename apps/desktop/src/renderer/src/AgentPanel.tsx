@@ -165,7 +165,7 @@ function TurnView({ turn, titleOf, onOpenLink, onOpenMaterial, onRetry }: { turn
   return (
     <div className="grid gap-2">
       <AgentTurn role="user">{turn.label}</AgentTurn>
-      {turn.tools.length ? <div className="grid gap-1">{turn.tools.map((tool) => <AgentToolLine key={tool.key} name={tool.name} status={tool.status} summary={tool.summary} />)}</div> : null}
+      {turn.tools.length ? <div className="grid gap-1">{turn.tools.map((tool) => <AgentToolLine key={tool.key} name={tool.name} status={tool.status} summary={tool.summary} count={tool.count} />)}</div> : null}
       {turn.answer || turn.status === "running" ? (
         <AgentTurn role="agent">
           {turn.answer ? <AgentMarkdown text={turn.answer} className={turn.status === "running" ? "t-stream" : ""} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} titleOf={titleOf} sources={turn.sources} /> : null}

@@ -170,6 +170,25 @@ describe("CodexClient", () => {
     expect(h.client.running).toBe(0);
   });
 
+  it("stops a runaway turn when a tool reply says so: the reply goes out, the turn is interrupted and fails with the reason", async () => {
+    const progress: string[] = [];
+    const h = harness(basicScript((fake, turnRequest) => {
+      fake.send(ok(idOf(turnRequest), { turn: { id: "turn-9", status: "inProgress", items: [] } }));
+      fake.send({ id: 950, method: "item/tool/call", params: { threadId: "thread-1", turnId: "turn-9", callId: "c1", tool: "material_read", arguments: { id: "0123456789abcdef" } } });
+    }));
+    const outcome = h.client.runTurn({
+      ...noTools, onTool: (p) => progress.push(`${p.tool}:${p.status}`),
+      onToolCall: async () => ({ success: false, text: "{\"ok\":false}", summary: "material_read refused: repeated with the same arguments", stopTurn: "The agent looped and was stopped." }),
+    });
+    await expect(outcome).rejects.toMatchObject({ code: "TURN_FAILED", message: "The agent looped and was stopped." });
+    const server = h.server();
+    // The model still gets its answer; Quire's own field never goes over the wire.
+    expect(server.written.find((m) => m.id === 950)!.result).toEqual({ contentItems: [{ type: "inputText", text: "{\"ok\":false}" }], success: false });
+    expect(server.requests("turn/interrupt").map((m) => m.params)).toEqual([{ threadId: "thread-1", turnId: "turn-9" }]);
+    expect(progress).toEqual(["material_read:running", "material_read:failed"]);
+    expect(h.client.running).toBe(0);
+  });
+
   it("buffers a tool call and deltas that arrive before the turn/start ACK", async () => {
     const deltas: string[] = [];
     const h = harness(basicScript((fake, turnRequest) => {

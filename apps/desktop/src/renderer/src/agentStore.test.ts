@@ -58,6 +58,20 @@ describe("agentStore", () => {
     expect(api.listAgentRuns).toHaveBeenCalledTimes(1);
   });
 
+  it("folds repeated identical tool events into one row with a count, keeping the row's key", async () => {
+    const { store, emit } = harness();
+    await store.start();
+    await store.ask({ context: { kind: "library" }, task: "ask", text: "loop" });
+    emit({ type: "started", sessionId: "s1", threadId: "th1", turnId: "t1" });
+    for (let i = 0; i < 500; i += 1) {
+      emit({ type: "tool", sessionId: "s1", turnId: "t1", name: "material_read", status: "running" });
+      emit({ type: "tool", sessionId: "s1", turnId: "t1", name: "material_read", status: "failed", summary: "material_read refused: repeated with the same arguments" });
+    }
+    const tools = store.getState().runs.get("s1")!.tools;
+    expect(tools).toHaveLength(1);
+    expect(tools[0]).toEqual(expect.objectContaining({ name: "material_read", status: "failed", count: 500 }));
+  });
+
   it("creates the run when ask returns and routes deltas, tools and completion by session", async () => {
     const { store, emit } = harness();
     await store.start();

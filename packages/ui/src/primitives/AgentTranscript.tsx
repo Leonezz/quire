@@ -20,8 +20,8 @@ export function AgentTurn({ role, children, className }: { role: "user" | "agent
   return <div className={cx("agent-pop min-w-0 text-[13.5px] leading-[19px] text-label", className)}>{children}</div>;
 }
 
-/** A tool the agent used while answering: a spinner while it runs, then a tick or a cross. */
-export function AgentToolLine({ name, status, summary, className }: { name: string; status: AgentToolStatus; summary?: string | undefined; className?: string }) {
+/** A tool the agent used while answering: a spinner while it runs, then a tick or a cross; `count` says how many identical calls the row stands for. */
+export function AgentToolLine({ name, status, summary, count, className }: { name: string; status: AgentToolStatus; summary?: string | undefined; count?: number | undefined; className?: string }) {
   const label = status === "running" ? "running" : status === "done" ? "done" : "failed";
   return (
     <div className={cx("agent-pop flex min-w-0 items-center gap-2 text-[12px] leading-4 text-label-3", className)} role={status === "running" ? "status" : undefined} data-status={status}>
@@ -31,6 +31,7 @@ export function AgentToolLine({ name, status, summary, className }: { name: stri
         {status === "failed" ? <Icon of={X} size="sm" className="text-red" /> : null}
       </span>
       <span className="truncate"><code className="font-mono text-[11.5px] text-label-2">{name}</code>{summary ? <span> {summary.startsWith(name) ? summary.slice(name.length).trimStart() : summary}</span> : null}</span>
+      {count && count > 1 ? <span className="shrink-0 tabular-nums text-label-3" aria-label={`${count} identical calls`}>×{count}</span> : null}
     </div>
   );
 }

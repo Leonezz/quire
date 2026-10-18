@@ -1,6 +1,7 @@
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type { AgentEvent, AgentRequest, AgentResult, AgentRun, AgentSession, AgentStatus, AgentTurnRecord, MaterialRecord, MaterialSummary, Settings } from "../../shared/contracts";
+import { applyToolProgress } from "../../shared/agent-tool-rows";
 import { buildPrompt } from "./agent-prompt";
 import { createTurnScope, type ToolHandlerFactory, type TurnScope } from "./agent-tools";
 import { titleFor, type SessionStore } from "./agent-sessions";
@@ -88,12 +89,10 @@ function failureOf(error: unknown): Failure {
   return { ok: false, code: "TURN_FAILED", message };
 }
 
-/** The tool rows with `progress` applied: a running row is appended, its outcome replaces the last running row of that tool. */
+/** The tool rows with `progress` applied; a call repeating the row before it folds into that row's count. */
 function withProgress(tools: readonly RunTool[], progress: ToolProgress): RunTool[] {
-  if (progress.status === "running") return [...tools, { name: progress.tool, status: "running" }];
-  const entry: RunTool = { name: progress.tool, status: progress.status, ...(progress.summary ? { summary: progress.summary } : {}) };
-  const index = tools.findLastIndex((tool) => tool.name === progress.tool && tool.status === "running");
-  return index < 0 ? [...tools, entry] : tools.map((tool, i) => (i === index ? entry : tool));
+  return applyToolProgress(tools, { name: progress.tool, status: progress.status, summary: progress.summary }, ({ name, status, summary, count }) =>
+    ({ name, status, ...(summary ? { summary } : {}), ...(count ? { count } : {}) }));
 }
 
 function isSettled(tool: RunTool): tool is ToolRecord { return tool.status !== "running"; }

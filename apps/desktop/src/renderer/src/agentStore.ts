@@ -1,5 +1,6 @@
 import { useSyncExternalStore, type RefObject } from "react";
 import type { AgentEvent, AgentFailureCode, AgentRequest, AgentResult, AgentRun, AgentStatus, AgentTask } from "../../shared/contracts";
+import { applyToolProgress } from "../../shared/agent-tool-rows";
 import { read } from "./api";
 
 // The renderer's agent runtime: every turn in flight, whichever panel (if any) is looking at it.
@@ -8,7 +9,7 @@ import { read } from "./api";
 // `agent:event`, and is dropped once the session holds the stored turn (or a short while after it finished,
 // when no session change came).
 
-export interface RunTool { key: string; name: string; status: "running" | "done" | "failed"; summary?: string | undefined }
+export interface RunTool { key: string; name: string; status: "running" | "done" | "failed"; summary?: string | undefined; count?: number | undefined }
 
 export interface RunOutcome {
   status: "done" | "failed" | "interrupted";
@@ -74,11 +75,8 @@ function applyEvent(run: RunState, event: AgentEvent): RunState {
   switch (event.type) {
     case "started": return { ...run, turnId: event.turnId, threadId: event.threadId };
     case "delta": return { ...run, answer: run.answer + event.delta };
-    case "tool": {
-      const index = run.tools.findIndex((tool) => tool.name === event.name && tool.status === "running");
-      const next: RunTool = { key: index >= 0 ? run.tools[index]!.key : newKey(), name: event.name, status: event.status, summary: event.summary };
-      return { ...run, tools: index >= 0 ? run.tools.map((tool, position) => (position === index ? next : tool)) : [...run.tools, next] };
-    }
+    case "tool":
+      return { ...run, tools: applyToolProgress(run.tools, { name: event.name, status: event.status, summary: event.summary }, (row, previous) => ({ ...row, key: previous?.key ?? newKey() })) };
     case "completed": return { ...run, answer: event.text || run.answer, outcome: { status: "done", text: event.text || run.answer, sources: event.sources } };
     case "failed": return { ...run, outcome: { status: event.code === "TURN_INTERRUPTED" ? "interrupted" : "failed", code: event.code, message: event.message } };
   }

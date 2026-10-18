@@ -11,7 +11,8 @@ export class CodexError extends Error {
 
 export interface DynamicTool { name: string; description: string; inputSchema: Record<string, unknown> }
 export interface ToolCall { tool: string; arguments: unknown; callId: string }
-export interface ToolReply { success: boolean; text: string; summary?: string }
+/** `stopTurn`: the reply ends a turn that ran away (a loop of identical calls, too many calls); the turn fails with this reason. */
+export interface ToolReply { success: boolean; text: string; summary?: string; stopTurn?: string }
 export interface ToolProgress { tool: string; status: "running" | "done" | "failed"; summary?: string }
 export type ReasoningEffort = "low" | "medium" | "high";
 export interface TurnOptions {
@@ -100,6 +101,13 @@ export class TurnBinding {
     await this.host.request("turn/interrupt", { threadId: this.threadId, turnId: this.turnId }, INTERRUPT_TIMEOUT_MS);
   }
 
+  /** Ends a runaway turn from Quire's side: asks the server to interrupt it and fails the turn with `reason` at once. */
+  private stop(reason: string): void {
+    if (this.closed) return;
+    this.sendInterrupt("stopping a runaway turn");
+    this.fail(new CodexError("TURN_FAILED", reason));
+  }
+
   /** Settles the turn with an error (server exit, timeout, a refused turn/start); a second call is a no-op. */
   fail(error: Error): void {
     if (this.closed) return;
@@ -124,7 +132,12 @@ export class TurnBinding {
     const call: ToolCall = { tool: str(params.tool) ?? "", arguments: params.arguments, callId: str(params.callId) ?? "" };
     this.options.onTool?.({ tool: call.tool, status: "running" });
     this.options.onToolCall(call).then(
-      (reply) => { this.host.replyToTool(message, reply); this.options.onTool?.({ tool: call.tool, status: reply.success ? "done" : "failed", ...(reply.summary ? { summary: reply.summary } : {}) }); },
+      (reply) => {
+        const { stopTurn, ...wire } = reply;
+        this.host.replyToTool(message, wire);
+        this.options.onTool?.({ tool: call.tool, status: reply.success ? "done" : "failed", ...(reply.summary ? { summary: reply.summary } : {}) });
+        if (stopTurn) this.stop(stopTurn);
+      },
       (error: unknown) => { const text = error instanceof Error ? error.message : String(error); this.host.replyToTool(message, { success: false, text }); this.options.onTool?.({ tool: call.tool, status: "failed", summary: text }); },
     );
   }
