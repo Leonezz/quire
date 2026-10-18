@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { PAGE_CHARS, agentTools, createToolHandler, createTurnScope, type ToolDeps } from "./agent-tools";
+import { CALL_LIMIT, CALL_STOP, PAGE_CHARS, REPEAT_LIMIT, REPEAT_STOP, agentTools, createToolHandler, createTurnScope, type ToolDeps } from "./agent-tools";
 import { AnnotationStore } from "./annotations";
 import { openDatabase, type Database } from "./db";
 import type { Fetcher } from "./fetch";
@@ -92,6 +92,36 @@ describe("createToolHandler", () => {
     expect(parse(invalid.text).error).toMatch(/Invalid arguments: Unknown argument\(s\): extra/);
     const past = await handle({ tool: "material_read", arguments: { id: material.id, offset: 10_000_000 }, callId: "c5" });
     expect(parse(past.text).error).toMatch(/past the end/);
+  });
+
+  it("refuses a read repeated with the same arguments, and stops a turn that keeps looping on it", async () => {
+    const { handle, material } = await setup();
+    // A code loop that never advances: offset omitted and offset 0 are the same read.
+    const replies = [];
+    for (let i = 0; i < REPEAT_STOP; i += 1) replies.push(await handle({ tool: "material_read", arguments: i % 2 ? { id: material.id, offset: 0 } : { id: material.id }, callId: `r${i}` }));
+    expect(replies.slice(0, REPEAT_LIMIT).every((reply) => reply.success && !reply.stopTurn)).toBe(true);
+    const refused = replies[REPEAT_LIMIT]!;
+    expect(refused).toMatchObject({ success: false, summary: "material_read refused: repeated with the same arguments" });
+    expect(refused.stopTurn).toBeUndefined();
+    expect(parse(refused.text).error).toMatch(/already answered 2 times.*JSON\.parse.*nextOffset/s);
+    expect(replies[REPEAT_STOP - 2]!.stopTurn).toBeUndefined();
+    expect(replies[REPEAT_STOP - 1]!.stopTurn).toMatch(/material_read with the same arguments 12 times without making progress and was stopped/);
+    // Paging forward is a different read, and another turn starts its own count.
+    expect((await handle({ tool: "material_read", arguments: { id: material.id, offset: PAGE_CHARS }, callId: "next" })).success).toBe(true);
+  });
+
+  it("answers a turn's first CALL_LIMIT calls, refuses the rest and stops the turn at CALL_STOP", async () => {
+    const { handle } = await setup();
+    const replies = [];
+    for (let i = 0; i < CALL_STOP; i += 1) replies.push(await handle({ tool: "library_search", arguments: { query: `momentum ${i}` }, callId: `s${i}` }));
+    expect(replies.slice(0, CALL_LIMIT).every((reply) => reply.success)).toBe(true);
+    expect(replies[CALL_LIMIT]).toMatchObject({ success: false, summary: "library_search refused: too many tool calls in this turn" });
+    expect(replies[CALL_STOP - 2]!.stopTurn).toBeUndefined();
+    expect(replies[CALL_STOP - 1]!.stopTurn).toMatch(/made 300 tool calls in one turn and was stopped/);
+  });
+
+  it("tells the model in the paging tools that results are JSON text to parse in code", () => {
+    for (const name of ["material_read", "material_source"]) expect(agentTools.find((tool) => tool.name === name)!.description).toMatch(/JSON text: in code, JSON\.parse it.*stop when nextOffset is null/s);
   });
 
   it("returns the reader's annotations and the undecided inbox", async () => {

@@ -15,7 +15,7 @@ export default defineConfig({
   esbuild: { jsx: "automatic" },
   test: {
     environment: "node",
-    include: ["src/main/**/*.test.ts", "src/renderer/src/**/*.test.{ts,tsx}", "src/artifact-kit/**/*.test.{ts,tsx}"],
+    include: ["src/main/**/*.test.ts", "src/shared/**/*.test.ts", "src/renderer/src/**/*.test.{ts,tsx}", "src/artifact-kit/**/*.test.{ts,tsx}"],
     setupFiles: ["src/renderer/test-setup.ts"],
   },
 });

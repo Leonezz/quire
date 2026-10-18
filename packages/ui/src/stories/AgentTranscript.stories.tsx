@@ -16,6 +16,7 @@ function Transcript() {
         <AgentToolLine name="library_search" status="done" summary='"highlight registry" → 4 hits' />
         <AgentToolLine name="read_material" status="running" summary="CSS Custom Highlight API" />
         <AgentToolLine name="fetch_url" status="failed" summary="HTTP 403" />
+        <AgentToolLine name="material_read" status="failed" summary="repeated with the same arguments" count={12} />
       </div>
       <AgentTurn role="agent">
         <p className="m-0">

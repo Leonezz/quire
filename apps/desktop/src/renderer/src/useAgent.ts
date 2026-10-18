@@ -4,7 +4,7 @@ import { read } from "./api";
 import { agentStore, needsSignIn, newPendingKey, useAgentRun, useAgentStatus, type RunState } from "./agentStore";
 import { contextKeyOf } from "./useAgentSessions";
 
-export interface ToolActivity { key: string; name: string; status: "running" | "done" | "failed"; summary?: string | undefined }
+export interface ToolActivity { key: string; name: string; status: "running" | "done" | "failed"; summary?: string | undefined; count?: number | undefined }
 
 /** One exchange as the panel shows it: what was asked, and the answer as it streams in and once it is final. */
 export interface AgentTurnState {
@@ -39,7 +39,7 @@ export function turnsOfSession(records: readonly AgentTurnRecord[], labelOf: Lab
     }
     const open = turns[turns.length - 1];
     if (!open) return turns;
-    const tools = (record.tools ?? []).map((tool, index) => ({ key: `${record.id}-${index}`, name: tool.name, status: tool.status, summary: tool.summary }));
+    const tools = (record.tools ?? []).map((tool, index) => ({ key: `${record.id}-${index}`, name: tool.name, status: tool.status, summary: tool.summary, count: tool.count }));
     const closed: AgentTurnState = record.status === "failed" ? { ...open, tools, status: "failed", error: record.text }
       : record.status === "interrupted" ? { ...open, tools, status: "interrupted", error: record.text }
       : { ...open, tools, status: "done", answer: record.text, error: undefined, sources: record.sources };

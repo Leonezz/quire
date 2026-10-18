@@ -159,6 +159,27 @@ describe("AgentService", () => {
     expect(await dead.agent.status()).toMatchObject({ available: false, version: "0.144.1", reason: /did not start: exited/ });
   });
 
+  it("folds thousands of identical tool calls into one row in the run and in the stored turn", async () => {
+    let snapshot: unknown;
+    const { client } = fakeClient(async (options) => {
+      for (let i = 0; i < 3000; i += 1) {
+        options.onTool?.({ tool: "material_read", status: "running" });
+        options.onTool?.({ tool: "material_read", status: "done", summary: "material_read a @0" });
+      }
+      options.onTool?.({ tool: "material_read", status: "running" });
+      options.onTool?.({ tool: "material_read", status: "done", summary: "material_read a @24000" });
+      snapshot = agent.listRuns()[0]?.tools;
+      return { text: "Done." };
+    });
+    const { agent, sessions } = service(client);
+    const result = await agent.ask({ context: { kind: "library" }, task: "ask", text: "read it", threadId: "t1" });
+    if (!result.ok) throw new Error(result.message);
+    await settled(agent);
+    const rows = [{ name: "material_read", status: "done", summary: "material_read a @0", count: 3000 }, { name: "material_read", status: "done", summary: "material_read a @24000" }];
+    expect(snapshot).toEqual(rows);
+    expect(sessions.get(result.sessionId)!.turns.at(-1)!.tools).toEqual(rows);
+  });
+
   it("runs a turn in <userData>/agent with the tools, returns once it started, and streams started, delta, tool, completed with the session", async () => {
     const { client, turns } = fakeClient(async (options) => {
       options.onDelta?.("Two ");

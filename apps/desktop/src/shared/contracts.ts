@@ -328,7 +328,8 @@ export interface AgentRun {
   prompt: string;
   /** The answer accumulated from deltas so far. */
   answer: string;
-  tools: { name: string; status: "running" | "done" | "failed"; summary?: string }[];
+  /** One row per call; a call repeating the row before it folds into it as `count` (shared/agent-tool-rows.ts). */
+  tools: { name: string; status: "running" | "done" | "failed"; summary?: string; count?: number }[];
   startedAt: string;
 }
 
@@ -513,7 +514,7 @@ export interface AgentTurnRecord {
   role: "user" | "agent";
   text: string;
   task?: AgentTask;
-  tools?: { name: string; status: "done" | "failed"; summary?: string }[];
+  tools?: { name: string; status: "done" | "failed"; summary?: string; count?: number }[];
   /** Agent turns: the material ids retrieved during that turn; citations outside this set are unverified. */
   sources?: string[];
   status?: "completed" | "failed" | "interrupted";
