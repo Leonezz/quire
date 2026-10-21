@@ -22,6 +22,8 @@ export interface PageSources {
   layers: MaterialMeta[];
   /** og:site_name; only a publication for web kinds, so it is kept apart. */
   siteName?: string;
+  /** The <link rel="canonical"> href as written; material-identity.ts decides whether it names the page. */
+  canonical?: string;
   signals: PageSignals;
 }
 
@@ -162,9 +164,13 @@ function openGraphOf(tags: readonly MetaTag[]): { layer: MaterialMeta; siteName?
   };
 }
 
-interface Parsed { tags: MetaTag[]; scripts: string[]; lang?: string }
+interface Parsed { tags: MetaTag[]; scripts: string[]; lang?: string; canonical?: string }
 
 interface DomElement { getAttribute: (name: string) => string | null; textContent: string | null }
+
+function isCanonicalLink(element: DomElement): boolean {
+  return (element.getAttribute("rel") ?? "").toLowerCase().split(/\s+/).includes("canonical") && clean(element.getAttribute("href")) !== undefined;
+}
 
 function parseHead(html: string): Parsed {
   const { document } = parseHTML(html.slice(0, HEAD_BYTES));
@@ -176,17 +182,18 @@ function parseHead(html: string): Parsed {
   }
   const scripts = (Array.from(document.querySelectorAll('script[type="application/ld+json"]')) as unknown as DomElement[]).map((element) => element.textContent ?? "");
   const lang = clean((document.documentElement as unknown as DomElement | null)?.getAttribute("lang"));
-  return { tags, scripts, ...(lang ? { lang } : {}) };
+  const canonical = clean((Array.from(document.querySelectorAll("link")) as unknown as DomElement[]).find(isCanonicalLink)?.getAttribute("href"));
+  return { tags, scripts, ...(lang ? { lang } : {}), ...(canonical ? { canonical } : {}) };
 }
 
 /** The declared metadata of a page, one layer per source, most authoritative first. */
 export function readPageSources(html: string): PageSources {
-  const { tags, scripts, lang } = parseHead(html);
+  const { tags, scripts, lang, canonical } = parseHead(html);
   const signals: PageSignals = {};
   const highwire = highwireOf(tags, signals);
   const dublinCore = dublinCoreOf(tags);
   const jsonLd = jsonLdOf(scripts, signals);
   const openGraph = openGraphOf(tags);
   const plain = compact({ creators: creatorsOf(tags.filter((tag) => tag.name === "author").map((tag) => tag.content)), language: lang });
-  return { layers: [highwire, dublinCore, jsonLd, openGraph.layer, plain], ...(openGraph.siteName ? { siteName: openGraph.siteName } : {}), signals };
+  return { layers: [highwire, dublinCore, jsonLd, openGraph.layer, plain], ...(openGraph.siteName ? { siteName: openGraph.siteName } : {}), ...(canonical ? { canonical } : {}), signals };
 }

@@ -1,5 +1,6 @@
 import type { Creator, MaterialKind, MaterialMeta, MaterialRecord } from "../../shared/contracts";
 import { arxivIdOf } from "./arxiv";
+import { arxivIdOfUrl } from "./material-identity";
 import { HEAD_BYTES, creatorOf, readPageSources, type PageSignals, type PageSources } from "./metadata-sources";
 
 // The extracted layer of a material's metadata: what the page declares, then what the item
@@ -168,9 +169,19 @@ const NO_SOURCES: PageSources = { layers: [], signals: {} };
  * publication, the extractor's fallback, then the rest of the item.
  */
 export function extractMetadata(input: ExtractInput): MaterialMeta {
+  return extractPage(input).meta;
+}
+
+/** extractMetadata with the <link rel="canonical"> href the page declares, from the one read of its head. */
+export function extractPage(input: ExtractInput): { meta: MaterialMeta; canonical?: string } {
   const page = input.html === undefined ? NO_SOURCES : readPageSources(decode(input.html));
+  return { meta: metadataOf(input, page), ...(page.canonical ? { canonical: page.canonical } : {}) };
+}
+
+function metadataOf(input: ExtractInput, page: PageSources): MaterialMeta {
   const { fallback, item } = input;
-  const fromUrl = arxivIdOf(input.url);
+  // Only arxiv.org names a paper by its URL: a search page that quotes an abs link is not the paper.
+  const fromUrl = URL.canParse(input.url) ? arxivIdOfUrl(new URL(input.url)) : undefined;
   const fallbackLayer: MaterialMeta = {
     ...(fallback.title ? { title: fallback.title } : {}),
     creators: creatorsFromByline(fallback.byline),

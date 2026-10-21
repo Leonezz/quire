@@ -127,17 +127,20 @@ describe("MaterialStore re-adding", () => {
 
   it("finds a redirected page once the fetch says where it ended, before anything is written", async () => {
     let title = "Cache keys";
-    const fetch = countingFetcher(() => article(title), (url) => `https://example.test/posts${url.pathname}`);
+    const fetch = countingFetcher(() => article(title), () => "https://example.test/posts/cache");
     const store = new MaterialStore(root, fetch);
     const first = await store.openUrl("https://example.test/cache");
     if (!first.ok) throw new Error(first.message);
     const capture = await store.captureBytes(first.material.id);
     title = "Cache keys, revised";
-    const again = await store.openUrl("https://example.test/cache");
-    expect(again).toMatchObject({ ok: true, existing: true, material: { id: first.material.id, title: "Cache keys" } });
+    const again = await store.openUrl("https://example.test/s/c4");
+    expect(again).toMatchObject({ ok: true, existing: true, material: { id: first.material.id, title: "Cache keys", aliases: ["https://example.test/s/c4"] } });
     // The redirect is only known after one fetch; its answer is dropped, not materialized.
-    expect(fetch.calls).toEqual(["https://example.test/cache", "https://example.test/cache"]);
+    expect(fetch.calls).toEqual(["https://example.test/cache", "https://example.test/s/c4"]);
     expect(await store.captureBytes(first.material.id)).toEqual(capture);
+    // Both links are its names now: neither is fetched again.
+    for (const link of ["https://example.test/cache", "https://example.test/s/c4"]) expect(await store.openUrl(link)).toMatchObject({ ok: true, existing: true, material: { id: first.material.id } });
+    expect(fetch.calls).toHaveLength(2);
     expect((await store.list()).map((m) => m.title)).toEqual(["Cache keys"]);
   });
 
@@ -232,8 +235,132 @@ describe("MaterialStore identity", () => {
     const reopened = new MaterialStore(root, fetch);
     expect(await reopened.openUrl(link)).toMatchObject({ ok: true, existing: true, material: { id: legacy, title: "Cache keys" } });
     expect(await reopened.saveFromFeed({ url: link, title: "Feed title", content: { plain: "The feed's copy." } })).toMatchObject({ id: legacy, title: "Cache keys" });
+    // The link without tracking, or with other tracking, has neither id: the library's names find it.
+    for (const variant of ["https://example.test/cache", "https://example.test/cache?utm_source=newsletter"]) {
+      expect(await new MaterialStore(root, fetch).openUrl(variant)).toMatchObject({ ok: true, existing: true, material: { id: legacy } });
+    }
     expect(fetch.calls).toHaveLength(1);
     expect((await reopened.list()).map((m) => m.id)).toEqual([legacy]);
+    expect(await reopened.get(legacy)).not.toHaveProperty("aliases");
+  });
+
+  /** Serves each path its own page; a path not listed is a fixture mistake. */
+  function sitePages(pages: Record<string, () => { bytes: Uint8Array; mediaType: string }>, finalUrlOf: (url: URL) => string = (url) => url.toString()) {
+    const calls: string[] = [];
+    const fetcher = async (url: URL) => {
+      calls.push(url.toString());
+      const page = pages[`${url.hostname}${url.pathname}`];
+      if (!page) throw new Error(`no fixture for ${url.toString()}`);
+      return { ...page(), finalUrl: finalUrlOf(url) };
+    };
+    return Object.assign(fetcher, { calls });
+  }
+  const html = (title: string, head = "") => () => ({ bytes: new TextEncoder().encode(article(title).replace("</head>", `${head}</head>`)), mediaType: "text/html" });
+
+  it("resolves a paper's arXiv abs, html and pdf links, with or without a version, to one material", async () => {
+    const pdf = new Uint8Array(await readFile(join(__dirname, "__fixtures__", "two-pages.pdf")));
+    const fetch = sitePages({
+      "arxiv.org/html/2409.12345": html("Retrieval Without Regret"),
+      "arxiv.org/pdf/2409.12345": () => ({ bytes: pdf, mediaType: "application/pdf" }),
+      "scholar.example.test/search": html("Search results"),
+    });
+    const store = new MaterialStore(root, fetch);
+    const read = await store.openUrl("https://arxiv.org/html/2409.12345", "feed", { kind: "preprint", arxivId: "2409.12345" });
+    if (!read.ok) throw new Error(read.message);
+    const links = ["https://arxiv.org/abs/2409.12345", "https://arxiv.org/abs/2409.12345v2", "https://arxiv.org/html/2409.12345v1", "https://arxiv.org/pdf/2409.12345v1", "https://arxiv.org/pdf/2409.12345", "https://export.arxiv.org/abs/2409.12345?context=cs"];
+    for (const link of links) expect(await store.openUrl(link)).toMatchObject({ ok: true, existing: true, material: { id: read.material.id, title: "Retrieval Without Regret" } });
+    expect(fetch.calls).toEqual(["https://arxiv.org/html/2409.12345"]);
+    expect((await store.get(read.material.id))?.aliases).toEqual(links);
+    // A page elsewhere that only quotes the link is another material.
+    const search = await store.openUrl("https://scholar.example.test/search?q=arxiv.org/abs/2409.12345");
+    expect(search.ok && search.material.id).not.toBe(read.material.id);
+
+    // A paper first read as its PDF is the one material its HTML rendering opens too.
+    const other = sitePages({ "arxiv.org/pdf/2409.54321v3": () => ({ bytes: pdf, mediaType: "application/pdf" }) });
+    const papers = new MaterialStore(join(root, "papers"), other);
+    const first = await papers.openUrl("https://arxiv.org/pdf/2409.54321v3");
+    if (!first.ok) throw new Error(first.message);
+    expect(await papers.openUrl("https://arxiv.org/html/2409.54321")).toMatchObject({ ok: true, existing: true, material: { id: first.material.id, mediaType: "application/pdf" } });
+    expect(other.calls).toHaveLength(1);
+  });
+
+  it("opens the page a same-site canonical link names as one material, but never by the site's home page", async () => {
+    const fetch = sitePages({
+      "example.test/post/amp": html("Cache keys", '<link rel="canonical" href="/post">'),
+      "example.test/post": html("Cache keys"),
+      "example.test/b": html("Batching"),
+      "example.test/one": html("One", '<link rel="canonical" href="https://www.example.test/">'),
+      "example.test/two": html("Two", '<link rel="canonical" href="https://example.test/">'),
+      "example.test/three": html("Three", '<link rel="canonical" href="/blog/">'),
+      "example.test/four": html("Four", '<link rel="canonical" href="/blog/">'),
+      "example.test/syndicated": html("Elsewhere", '<link rel="canonical" href="https://other.test/original">'),
+    });
+    const store = new MaterialStore(root, fetch);
+    const amp = await store.openUrl("https://example.test/post/amp");
+    if (!amp.ok) throw new Error(amp.message);
+    expect(amp.material.canonicalUrl).toBe("https://example.test/post");
+    // The URL it declares is one of its names before anything is fetched.
+    expect(await store.openUrl("https://example.test/post?utm_source=rss")).toMatchObject({ ok: true, existing: true, material: { id: amp.material.id } });
+    expect(await store.get(amp.material.id)).not.toHaveProperty("aliases");
+    // A page that declares a material's URL as its canonical one is that material.
+    const page = await store.openUrl("https://example.test/b");
+    if (!page.ok) throw new Error(page.message);
+    expect(page.material).not.toHaveProperty("canonicalUrl");
+    const variant = sitePages({ "example.test/b": html("Batching", '<link rel="canonical" href="https://example.test/b">') });
+    expect(await new MaterialStore(root, variant).openUrl("https://example.test/b?view=print")).toMatchObject({ ok: true, existing: true, material: { id: page.material.id, aliases: ["https://example.test/b?view=print"] } });
+
+    const ids: string[] = [];
+    for (const path of ["one", "two", "three", "four", "syndicated"]) {
+      const opened = await store.openUrl(`https://example.test/${path}`);
+      if (!opened.ok) throw new Error(opened.message);
+      ids.push(opened.material.id);
+      if (path !== "three" && path !== "four") expect(opened.material).not.toHaveProperty("canonicalUrl");
+    }
+    // Two pages that declare one canonical page are two materials until that page itself is read.
+    expect(new Set(ids).size).toBe(5);
+    expect(fetch.calls).toHaveLength(7);
+  });
+
+  it("opens the material a page's DOI names, and keeps the names of a feed's copy it replaces", async () => {
+    const fetch = sitePages({
+      "journal.example.test/articles/42": () => ({ bytes: new TextEncoder().encode(taggedArticle), mediaType: "text/html" }),
+      "journal.example.test/articles/42/full": () => ({ bytes: new TextEncoder().encode(taggedArticle), mediaType: "text/html" }),
+      "mirror.example.test/paper": () => ({ bytes: new TextEncoder().encode(taggedArticle), mediaType: "text/html" }),
+    });
+    const store = new MaterialStore(root, fetch);
+    const copy = await store.saveFromFeed({ url: "https://feeds.example.test/jr/42", title: "Calibrated abstention", content: { plain: "The feed's copy." }, meta: { doi: "10.1234/JR.2026.0042" } });
+    const page = await store.openUrl("https://journal.example.test/articles/42");
+    expect(page).toMatchObject({ ok: true, material: { id: copy.id, url: "https://journal.example.test/articles/42", problems: [], meta: { doi: "10.1234/jr.2026.0042" }, aliases: ["https://feeds.example.test/jr/42"] } });
+    expect(page).not.toHaveProperty("existing");
+    for (const link of ["https://journal.example.test/articles/42/full", "https://mirror.example.test/paper", "https://feeds.example.test/jr/42"]) {
+      expect(await store.openUrl(link)).toMatchObject({ ok: true, existing: true, material: { id: copy.id } });
+    }
+    expect(fetch.calls).toEqual(["https://journal.example.test/articles/42", "https://journal.example.test/articles/42/full", "https://mirror.example.test/paper"]);
+    expect((await store.get(copy.id))?.aliases).toEqual(["https://feeds.example.test/jr/42", "https://journal.example.test/articles/42/full", "https://mirror.example.test/paper"]);
+    expect((await store.list()).map((m) => m.id)).toEqual([copy.id]);
+  });
+
+  it("keeps the other names on the record, so they survive a restart, and loads records written without them", async () => {
+    const fetch = sitePages({ "arxiv.org/html/2409.12345": html("Retrieval Without Regret") });
+    const store = new MaterialStore(root, fetch);
+    const read = await store.openUrl("https://arxiv.org/html/2409.12345");
+    if (!read.ok) throw new Error(read.message);
+    await store.openUrl("https://arxiv.org/abs/2409.12345");
+    const path = join(root, "materials", `${read.material.id}.json`);
+    expect(JSON.parse(await readFile(path, "utf8"))).toMatchObject({ aliases: ["https://arxiv.org/abs/2409.12345"] });
+    expect(await new MaterialStore(root, fetch).openUrl("https://arxiv.org/abs/2409.12345")).toMatchObject({ ok: true, existing: true, material: { id: read.material.id } });
+
+    const { writeFile } = await import("node:fs/promises");
+    const { aliases: _aliases, ...legacy } = JSON.parse(await readFile(path, "utf8")) as Record<string, unknown>;
+    await writeFile(path, JSON.stringify(legacy));
+    const restarted = new MaterialStore(root, fetch);
+    expect(await restarted.get(read.material.id)).toMatchObject({ id: read.material.id, title: "Retrieval Without Regret" });
+    expect(await restarted.get(read.material.id)).not.toHaveProperty("aliases");
+    expect(await restarted.openUrl("https://arxiv.org/abs/2409.12345v1")).toMatchObject({ ok: true, existing: true, material: { id: read.material.id, aliases: ["https://arxiv.org/abs/2409.12345v1"] } });
+    expect(fetch.calls).toHaveLength(1);
+    // A deleted material is no other link's material any more.
+    await restarted.delete([read.material.id]);
+    expect(await restarted.openUrl("https://arxiv.org/abs/2409.12345")).toMatchObject({ ok: false });
   });
 
   it("gives a feed's copy the id of its link without tracking parameters, so the page read later replaces it", async () => {

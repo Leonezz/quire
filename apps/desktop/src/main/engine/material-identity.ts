@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { arxivIdOf } from "./arxiv";
 
 // Which material a link names. A material's id is the hash of its URL with the tracking
 // parameters and the fragment dropped, so `?utm_source=rss` and a shared `#comments` open the
@@ -38,6 +39,31 @@ export function canonicalUrlOf(url: URL): string {
   const kept = pairs.filter((pair) => !isTracking(pair.split("=", 1)[0]!, page.hostname));
   if (kept.length < pairs.length) page.search = kept.join("&");
   return page.toString();
+}
+
+/** Hosts of one site: equal but for a leading www., or one a subdomain of the other (amp.example.com, m.example.com). */
+function isSameSite(a: string, b: string): boolean {
+  const [x, y] = [a, b].map((host) => host.replace(/^www\./, ""));
+  return x === y || x!.endsWith(`.${y}`) || y!.endsWith(`.${x}`);
+}
+
+/**
+ * A page's <link rel="canonical"> as another name for it, without tracking parameters: only a page
+ * of the same site, and never its home page, which some sites declare on every article.
+ */
+export function canonicalLinkOf(href: string | undefined, pageUrl: string): string | undefined {
+  if (!href || !URL.canParse(pageUrl) || !URL.canParse(href, pageUrl)) return undefined;
+  const page = new URL(pageUrl);
+  const canonical = new URL(href, page);
+  if (canonical.protocol !== "https:" && canonical.protocol !== "http:") return undefined;
+  if (canonical.pathname === "/" || !isSameSite(canonical.hostname, page.hostname)) return undefined;
+  const named = canonicalUrlOf(canonical);
+  return named === canonicalUrlOf(page) ? undefined : named;
+}
+
+/** The arXiv id an arxiv.org link names (abs, html or pdf, any version); a link elsewhere that quotes one names nothing. */
+export function arxivIdOfUrl(url: URL): string | undefined {
+  return onSite(url.hostname, ["arxiv.org"]) ? arxivIdOf(url.href) : undefined;
 }
 
 export function idFor(locator: string): string {

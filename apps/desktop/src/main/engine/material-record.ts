@@ -2,8 +2,9 @@ import { isDeepStrictEqual } from "node:util";
 import type { MaterialMeta, MaterialRecord, MaterialSummary, MaterialView, MaterialViewId } from "../../shared/contracts";
 import { artifactInfoOf } from "./artifacts";
 import { isHtml } from "./material-content";
+import { canonicalLinkOf } from "./material-identity";
 import { primaryViewOf, viewsOf } from "./material-views";
-import { applyOverrides, bylineOf, extractMetadata, publishedAtOf } from "./metadata";
+import { applyOverrides, bylineOf, extractMetadata, extractPage, publishedAtOf, type ExtractInput } from "./metadata";
 
 // The three layers of a material's metadata as MaterialStore keeps and serves them:
 //   stored   – the JSON on disk: what the extractor found (title, byline, publishedAt, lang) plus
@@ -14,6 +15,7 @@ import { applyOverrides, bylineOf, extractMetadata, publishedAtOf } from "./meta
 /**
  * The record as written to disk. Records from before the metadata model have no `extracted`; records
  * from before views have no `views` / `primaryView`; both are derived on read (material-views.ts).
+ * Records from before #28 have no `aliases` or `canonicalUrl`: they are named by their URLs alone.
  */
 export type StoredRecord = Omit<MaterialRecord, "tags" | "overrides" | "meta" | "kind" | "extracted" | "views" | "primaryView" | "readyViews"> & {
   extracted?: MaterialMeta;
@@ -29,18 +31,26 @@ function fallbackOf(record: Pick<StoredRecord, "title" | "byline" | "publishedAt
   return { title: record.title, ...(record.byline ? { byline: record.byline } : {}), ...(record.publishedAt ? { publishedAt: record.publishedAt } : {}), ...(record.lang ? { lang: record.lang } : {}) };
 }
 
-/** The extracted layer of a record from the extractor's own fields, the page (when HTML) and the item it came from. */
-function extractedFor(record: StoredRecord, html?: Uint8Array): MaterialMeta {
-  return extractMetadata({
+function extractInputOf(record: StoredRecord, html?: Uint8Array): ExtractInput {
+  return {
     ...(html && isHtml(record.mediaType) ? { html } : {}),
     url: record.finalUrl, mediaType: record.mediaType, origin: record.origin, fetchedAt: record.fetchedAt, fallback: fallbackOf(record),
     ...(record.itemMeta ? { item: record.itemMeta } : {}),
-  });
+  };
 }
 
-/** A record with its extracted layer computed from its own fields (and the page bytes when it is HTML). */
+/** The extracted layer of a record from the extractor's own fields, the page (when HTML) and the item it came from. */
+function extractedFor(record: StoredRecord, html?: Uint8Array): MaterialMeta {
+  return extractMetadata(extractInputOf(record, html));
+}
+
+/** A record with its extracted layer computed from its own fields; with the page bytes (when HTML), also the canonical link the page declares. */
 export function withExtracted(record: StoredRecord, html?: Uint8Array): StoredRecord {
-  return { ...record, extracted: extractedFor(record, html) };
+  if (!html || !isHtml(record.mediaType)) return { ...record, extracted: extractedFor(record) };
+  const { meta, canonical } = extractPage(extractInputOf(record, html));
+  const { canonicalUrl: _declared, ...rest } = record;
+  const canonicalUrl = canonicalLinkOf(canonical, record.finalUrl);
+  return { ...rest, extracted: meta, ...(canonicalUrl ? { canonicalUrl } : {}) };
 }
 
 /**

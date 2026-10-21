@@ -53,6 +53,10 @@ export interface PdfInfo {
 
 export interface MaterialRecord extends MaterialSummary {
   finalUrl: string;
+  /** Other URLs this material was opened by, without tracking parameters: the abs link of a paper read as HTML, a page that shares its DOI. */
+  aliases?: string[];
+  /** The page's <link rel="canonical"> when it names another page of the same site (never the site's home page). */
+  canonicalUrl?: string;
   pdf?: PdfInfo;
   /** The raw page as captured (kept next to the record as <id>.html) so the agent can rebuild from it. */
   capture?: { byteLength: number; mediaType: string };

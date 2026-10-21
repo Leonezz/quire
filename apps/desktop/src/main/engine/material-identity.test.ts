@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canonicalUrlOf, materialIdOf, storedIdsOf } from "./material-identity";
+import { arxivIdOfUrl, canonicalLinkOf, canonicalUrlOf, materialIdOf, storedIdsOf } from "./material-identity";
 
 const canonical = (raw: string) => canonicalUrlOf(new URL(raw));
 
@@ -35,6 +35,33 @@ describe("canonicalUrlOf", () => {
       const page = new URL(raw);
       expect(canonicalUrlOf(page)).toBe(page.toString());
     }
+  });
+});
+
+describe("canonicalLinkOf", () => {
+  const page = "https://www.example.test/post/amp?utm_source=rss";
+
+  it("names another page of the same site, resolved and without tracking", () => {
+    expect(canonicalLinkOf("/post?utm_campaign=x#top", page)).toBe("https://www.example.test/post");
+    expect(canonicalLinkOf("https://example.test/post", page)).toBe("https://example.test/post");
+    expect(canonicalLinkOf("https://amp.example.test/post", "https://example.test/post/amp")).toBe("https://amp.example.test/post");
+    expect(canonicalLinkOf("https://blog.example.test/post", "https://example.test/blog/post")).toBe("https://blog.example.test/post");
+  });
+
+  it("never counts the site's home page, another site, another scheme, the page itself or a broken href", () => {
+    for (const href of ["/", "https://example.test/", "https://www.example.test/?lang=en", "https://other.test/post", "https://example.test.evil.test/post", "ftp://example.test/post", "/post/amp?utm_source=other", "http://[bad", undefined, ""]) {
+      expect(canonicalLinkOf(href, page)).toBeUndefined();
+    }
+    expect(canonicalLinkOf("/post", "not a url")).toBeUndefined();
+  });
+});
+
+describe("arxivIdOfUrl", () => {
+  it("reads the id from arxiv.org links only", () => {
+    expect(arxivIdOfUrl(new URL("https://arxiv.org/abs/2409.12345v2"))).toBe("2409.12345");
+    expect(arxivIdOfUrl(new URL("https://export.arxiv.org/pdf/hep-th/9901001"))).toBe("hep-th/9901001");
+    expect(arxivIdOfUrl(new URL("https://scholar.example.test/?q=arxiv.org/abs/2409.12345"))).toBeUndefined();
+    expect(arxivIdOfUrl(new URL("https://notarxiv.org/abs/2409.12345"))).toBeUndefined();
   });
 });
 
