@@ -18,6 +18,7 @@ import {
 import { FALLBACK_DROP_SELECTOR, memoizedContentStats, type ContentStats } from "./article-content-stats";
 import { QuireDefuddle } from "./article-defuddle";
 import { droppedEmbedCount, embedSites, type EmbedSite } from "./article-embed-omissions";
+import { withArticleHead } from "./article-head";
 import { preextractArticleDocument } from "./article-preextract";
 import { pruneArticleChrome } from "./article-prune";
 import { createRepresentations, embeddedContentOmitted, sha256Identity } from "./representations";
@@ -1327,11 +1328,13 @@ export function normalizeArticleCapture(
       names,
       // The article's own h1 first; the page metadata only when the h1 turns
       // out to be the site header or something else that is not a title. When
-      // the page's h1 and og:title agree, that pair outranks whatever h1 the
-      // extractor kept (Substack uses h1 for section headings too).
+      // the page's h1 states what og:title or <title> call the page, it
+      // outranks whatever h1 the extractor kept (Substack uses h1 for section
+      // headings too, and Defuddle drops the post header).
       (() => {
         const ogTitle = metaContent(document, ["meta[property='og:title']", "meta[name='twitter:title']"]);
-        const agreed = sameTitle(preferredTitle, ogTitle) ? [preferredTitle] : [];
+        const statesDeclared = !!preferredTitle && (sameTitle(preferredTitle, ogTitle) || declared.some((name) => headingStatesTitle(preferredTitle, name)));
+        const agreed = statesDeclared ? [preferredTitle] : [];
         return [
           ...agreed,
           preferredExtractedTitle(selected.content, declared),
@@ -1347,9 +1350,10 @@ export function normalizeArticleCapture(
     );
     const publishedAt = declaredPublishedAt([selected.publishedAt, ...declaredDates], shownDate) ?? rawPublishedAt;
     const pruned = pruneArticleChrome(selected.content, { title, siteNames: names, byline: cleanByline(selected.byline) ?? rawByline, source });
+    const head = withArticleHead({ content: pruned.content, document, source, title });
     const representationResult = createRepresentations({
       baseUri: source,
-      content: pruned.content,
+      content: head.content,
       maxDepth: input.budget.maxDepth,
       maxNodes: input.budget.maxNodes,
       maxOutputBytes: input.budget.maxOutputBytes,
@@ -1364,6 +1368,7 @@ export function normalizeArticleCapture(
       ...candidateRules(selected.sourcePath),
       ...(selected.preextractionRules ?? []),
       ...pruned.rulesApplied,
+      ...head.rulesApplied,
       ...(selected.sourcePath === "article.extractor.site-adapter" &&
       siteAdapterApplication
         ? [articleSiteAdapterRule(siteAdapterApplication)]
