@@ -356,6 +356,26 @@ describe("ContentNormalizationModule", () => {
     ]);
   });
 
+  it("keeps the base64 raster figures a page embeds, and drops SVG, mislabelled and oversized ones as losses (harvard-annotated-transformer)", () => {
+    const png = `data:image/png;base64,${Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(2048, 7)]).toString("base64")}`;
+    const placeholder = "data:image/gif;base64,R0lGODlhAQABAAAAACw=";
+    const wrapped = `${png.slice(0, 30)}\n${png.slice(30)}`;
+    const svg = `data:image/svg+xml;base64,${Buffer.from("<svg xmlns='http://www.w3.org/2000/svg'/>").toString("base64")}`;
+    const huge = `data:image/png;base64,${"A".repeat(3 * 1024 * 1024)}`;
+    const result = readerDocumentV2FromHtml({
+      html: `<p><img src="${wrapped}" alt="Model architecture"></p><p><img src="${svg}" alt="Vector"></p><p><img src="${huge}" alt="Too big"></p><p><img src="data:text/html;base64,PGI+eDwvYj4=" alt="Not an image"></p><p><img src="${placeholder}" alt="Loading"></p>`,
+      maxDepth: 40,
+      maxNodes: 10_000,
+      maxOutputBytes: 16 * 1024 * 1024,
+      outputBudgetErrorCode: "SOURCE_ARTICLE_OUTPUT_BUDGET_EXCEEDED",
+    });
+
+    const images = JSON.stringify(result.document).match(/"type":"image","url":"[^"]+"/gu) ?? [];
+    expect(images).toEqual([`"type":"image","url":"${png}"`]);
+    expect(readerDocumentV2Schema.safeParse(result.document).success).toBe(true);
+    expect(result.document.losses.filter((entry) => entry.code === "UNSAFE_IMAGE_DROPPED")).toHaveLength(4);
+  });
+
   it("drops paragraphs with nothing to read, which would only print as blank gaps (anthropic-mapping, jalammar-transformer)", () => {
     const result = readerDocumentV2FromHtml({
       html: `<p>First.</p><p></p><p><br></p><p>&nbsp;</p><p> <br> <br> </p><p><img src="https://x.test/a.png" alt="A"></p><p>Last.</p>`,

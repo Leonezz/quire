@@ -48,6 +48,33 @@ describe("image URLs", () => {
 });
 
 describe("ImageCache", () => {
+  it("caches a figure the page embedded as base64 and serves it like a fetched one, without the network (#23)", async () => {
+    const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(2048, 7)]);
+    const url = `data:image/png;base64,${png.toString("base64")}`;
+    const network = vi.fn();
+    vi.stubGlobal("fetch", network);
+    const cache = new ImageCache(root);
+    expect(await cache.resolve(url)).toBe(cachedUrlOf(url));
+    expect(network).not.toHaveBeenCalled();
+    const stored = await cache.stored(keyOf(url));
+    expect(stored?.mediaType).toBe("image/png");
+    expect(bytesOf(stored?.bytes)).toEqual(Array.from(png));
+    // The record beside the bytes names the image, not its whole base64 text.
+    const meta = await readFile(join(root, "images", `${keyOf(url)}.json`), "utf8");
+    expect(meta.length).toBeLessThan(300);
+    expect(await cache.forget([url])).toBe(1);
+  });
+
+  it("refuses an embedded SVG, bytes that are not the type they claim, and data that is no image", async () => {
+    const cache = new ImageCache(root);
+    const svg = `data:image/svg+xml;base64,${Buffer.from("<svg xmlns='http://www.w3.org/2000/svg'/>").toString("base64")}`;
+    const mislabelled = `data:image/png;base64,${Buffer.alloc(2048, 7).toString("base64")}`;
+    const html = "data:text/html;base64,PGI+eDwvYj4=";
+    for (const url of [svg, mislabelled, html]) expect(await cache.resolve(url), url.slice(0, 30)).toBeUndefined();
+    expect(await cache.explain(mislabelled)).toMatch(/not image\/png/);
+    expect(await cache.explain(svg)).toMatch(/not an embedded raster image/);
+  });
+
   it("resolves a cached image to its quire-image URL without touching the network, and hands the protocol its bytes", async () => {
     const url = "https://example.test/figure.png";
     await seedImage(url);

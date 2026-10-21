@@ -187,7 +187,18 @@ export type ReaderDocumentV2 = {
 /** Figure crops of a PDF's text view, served by the app itself (`quire-figure://<materialId>/<n>.png`). */
 const FIGURE_PROTOCOL = "quire-figure:";
 
+/** One figure a page embeds as base64 (harvard-annotated-transformer's PNGs) can be at most this large, decoded. */
+export const MAX_INLINE_IMAGE_BYTES = 2 * 1024 * 1024;
+/** Raster types only: an SVG is a document of its own, and a page's embedded one is never trusted. */
+const INLINE_IMAGE_URL = /^data:image\/(?:avif|gif|jpeg|png|webp);base64,[A-Za-z\d+/]+={0,2}$/u;
+
+/** A base64 data: URL of a raster image within MAX_INLINE_IMAGE_BYTES, written without whitespace. */
+export function isInlineImageUrl(value: string) {
+  return value.length <= Math.ceil((MAX_INLINE_IMAGE_BYTES * 4) / 3) + 64 && INLINE_IMAGE_URL.test(value);
+}
+
 function isAllowedUrl(value: string, purpose: "image" | "link") {
+  if (purpose === "image" && value.startsWith("data:")) return isInlineImageUrl(value);
   try {
     const parsed = new URL(value);
     if (purpose === "link" && parsed.protocol === "mailto:") return true;

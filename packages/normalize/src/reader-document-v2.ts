@@ -14,6 +14,7 @@ import rehypeSanitize, {
 import { unified } from "unified";
 
 import {
+  isInlineImageUrl,
   READER_V2_CALLOUT_KINDS,
   readerDocumentV2Schema,
   type ReaderDocumentV2,
@@ -171,7 +172,8 @@ const sanitizerSchema: SanitizeOptions = {
   protocols: {
     ...defaultSchema.protocols,
     href: ["http", "https", "mailto"],
-    src: ["http", "https"],
+    // data: only survives as an image's inline raster source (inlineImageUrl).
+    src: ["http", "https", "data"],
   },
   strip: [...ACTIVE_TAGS],
   tagNames: Array.from(SANITIZER_TAG_NAMES),
@@ -179,6 +181,8 @@ const sanitizerSchema: SanitizeOptions = {
 
 type Context = {
   baseUri?: string;
+  /** Characters of base64 inline images kept so far, against MAX_INLINE_IMAGES_CHARACTERS. */
+  inlineImageCharacters: number;
   losses: ReaderV2Loss[];
   outputBudget: Utf8Budget;
   producerEntryId?: string;
@@ -1015,16 +1019,34 @@ function flowFromParagraph(element: Element, path: string, context: Context): Re
   return result;
 }
 
+/** All of a document's inline images together stay under this, so a page of embedded figures cannot crowd out its text. */
+const MAX_INLINE_IMAGES_CHARACTERS = 6 * 1024 * 1024;
+/** Lazy loaders park a 1×1 GIF of a few dozen bytes in src; an embedded figure is kilobytes. */
+const MIN_INLINE_IMAGE_BYTES = 512;
+
+/**
+ * A figure the page embeds as base64 (harvard-annotated-transformer's PNGs), without the line breaks
+ * pages wrap it in: a raster type within the per-image and per-document caps and larger than a
+ * lazy loader's placeholder, else undefined.
+ */
+function inlineImageUrl(raw: string, context: Context) {
+  const value = raw.replace(/\s+/gu, "");
+  const decodedBytes = Math.floor(((value.length - value.indexOf(",") - 1) * 3) / 4);
+  if (!isInlineImageUrl(value) || decodedBytes < MIN_INLINE_IMAGE_BYTES || context.inlineImageCharacters + value.length > MAX_INLINE_IMAGES_CHARACTERS) return undefined;
+  context.inlineImageCharacters += value.length;
+  context.rulesApplied.add("reader.inline-image");
+  return value;
+}
+
 function imageFromElement(
   element: Element,
   path: string,
   context: Context,
 ): ReaderV2Image | undefined {
-  const url = safeUrl(
-    propertyString(element, "src") ?? "",
-    context.baseUri,
-    "image",
-  );
+  const source = propertyString(element, "src") ?? "";
+  const url = /^\s*data:/iu.test(source)
+    ? inlineImageUrl(source, context)
+    : safeUrl(source, context.baseUri, "image");
   if (!url) {
     loss(context, {
       code: "UNSAFE_IMAGE_DROPPED",
@@ -1650,6 +1672,7 @@ export function readerDocumentV2FromHtml(input: {
   const parsed = processor.parse(input.html) as Root;
   const context: Context = {
     baseUri: input.baseUri,
+    inlineImageCharacters: 0,
     losses: [],
     outputBudget: new Utf8Budget(
       input.maxOutputBytes,

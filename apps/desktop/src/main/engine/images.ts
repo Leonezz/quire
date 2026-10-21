@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { isInlineImageUrl } from "@read/normalize/contract";
 import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { IMAGE_SCHEME } from "../../shared/contracts";
@@ -68,6 +69,12 @@ export class ImageCache {
     if (figure) return (await this.figures.has(figure)) ? figureImageUrl(figure) : undefined;
     const key = this.key(rawUrl);
     if (await this.has(key)) return imageUrl(key);
+    if (isDataUrl(rawUrl)) {
+      const inline = decodeInlineImage(rawUrl);
+      if ("error" in inline) return undefined;
+      await this.write(rawUrl, inline.mediaType, inline.bytes);
+      return imageUrl(key);
+    }
     let url: URL;
     try { url = assertPublicHttpUrl(rawUrl); } catch (error) { if (error instanceof FetchError) return undefined; throw error; }
     const fetched = await this.download(url);
@@ -115,17 +122,19 @@ export class ImageCache {
       await mkdir(this.dir, { recursive: true });
       const key = this.key(rawUrl);
       await writeFile(join(this.dir, `${key}.bin`), bytes);
-      await writeFile(join(this.dir, `${key}.json`), JSON.stringify({ mediaType, url: rawUrl, fetchedAt: new Date().toISOString() }));
+      // An embedded image's URL is its whole base64 text; the record names it instead.
+      const url = isDataUrl(rawUrl) ? `data:${mediaType};base64 (${bytes.byteLength} bytes embedded in the page)` : rawUrl;
+      await writeFile(join(this.dir, `${key}.json`), JSON.stringify({ mediaType, url, fetchedAt: new Date().toISOString() }));
     });
   }
 
   /**
    * Removes the cached copies of these sources; returns how many were on disk. Only http(s) sources
-   * are cached here: figure crops (quire-figure://) and anything else are skipped. A source viewed
-   * again is fetched again.
+   * and embedded data: images are cached here: figure crops (quire-figure://) and anything else are
+   * skipped. A source viewed again is fetched again.
    */
   forget(urls: Iterable<string>): Promise<number> {
-    const keys = [...new Set(urls)].filter((url) => /^https?:/i.test(url)).map((url) => this.key(url));
+    const keys = [...new Set(urls)].filter((url) => /^(?:https?|data):/i.test(url)).map((url) => this.key(url));
     return this.serialized(async () => {
       let removed = 0;
       for (const key of keys) {
@@ -160,6 +169,7 @@ export class ImageCache {
     const figure = parseFigureUrl(rawUrl);
     if (figure) return (await this.figures.has(figure)) ? undefined : "figure crop is missing on disk";
     if (await this.has(this.key(rawUrl))) return undefined;
+    if (isDataUrl(rawUrl)) { const inline = decodeInlineImage(rawUrl); return "error" in inline ? inline.error : undefined; }
     let url: URL;
     try { url = assertPublicHttpUrl(rawUrl); } catch (error) { return error instanceof FetchError ? error.message : String(error); }
     const outcome = await this.download(url);
@@ -199,6 +209,22 @@ export class ImageCache {
       clearTimeout(timer);
     }
   }
+}
+
+function isDataUrl(url: string) {
+  return /^data:/iu.test(url);
+}
+
+/**
+ * A figure the page embedded as base64 (harvard-annotated-transformer's PNGs): the reader document keeps
+ * raster ones up to 2 MiB (isInlineImageUrl), and the bytes have to be the type the URL claims.
+ */
+function decodeInlineImage(url: string): { mediaType: string; bytes: Uint8Array } | { error: string } {
+  if (!isInlineImageUrl(url)) return { error: "not an embedded raster image (png, jpeg, gif, webp or avif, base64, at most 2 MiB)" };
+  const mediaType = url.slice("data:".length, url.indexOf(";"));
+  const bytes = new Uint8Array(Buffer.from(url.slice(url.indexOf(",") + 1), "base64"));
+  if (sniffImageType(bytes) !== mediaType) return { error: `the embedded bytes are not ${mediaType}` };
+  return { mediaType, bytes };
 }
 
 /** The largest image of this type the cache keeps. */
