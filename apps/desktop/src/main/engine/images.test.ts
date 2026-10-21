@@ -110,6 +110,48 @@ describe("ImageCache", () => {
   });
 });
 
+describe("ImageCache size caps", () => {
+  const MiB = 1024 * 1024;
+  /** An image of `size` bytes that starts with its type's signature, so the bytes say what it is. */
+  const imageOf = (size: number, signature: readonly number[]) => { const bytes = new Uint8Array(size); bytes.set(signature); return bytes; };
+  const GIF = [0x47, 0x49, 0x46, 0x38, 0x39, 0x61];
+  const PNG = [0x89, 0x50, 0x4e, 0x47];
+  function serve(bytes: Uint8Array, type: string, declared = bytes.byteLength) {
+    const body = vi.fn(async () => bytes.buffer as ArrayBuffer);
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, status: 200, headers: new Headers({ "content-type": type, "content-length": String(declared) }), arrayBuffer: body })));
+    return body;
+  }
+
+  it("keeps an animated GIF up to 32 MiB, whatever the server calls it", async () => {
+    const cache = new ImageCache(root);
+    serve(imageOf(20 * MiB, GIF), "image/gif");
+    expect(await cache.resolve("https://example.test/anim.gif")).toBe(cachedUrlOf("https://example.test/anim.gif"));
+    serve(imageOf(20 * MiB, GIF), "application/octet-stream");
+    expect(await cache.resolve("https://example.test/mislabelled.gif")).toBe(cachedUrlOf("https://example.test/mislabelled.gif"));
+    expect((await cache.stored(keyOf("https://example.test/mislabelled.gif")))?.mediaType).toBe("image/gif");
+  });
+
+  it("refuses a GIF past 32 MiB, by its declared length before reading it and by its bytes", async () => {
+    const cache = new ImageCache(root);
+    const unread = serve(imageOf(16, GIF), "image/gif", 33 * MiB);
+    expect(await cache.explain("https://example.test/huge.gif")).toBe(`larger than ${32 * MiB} bytes`);
+    expect(unread).not.toHaveBeenCalled();
+    serve(imageOf(32 * MiB + 1, GIF), "application/octet-stream", 0);
+    expect(await cache.explain("https://example.test/huge-undeclared.gif")).toBe(`larger than ${32 * MiB} bytes`);
+  });
+
+  it("keeps the 8 MiB cap for every other image, declared or sniffed", async () => {
+    const cache = new ImageCache(root);
+    const unread = serve(imageOf(16, PNG), "image/png", 9 * MiB);
+    expect(await cache.explain("https://example.test/big.png")).toBe(`larger than ${8 * MiB} bytes`);
+    expect(unread).not.toHaveBeenCalled();
+    serve(imageOf(9 * MiB, PNG), "application/octet-stream");
+    expect(await cache.explain("https://example.test/big-mislabelled.png")).toBe(`larger than ${8 * MiB} bytes`);
+    serve(imageOf(8 * MiB, PNG), "image/png");
+    expect(await cache.resolve("https://example.test/at-the-cap.png")).toBe(cachedUrlOf("https://example.test/at-the-cap.png"));
+  });
+});
+
 describe("ImageCache.forget", () => {
   it("removes the cached copies of the given sources and counts them, leaving every other image and the figure crops", async () => {
     await seedImage("https://example.test/a.png");

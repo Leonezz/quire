@@ -6,6 +6,8 @@ import { FetchError, assertPublicHttpUrl } from "./fetch";
 import { FigureStore, parseFigureUrl, type FigureRef } from "./figures";
 
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+/** Animated GIFs run far past a still's size (pytorch-genai2's are); the bytes are served from disk, never held as a string. */
+const MAX_GIF_BYTES = 32 * 1024 * 1024;
 const TIMEOUT_MS = 15_000;
 const IMAGE_TYPES = /^image\/(avif|gif|jpeg|png|webp|svg\+xml)$/;
 /** A cache key: the SHA-256 of the source URL, the only file names the protocol serves. */
@@ -177,13 +179,16 @@ export class ImageCache {
       if (!response.ok) return { error: `HTTP ${response.status}` };
       const declaredType = (response.headers.get("content-type") ?? "").split(";")[0]!.trim().toLowerCase();
       const declared = Number(response.headers.get("content-length") ?? 0);
-      if (declared > MAX_IMAGE_BYTES) return { error: `larger than ${MAX_IMAGE_BYTES} bytes` };
+      // A mislabelled body may still be a GIF, so only a declared image type narrows the cap before the bytes are in.
+      const declaredCap = IMAGE_TYPES.test(declaredType) ? maxImageBytes(declaredType) : MAX_GIF_BYTES;
+      if (declared > declaredCap) return { error: `larger than ${declaredCap} bytes` };
       const bytes = new Uint8Array(await response.arrayBuffer());
       if (bytes.byteLength === 0) return { error: "empty body" };
-      if (bytes.byteLength > MAX_IMAGE_BYTES) return { error: `larger than ${MAX_IMAGE_BYTES} bytes` };
       // Servers mislabel images (text/plain, octet-stream); the bytes decide.
       const mediaType = IMAGE_TYPES.test(declaredType) ? declaredType : sniffImageType(bytes);
       if (!mediaType) return { error: `not an image (${declaredType || "no content-type"})` };
+      const cap = maxImageBytes(mediaType);
+      if (bytes.byteLength > cap) return { error: `larger than ${cap} bytes` };
       return { mediaType, bytes };
     } catch (error) {
       // Network failures leave the image unresolved; the reader shows its placeholder and can retry.
@@ -194,6 +199,11 @@ export class ImageCache {
       clearTimeout(timer);
     }
   }
+}
+
+/** The largest image of this type the cache keeps. */
+function maxImageBytes(mediaType: string): number {
+  return mediaType === "image/gif" ? MAX_GIF_BYTES : MAX_IMAGE_BYTES;
 }
 
 function sniffImageType(bytes: Uint8Array): string | undefined {
