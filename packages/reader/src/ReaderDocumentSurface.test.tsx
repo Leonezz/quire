@@ -10,6 +10,8 @@ import { ReaderDocumentSurface } from "./index";
   globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }
 ).IS_REACT_ACT_ENVIRONMENT = true;
 
+const HOST_IMAGE_SCHEMES = ["quire-image:"] as const;
+
 function renderSurface(
   props: React.ComponentProps<typeof ReaderDocumentSurface>,
 ) {
@@ -1259,6 +1261,109 @@ describe("ReaderDocumentSurface", () => {
     expect(
       surface.querySelectorAll('[data-reader-image="unresolved"]'),
     ).toHaveLength(2);
+  });
+
+  it("shows images the host serves on its own schemes, and only on the schemes it declares", () => {
+    const key = "a".repeat(64);
+    const sources: Record<string, string> = {
+      "https://media.example.test/cached.png": `quire-image://cache/${key}`,
+      "https://media.example.test/figure.png": "app-figure://8667175ac66aac06/2.png",
+      "https://media.example.test/remote.png": "https://media.example.test/remote.png",
+    };
+    const payload = {
+      type: "root",
+      children: [
+        {
+          type: "paragraph",
+          children: Object.keys(sources).map((url) => ({
+            type: "image" as const,
+            url,
+            alt: url,
+            title: null,
+          })),
+        },
+      ],
+    };
+    const resolvedSources = (hostImageSchemes?: readonly string[]) =>
+      Array.from(
+        renderSurface({
+          fallback: { content: "fallback", format: "plain" },
+          hostImageSchemes,
+          imageSourceFor: (sourceUrl) => sources[sourceUrl],
+          payload,
+          schema: "reader.document.v1",
+        }).querySelectorAll('img[data-reader-image="resolved"]'),
+        (image) => image.getAttribute("src"),
+      );
+
+    expect(resolvedSources(["quire-image:"])).toEqual([`quire-image://cache/${key}`]);
+    expect(resolvedSources(["quire-image:", "app-figure:"])).toEqual([
+      `quire-image://cache/${key}`,
+      "app-figure://8667175ac66aac06/2.png",
+    ]);
+    expect(resolvedSources(undefined)).toEqual([]);
+  });
+
+  it("accepts a resolver's answer on a host image scheme", async () => {
+    const container = document.createElement("div");
+    document.body.replaceChildren(container);
+    const root = createRoot(container);
+    const resolveImageSource = vi.fn(async () => `quire-image://cache/${"b".repeat(64)}`);
+
+    await act(async () => {
+      root.render(
+        <ReaderDocumentSurface
+          fallback={{ content: "fallback", format: "plain" }}
+          hostImageSchemes={HOST_IMAGE_SCHEMES}
+          payload={{
+            type: "root",
+            children: [
+              {
+                type: "paragraph",
+                children: [
+                  {
+                    type: "image",
+                    url: "https://media.example.test/cached.png",
+                    alt: "Cached",
+                    title: null,
+                  },
+                ],
+              },
+            ],
+          }}
+          resolveImageSource={resolveImageSource}
+          schema="reader.document.v1"
+        />,
+      );
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(
+      container
+        .querySelector('img[data-reader-image="resolved"]')
+        ?.getAttribute("src"),
+    ).toBe(`quire-image://cache/${"b".repeat(64)}`);
+    await act(async () => root.unmount());
+  });
+
+  it("refuses a host image scheme that would reach the network", () => {
+    expect(() =>
+      renderSurface({
+        fallback: { content: "fallback", format: "plain" },
+        hostImageSchemes: ["https:"],
+        payload: { type: "root", children: [] },
+        schema: "reader.document.v1",
+      }),
+    ).toThrow(/https: is not a host image scheme/);
+    expect(() =>
+      renderSurface({
+        fallback: { content: "fallback", format: "plain" },
+        hostImageSchemes: ["quire-image"],
+        payload: { type: "root", children: [] },
+        schema: "reader.document.v1",
+      }),
+    ).toThrow(/quire-image is not a host image scheme/);
   });
 
   it("lazily enhances bounded code and TeX while preserving source fallbacks", async () => {

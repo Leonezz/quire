@@ -35,9 +35,15 @@ import type { FeedbackProgress } from "./engine/feedback-submit";
 import { createElectronCapturer, type RendererTarget } from "./feedback-capturer";
 import normalizePackage from "../../../../packages/normalize/package.json";
 import { ARTIFACT_SCHEME, artifactResponse } from "./artifact-protocol";
+import { imageResponse, type ImageSources } from "./image-protocol";
+import { IMAGE_SCHEME } from "../shared/contracts";
 
 // HTML artifacts load from their own scheme, so they get their own (opaque) origin and CSP; see artifact-protocol.ts.
-protocol.registerSchemesAsPrivileged([{ scheme: ARTIFACT_SCHEME, privileges: { standard: true, secure: true } }]);
+// The reader's pictures load from theirs, served from disk instead of crossing the bridge as data: URLs; see image-protocol.ts.
+protocol.registerSchemesAsPrivileged([
+  { scheme: ARTIFACT_SCHEME, privileges: { standard: true, secure: true } },
+  { scheme: IMAGE_SCHEME, privileges: { standard: true, secure: true } },
+]);
 
 const userData = app.getPath("userData");
 const settings = new SettingsStore(join(userData, "settings.json"), userData, { warn: (message) => console.warn(`[settings] ${message}`), encryptor: electronEncryptor(safeStorage) });
@@ -439,6 +445,13 @@ app.whenReady().then(() => {
     },
     // Built by scripts/build-artifact-runtime.mjs next to main, renderer and preload.
     runtime: (file) => readFile(join(__dirname, "../artifact-runtime", `${file}.js`), "utf8").catch(() => undefined),
+  }));
+  const imageSources: ImageSources = { image: (key) => images.stored(key), figure: (ref) => images.figure(ref) };
+  // A store that cannot read its files fails the request (the reader shows a broken image) and says why here.
+  protocol.handle(IMAGE_SCHEME, (request) => imageResponse(request.url, imageSources).catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`[images] ${request.url}: ${message}`);
+    return new Response(message, { status: 500, headers: { "content-type": "text/plain; charset=utf-8", "x-content-type-options": "nosniff" } });
   }));
   installMenu();
   createWindow();

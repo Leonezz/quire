@@ -1,20 +1,54 @@
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { IMAGE_SCHEME } from "../../shared/contracts";
 import { FetchError, assertPublicHttpUrl } from "./fetch";
-import { FigureStore, parseFigureUrl } from "./figures";
+import { FigureStore, parseFigureUrl, type FigureRef } from "./figures";
 
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
 const TIMEOUT_MS = 15_000;
 const IMAGE_TYPES = /^image\/(avif|gif|jpeg|png|webp|svg\+xml)$/;
+/** A cache key: the SHA-256 of the source URL, the only file names the protocol serves. */
+const IMAGE_KEY = /^[a-f0-9]{64}$/;
+// The host is fixed and the name sits in the path, as with quire-artifact://artifact/<id>: a standard
+// scheme's host is canonicalized as a domain name, and an all-digit material id would read as an IPv4 address.
+const CACHED_IMAGE_URL = /^quire-image:\/\/cache\/([a-f0-9]{64})$/;
+const FIGURE_IMAGE_URL = /^quire-image:\/\/figure\/([a-f0-9]{16})\/([1-9]\d{0,3})\.png$/;
+
+/** A cached image as the protocol serves it. */
+export interface StoredImage { mediaType: string; bytes: Uint8Array<ArrayBuffer> }
+
+/** What a quire-image URL serves: a cached image by its key, or a text view's figure crop. */
+export type ImageTarget = { kind: "cache"; key: string } | { kind: "figure"; ref: FigureRef };
+
+/** `quire-image://cache/<key>`: where main serves the cached copy of a source. */
+export function imageUrl(key: string): string {
+  if (!IMAGE_KEY.test(key)) throw new Error(`"${key}" is not an image cache key`);
+  return `${IMAGE_SCHEME}://cache/${key}`;
+}
+
+/** `quire-image://figure/<materialId>/<n>.png`: where main serves a figure crop. */
+export function figureImageUrl(ref: FigureRef): string {
+  return `${IMAGE_SCHEME}://figure/${ref.materialId}/${ref.index}.png`;
+}
+
+/** What a quire-image URL names; undefined for anything else. */
+export function parseImageUrl(url: string): ImageTarget | undefined {
+  const cached = CACHED_IMAGE_URL.exec(url);
+  if (cached) return { kind: "cache", key: cached[1]! };
+  const figure = FIGURE_IMAGE_URL.exec(url);
+  return figure ? { kind: "figure", ref: { materialId: figure[1]!, index: Number(figure[2]) } } : undefined;
+}
 
 /**
  * Images are fetched once, kept on disk under userData/images, and handed to the
- * renderer as data: URLs so the page's CSP never needs a remote host. A source
- * that cannot be cached (non-public host, not an image, too large) resolves to
- * undefined: the reader then shows its placeholder instead of a broken picture. Figure crops
- * of the text view (quire-figure://<materialId>/<n>.png) are served from userData/figures.
- * Images no material shows any more are forgotten when materials are deleted (library.ts).
+ * renderer as quire-image://cache/<key> URLs that main serves from there (image-protocol.ts),
+ * so the page's CSP never needs a remote host and the renderer never holds the bytes as
+ * a string. A source that cannot be cached (non-public host, not an image, too large)
+ * resolves to undefined: the reader then shows its placeholder instead of a broken picture.
+ * Figure crops of the text view (quire-figure://<materialId>/<n>.png) resolve to
+ * quire-image://figure/… while they are in userData/figures. Images no material shows any
+ * more are forgotten when materials are deleted (library.ts).
  */
 export class ImageCache {
   private readonly figures: FigureStore;
@@ -28,27 +62,50 @@ export class ImageCache {
   private key(url: string) { return createHash("sha256").update(url).digest("hex"); }
 
   async resolve(rawUrl: string): Promise<string | undefined> {
-    if (parseFigureUrl(rawUrl)) return this.figures.read(rawUrl);
-    const cached = await this.read(rawUrl);
-    if (cached) return cached;
+    const figure = parseFigureUrl(rawUrl);
+    if (figure) return (await this.figures.has(figure)) ? figureImageUrl(figure) : undefined;
+    const key = this.key(rawUrl);
+    if (await this.has(key)) return imageUrl(key);
     let url: URL;
     try { url = assertPublicHttpUrl(rawUrl); } catch (error) { if (error instanceof FetchError) return undefined; throw error; }
     const fetched = await this.download(url);
     if ("error" in fetched) return undefined;
     await this.write(rawUrl, fetched.mediaType, fetched.bytes);
-    return toDataUrl(fetched.mediaType, fetched.bytes);
+    return imageUrl(key);
   }
 
-  private async read(rawUrl: string): Promise<string | undefined> {
-    const key = this.key(rawUrl);
+  /** Whether both halves of the pair are on disk (a write interrupted between them is not a cached image). */
+  private async has(key: string): Promise<boolean> {
     try {
-      const meta = JSON.parse(await readFile(join(this.dir, `${key}.json`), "utf8")) as { mediaType: string };
-      const bytes = await readFile(join(this.dir, `${key}.bin`));
-      return toDataUrl(meta.mediaType, bytes);
+      await access(join(this.dir, `${key}.json`));
+      await access(join(this.dir, `${key}.bin`));
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+  }
+
+  /** The cached copy under a key, for the protocol; undefined when it is not on disk. */
+  async stored(key: string): Promise<StoredImage | undefined> {
+    if (!IMAGE_KEY.test(key)) throw new Error(`"${key}" is not an image cache key`);
+    let meta: { mediaType?: unknown };
+    let bytes: Uint8Array<ArrayBuffer>;
+    try {
+      meta = JSON.parse(await readFile(join(this.dir, `${key}.json`), "utf8")) as { mediaType?: unknown };
+      bytes = await readFile(join(this.dir, `${key}.bin`));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
       throw error;
     }
+    // Only an image type is ever written; anything else means the pair was changed on disk.
+    if (typeof meta.mediaType !== "string" || !IMAGE_TYPES.test(meta.mediaType)) throw new Error(`The cached image ${key} records the media type ${JSON.stringify(meta.mediaType)}, which is not an image type.`);
+    return { mediaType: meta.mediaType, bytes };
+  }
+
+  /** A text view's figure crop, for the protocol; undefined when it is not on disk. */
+  figure(ref: FigureRef): Promise<Uint8Array<ArrayBuffer> | undefined> {
+    return this.figures.bytes(ref);
   }
 
   private write(rawUrl: string, mediaType: string, bytes: Uint8Array): Promise<void> {
@@ -98,8 +155,9 @@ export class ImageCache {
 
   /** Why a source could not be cached; for diagnostics and the placeholder's tooltip. */
   async explain(rawUrl: string): Promise<string | undefined> {
-    if (parseFigureUrl(rawUrl)) return (await this.figures.read(rawUrl)) ? undefined : "figure crop is missing on disk";
-    if (await this.read(rawUrl)) return undefined;
+    const figure = parseFigureUrl(rawUrl);
+    if (figure) return (await this.figures.has(figure)) ? undefined : "figure crop is missing on disk";
+    if (await this.has(this.key(rawUrl))) return undefined;
     let url: URL;
     try { url = assertPublicHttpUrl(rawUrl); } catch (error) { return error instanceof FetchError ? error.message : String(error); }
     const outcome = await this.download(url);
@@ -155,8 +213,4 @@ function sniffImageType(bytes: Uint8Array): string | undefined {
 async function removeFile(path: string): Promise<boolean> {
   try { await rm(path); return true; }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
-}
-
-function toDataUrl(mediaType: string, bytes: Uint8Array) {
-  return `data:${mediaType};base64,${Buffer.from(bytes).toString("base64")}`;
 }

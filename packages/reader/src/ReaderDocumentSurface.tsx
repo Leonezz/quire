@@ -38,6 +38,13 @@ export type ReaderFallback = {
 export type ReaderDocumentSurfaceProps = {
   fallbackLabel?: string;
   fallback: ReaderFallback;
+  /**
+   * Schemes the host serves its own copies of images on (a custom protocol such as `quire-image:`),
+   * accepted from `imageSourceFor` and the resolvers beside base64 data: and blob: URLs. A URL is
+   * far lighter to hold than the image's bytes as a data: string. Never a network scheme. Must be
+   * stable (module-level), as it is part of the surface's host policy.
+   */
+  hostImageSchemes?: readonly string[];
   imageSourceFor?: (sourceUrl: string) => string | undefined;
   onOpenLink?: (url: string) => void;
   payload: unknown;
@@ -67,6 +74,7 @@ type ReaderImageBudget = {
 
 type ReaderHostPolicy = Pick<
   ReaderDocumentSurfaceProps,
+  | "hostImageSchemes"
   | "imageSourceFor"
   | "onOpenLink"
   | "renderText"
@@ -79,8 +87,12 @@ const ReaderHostPolicyContext = createContext<ReaderHostPolicy>({});
 const MAX_IMAGE_CACHE_ENTRIES = 64;
 const MAX_IMAGE_CACHE_CHARACTERS = 32_000_000;
 const MAX_OWNED_IMAGE_SOURCE_CHARACTERS = 12_000_000;
-// Images come from the host's local cache (data URLs), so a long, picture-heavy article may ask for all of them.
-// Hosts (and tests) may lower these.
+const MAX_HOST_IMAGE_URL_CHARACTERS = 2_048;
+const HOST_IMAGE_SCHEME = /^[a-z][a-z\d+.-]*:$/;
+/** Schemes that would reach the network or the file system, or that the data:/blob: rules already cover. */
+const NON_HOST_SCHEMES = new Set(["http:", "https:", "ws:", "wss:", "ftp:", "file:", "data:", "blob:", "javascript:"]);
+// Images come from the host's local cache (its own image URLs, or data URLs), so a long, picture-heavy article may
+// ask for all of them. Hosts (and tests) may lower these.
 export const readerImageLimits = { maxRequestsPerSurface: 400, maxPendingRequests: 400 };
 const MAX_RETAINED_IMAGE_CHARACTERS_PER_SURFACE = 24_000_000;
 const MAX_CONCURRENT_IMAGE_REQUESTS = 6;
@@ -105,9 +117,30 @@ const queuedImageRequests: QueuedImageRequest[] = [];
 let activeImageRequests = 0;
 let imageRequestPumpScheduled = false;
 
-function ownedImageSource(source: string | undefined) {
+/** A misconfigured scheme list is an error, not a policy that quietly lets the network in. */
+function assertHostImageSchemes(schemes: readonly string[] | undefined) {
+  for (const scheme of schemes ?? []) {
+    if (!HOST_IMAGE_SCHEME.test(scheme) || NON_HOST_SCHEMES.has(scheme)) {
+      throw new Error(
+        `${scheme} is not a host image scheme: name the host's own protocol with its colon, like "quire-image:".`,
+      );
+    }
+  }
+}
+
+function isHostImageSource(source: string, schemes: readonly string[] | undefined) {
+  if (!schemes?.length || source.length > MAX_HOST_IMAGE_URL_CHARACTERS) return false;
+  const colon = source.indexOf(":");
+  return colon > 0 && schemes.includes(source.slice(0, colon + 1).toLowerCase());
+}
+
+function ownedImageSource(
+  source: string | undefined,
+  hostSchemes: readonly string[] | undefined,
+) {
   if (!source) return undefined;
   if (source.startsWith("blob:")) return source;
+  if (isHostImageSource(source, hostSchemes)) return source;
   if (source.length > MAX_OWNED_IMAGE_SOURCE_CHARACTERS) return undefined;
   // The host caches SVG figures too; an SVG shown through <img> runs no script and loads nothing.
   if (
@@ -283,7 +316,11 @@ function enqueueImageRequest(
   });
 }
 
-function acquireImageResolution(resolver: ImageResolver, sourceUrl: string) {
+function acquireImageResolution(
+  resolver: ImageResolver,
+  sourceUrl: string,
+  hostSchemes: readonly string[] | undefined,
+) {
   let resolutions = inFlightImageResolutions.get(resolver);
   if (!resolutions) {
     resolutions = new Map();
@@ -303,7 +340,7 @@ function acquireImageResolution(resolver: ImageResolver, sourceUrl: string) {
       () => controller.abort(),
     )
       .then((result) => {
-        return ownedImageSource(result);
+        return ownedImageSource(result, hostSchemes);
       })
       .finally(() => {
         if (resolutions?.get(sourceUrl) === nextResolution) {
@@ -405,6 +442,7 @@ function HostImage({
   height?: number;
 }) {
   const {
+    hostImageSchemes,
     imageBudget,
     imageSourceFor,
     resolveImageSource,
@@ -427,7 +465,10 @@ function HostImage({
       : resolveImageSource;
   let synchronousCandidate: string | undefined;
   try {
-    synchronousCandidate = ownedImageSource(imageSourceFor?.(sourceUrl));
+    synchronousCandidate = ownedImageSource(
+      imageSourceFor?.(sourceUrl),
+      hostImageSchemes,
+    );
   } catch {
     synchronousCandidate = undefined;
   }
@@ -476,7 +517,11 @@ function HostImage({
       });
       return;
     }
-    const request = acquireImageResolution(activeResolver, sourceUrl);
+    const request = acquireImageResolution(
+      activeResolver,
+      sourceUrl,
+      hostImageSchemes,
+    );
     let subscribed = true;
     setResolution({ resolver: activeResolver, sourceUrl, status: "loading" });
     void request.promise
@@ -517,6 +562,7 @@ function HostImage({
   }, [
     activeResolver,
     cachedSource,
+    hostImageSchemes,
     imageBudget,
     remoteAttempt,
     sourceUrl,
@@ -1422,6 +1468,7 @@ function fallbackTextComponents(renderText: (value: string) => ReactNode) {
 export function ReaderDocumentSurface({
   fallback,
   fallbackLabel = "Reader fallback",
+  hostImageSchemes,
   imageSourceFor,
   onOpenLink,
   payload,
@@ -1432,8 +1479,10 @@ export function ReaderDocumentSurface({
   showFallbackNotice = true,
 }: ReaderDocumentSurfaceProps) {
   const resolution = resolveReaderDocument(schema, payload);
-  const hostPolicy = useMemo<ReaderHostPolicy>(
-    () => ({
+  const hostPolicy = useMemo<ReaderHostPolicy>(() => {
+    assertHostImageSchemes(hostImageSchemes);
+    return {
+      hostImageSchemes,
       imageBudget: {
         acceptedSources: new Map(),
         requestedUrls: new Set(),
@@ -1444,17 +1493,17 @@ export function ReaderDocumentSurface({
       renderText,
       resolveImageSource,
       resolveRemoteImageSource,
-    }),
-    [
-      imageSourceFor,
-      onOpenLink,
-      payload,
-      renderText,
-      resolveImageSource,
-      resolveRemoteImageSource,
-      schema,
-    ],
-  );
+    };
+  }, [
+    hostImageSchemes,
+    imageSourceFor,
+    onOpenLink,
+    payload,
+    renderText,
+    resolveImageSource,
+    resolveRemoteImageSource,
+    schema,
+  ]);
 
   if (resolution.status === "ready") {
     return (

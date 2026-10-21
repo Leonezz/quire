@@ -125,6 +125,9 @@ export interface CorpusImportResult {
   failed: { slug: string; message: string }[];
 }
 
+/** The scheme resolveImage answers on, served by main from disk (image-protocol.ts). */
+export const IMAGE_SCHEME = "quire-image";
+
 export interface ReadApi extends ReadApiM1, ReadApiM2, ReadApiM3, ReadApiViews, ReadApiUpdates, ReadApiFeedback {
   version: string;
   platform: string;
@@ -138,8 +141,10 @@ export interface ReadApi extends ReadApiM1, ReadApiM2, ReadApiM3, ReadApiViews, 
   openFile: (input: OpenFileInput) => Promise<OpenUrlResult>;
   getMaterial: (id: string) => Promise<MaterialRecord | undefined>;
   /**
-   * A remote image as a data: URL from the local cache (fetched once); undefined when it cannot be cached.
-   * Also serves figure crops of the text view: `quire-figure://<materialId>/<n>.png`.
+   * A remote image as a `quire-image://cache/<key>` URL of its copy in the local cache (fetched once); undefined
+   * when it cannot be cached. A text view's figure crop (`quire-figure://<materialId>/<n>.png`) answers with
+   * `quire-image://figure/<materialId>/<n>.png` while the crop is on disk. Main serves both, so the renderer never
+   * holds the bytes as a string.
    */
   resolveImage: (url: string) => Promise<string | undefined>;
   listAnnotations: (materialId: string) => Promise<Annotation[]>;
