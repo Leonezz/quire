@@ -193,6 +193,59 @@ describe("MaterialStore re-adding", () => {
   });
 });
 
+/** Moves a record to the id an older version gave it (the hash of its URL as given), as a library from before #28 has it. */
+async function storeUnderLegacyId(id: string, url: string): Promise<string> {
+  const { createHash } = await import("node:crypto");
+  const { rename, writeFile } = await import("node:fs/promises");
+  const legacy = createHash("sha256").update(url).digest("hex").slice(0, 16);
+  const dir = join(root, "materials");
+  const record = JSON.parse(await readFile(join(dir, `${id}.json`), "utf8")) as Record<string, unknown>;
+  await writeFile(join(dir, `${legacy}.json`), JSON.stringify({ ...record, id: legacy }));
+  await rm(join(dir, `${id}.json`));
+  await rename(join(dir, `${id}.html`), join(dir, `${legacy}.html`));
+  return legacy;
+}
+
+describe("MaterialStore identity", () => {
+  it("opens the material already in the library for a link with tracking parameters, without fetching it again", async () => {
+    const fetch = countingFetcher(() => article("Cache keys"));
+    const store = new MaterialStore(root, fetch);
+    const first = await store.openUrl("https://example.test/cache?utm_source=rss&utm_medium=feed");
+    if (!first.ok) throw new Error(first.message);
+    for (const variant of ["https://example.test/cache?utm_source=newsletter#intro", "https://example.test/cache", "https://example.test/cache?fbclid=abc"]) {
+      expect(await store.openUrl(variant)).toMatchObject({ ok: true, existing: true, material: { id: first.material.id } });
+    }
+    expect(fetch.calls).toEqual(["https://example.test/cache?utm_source=rss&utm_medium=feed"]);
+    expect((await store.list()).map((m) => m.id)).toEqual([first.material.id]);
+    // A parameter that picks the content is another page.
+    const other = await store.openUrl("https://example.test/cache?page=2");
+    expect(other.ok && other.material.id).not.toBe(first.material.id);
+  });
+
+  it("finds a material stored under the id its tracking link gave it before, instead of making another copy", async () => {
+    const fetch = countingFetcher(() => article("Cache keys"));
+    const store = new MaterialStore(root, fetch);
+    const link = "https://example.test/cache?utm_source=rss";
+    const opened = await store.openUrl(link);
+    if (!opened.ok) throw new Error(opened.message);
+    const legacy = await storeUnderLegacyId(opened.material.id, link);
+    const reopened = new MaterialStore(root, fetch);
+    expect(await reopened.openUrl(link)).toMatchObject({ ok: true, existing: true, material: { id: legacy, title: "Cache keys" } });
+    expect(await reopened.saveFromFeed({ url: link, title: "Feed title", content: { plain: "The feed's copy." } })).toMatchObject({ id: legacy, title: "Cache keys" });
+    expect(fetch.calls).toHaveLength(1);
+    expect((await reopened.list()).map((m) => m.id)).toEqual([legacy]);
+  });
+
+  it("gives a feed's copy the id of its link without tracking parameters, so the page read later replaces it", async () => {
+    const fetch = countingFetcher(() => article("Cache keys, the full post"));
+    const store = new MaterialStore(root, fetch);
+    const copy = await store.saveFromFeed({ url: "https://example.test/cache?utm_source=rss", title: "Cache keys", content: { plain: "Hello from the feed" } });
+    const page = await store.openUrl("https://example.test/cache");
+    expect(page).toMatchObject({ ok: true, material: { id: copy.id, title: "Cache keys, the full post", problems: [] } });
+    expect((await store.list()).map((m) => m.id)).toEqual([copy.id]);
+  });
+});
+
 describe("MaterialStore overrides", () => {
   it("lays the metadata over the record and the list, with tags and rebuiltAs", async () => {
     const db = openDatabase(":memory:");

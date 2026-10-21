@@ -9,6 +9,7 @@ import { applyArtifactEdit, artifactContent, artifactInfoOf, artifactSourceOf, a
 import { captureTextOf } from "./capture-text";
 import { FetchError, assertPublicHttpUrl, fetchPage, type Fetcher } from "./fetch";
 import { NORMALIZE_BUDGET, degradedQuality, imageReferencesOf, isHtml, isPdf, markdownParts, mediaTypeForName, pdfContent, pickRepresentations, titleFromHtml, type ContentFields } from "./material-content";
+import { idFor, materialIdOf, storedIdsOf } from "./material-identity";
 import { effectiveOf, searchFieldsOf, summaryOf, withExtracted, withItemMeta, type StoredRecord } from "./material-record";
 import { MATERIAL_VIEW_IDS, failedView, mediaTypeFitsView, mergeViews, primaryContentOf, primaryPdfPath, primaryViewOf, readViewContent, readyView, swapPrimaryFiles, upsertView, viewFilePaths, viewPdfPath, viewsOf, withContent, withPrimaryView, writeViewContent } from "./material-views";
 import { PdfError, inspectPdf } from "./pdf";
@@ -23,17 +24,6 @@ export { imageUrlsOf, withoutTitleHeading } from "./material-content";
 
 function sha256(bytes: Uint8Array): `sha256:${string}` {
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
-}
-
-function idFor(url: string): string {
-  return createHash("sha256").update(url).digest("hex").slice(0, 16);
-}
-
-/** The URL a fetch would end at when nothing redirects: the fragment never reaches the server. */
-function withoutHash(url: URL): string {
-  const page = new URL(url);
-  page.hash = "";
-  return page.toString();
 }
 
 /** A page the extractor could not read (a bot challenge, an error page), kept as its plain text. */
@@ -102,20 +92,20 @@ export class MaterialStore {
   /**
    * Fetches and materializes a public page. `origin` marks material that arrived through a subscription;
    * `item` is what that item declared. A page already in the library (found by the URL as given, then by
-   * where the fetch ended) comes back as stored, `existing`, with the item merged in; only a fallback copy
-   * is materialized again, keeping its other views and its item's metadata. A page the extractor cannot
-   * read never replaces the feed's copy of it.
+   * where the fetch ended, both without tracking parameters) comes back as stored, `existing`, with the
+   * item merged in; only a fallback copy is materialized again, keeping its id, its other views and its
+   * item's metadata. A page the extractor cannot read never replaces the feed's copy of it.
    */
   async openUrl(raw: string, origin: "web" | "feed" = "web", item?: MaterialMeta): Promise<OpenUrlResult> {
     try {
       const url = assertPublicHttpUrl(raw);
-      const known = await this.read(idFor(withoutHash(url)));
+      const known = await this.readByUrl(url);
       if (known && !isFallbackCopy(known)) return this.existing(known, item);
       const page = await this.fetch(url);
-      const id = idFor(page.finalUrl);
-      // Looked up before materializing, which already writes the capture (or the PDF) under this id.
-      const previous = await this.read(id);
+      // Looked up before materializing, which already writes the capture (or the PDF) under the id.
+      const previous = (await this.readByUrl(new URL(page.finalUrl))) ?? known;
       if (previous && !isFallbackCopy(previous)) return this.existing(previous, item);
+      const id = previous?.id ?? materialIdOf(new URL(page.finalUrl));
       const itemMeta = previous?.itemMeta ? { ...previous.itemMeta, ...item } : item;
       const record = await this.materializeAny(page.bytes, page.mediaType, page.finalUrl, raw, origin, id, itemMeta);
       if (previous && isFeedCopy(previous) && isUnreadablePage(record)) {
@@ -156,7 +146,7 @@ export class MaterialStore {
   }
 
   /** PDFs keep their bytes on disk next to the record; pages keep their capture when the setting says so; everything else is materialized synchronously. */
-  private async materializeAny(bytes: Uint8Array, mediaType: string, finalUrl: string, requestedUrl: string, origin: StoredRecord["origin"] = "web", id = idFor(finalUrl), item?: MaterialMeta): Promise<StoredRecord> {
+  private async materializeAny(bytes: Uint8Array, mediaType: string, finalUrl: string, requestedUrl: string, origin: StoredRecord["origin"] = "web", id = materialIdOf(new URL(finalUrl)), item?: MaterialMeta): Promise<StoredRecord> {
     if (!isPdf(bytes, mediaType)) {
       const record = withExtracted({ ...this.materialize(bytes, mediaType, finalUrl, requestedUrl, origin, id), ...(item ? { itemMeta: item } : {}) }, bytes);
       if (!isHtml(mediaType)) return record;
@@ -178,7 +168,7 @@ export class MaterialStore {
     });
   }
 
-  private materialize(bytes: Uint8Array, mediaType: string, finalUrl: string, requestedUrl: string, origin: StoredRecord["origin"] = "web", id = idFor(finalUrl)): StoredRecord {
+  private materialize(bytes: Uint8Array, mediaType: string, finalUrl: string, requestedUrl: string, origin: StoredRecord["origin"] = "web", id = materialIdOf(new URL(finalUrl))): StoredRecord {
     const fetchedAt = new Date().toISOString();
     const base = { id, url: requestedUrl, finalUrl, mediaType, fetchedAt, origin };
     if (isHtml(mediaType)) {
@@ -440,13 +430,15 @@ export class MaterialStore {
    * A material built from the copy a feed carried, used when the page itself could not be
    * fetched. The FEED_CONTENT_FALLBACK problem marks it so the reader can say so. A material
    * already stored under the link (the page, or another item's copy) is returned, never replaced,
-   * unless it is a page the extractor could not read: the copy takes its place, keeping its other
-   * views and its item's metadata, and its capture goes.
+   * unless it is a page the extractor could not read: the copy takes its place, keeping its id, its
+   * other views and its item's metadata, and its capture goes.
    */
   async saveFromFeed(input: FeedMaterialInput): Promise<MaterialRecord> {
-    const id = idFor(input.url);
-    const known = await this.read(id);
+    // A feed entry without a usable link has no parameters to drop: the link is hashed as written.
+    const link = URL.canParse(input.url) ? new URL(input.url) : undefined;
+    const known = link ? await this.readByUrl(link) : await this.read(idFor(input.url));
     if (known && !isUnreadablePage(known)) return this.decorate(known);
+    const id = known?.id ?? (link ? materialIdOf(link) : idFor(input.url));
     const itemMeta = known?.itemMeta ? { ...known.itemMeta, ...input.meta } : input.meta;
     const plain = input.content.plain ?? input.content.markdown ?? "";
     const record = withExtracted({
@@ -476,7 +468,7 @@ export class MaterialStore {
     for (const slug of slugs.sort()) {
       try {
         const meta = JSON.parse(await readFile(join(corpusDir, slug, "meta.json"), "utf8")) as { url: string; finalUrl: string; fetchedAt: string };
-        if (await this.read(idFor(meta.finalUrl))) { result.skipped += 1; continue; }
+        if (await this.readByUrl(new URL(meta.finalUrl))) { result.skipped += 1; continue; }
         const bytes = new Uint8Array(gunzipSync(await readFile(join(corpusDir, slug, "page.html.gz"))));
         const record = await this.materializeAny(bytes, "text/html", meta.finalUrl, meta.url);
         await this.save({ ...record, fetchedAt: meta.fetchedAt });
@@ -576,6 +568,15 @@ export class MaterialStore {
     if (!ID.test(id)) return undefined;
     const bytes = await this.readOptional(join(this.dir, `${id}.json`));
     return bytes ? (JSON.parse(new TextDecoder().decode(bytes)) as StoredRecord) : undefined;
+  }
+
+  /** The record a URL names by id: the canonical one, else the one stored before tracking parameters were dropped. */
+  private async readByUrl(url: URL): Promise<StoredRecord | undefined> {
+    for (const id of storedIdsOf(url)) {
+      const record = await this.read(id);
+      if (record) return record;
+    }
+    return undefined;
   }
 
   private async require(id: string): Promise<StoredRecord> {
