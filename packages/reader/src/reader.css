@@ -16,7 +16,7 @@
 .reader-body ul ul, .reader-body ol ul { list-style-type: circle; }
 .reader-body ul ul ul, .reader-body ol ul ul, .reader-body ul ol ul { list-style-type: square; }
 .reader-body ol ol { list-style-type: lower-alpha; }
-.reader-body li::marker { color: var(--label-3); }
+.reader-body li::marker { color: var(--label-2); }
 .reader-body li { margin: 4px 0; }
 /* A tight list's items are lines, not paragraphs. */
 .reader-body :is(ul, ol)[data-tight] > li > p { margin: 0; }
