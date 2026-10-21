@@ -30,6 +30,8 @@ export const HEAD_BYTES = 256 * 1024;
 const MAX_CREATORS = 50;
 const JSON_LD_TYPES: Record<string, keyof PageSignals | "article"> = {
   Article: "article", BlogPosting: "blog", NewsArticle: "news", ScholarlyArticle: "scholarly", TechArticle: "article", Book: "book", Report: "report",
+  // Medium types its posts SocialMediaPosting.
+  SocialMediaPosting: "blog",
 };
 
 interface MetaTag { name: string; content: string }

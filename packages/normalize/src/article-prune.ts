@@ -18,6 +18,8 @@ export interface PruneOptions {
   siteNames?: ReadonlySet<string> | undefined;
   /** The byline already extracted; a leading line that only repeats it is dropped. */
   byline?: string | undefined;
+  /** The page's URL: extractors resolve "#section" against it, so only links to it are in-page navigation. */
+  source?: string | undefined;
 }
 
 const TOC_HEADING = /^(table of )?contents?$|^(目录|目次)$|^in this (article|post)$|^on this page$/iu;

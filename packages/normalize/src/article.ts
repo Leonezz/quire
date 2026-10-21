@@ -350,7 +350,8 @@ type StructuredDataMetadata = { author?: string; datePublished?: string };
 
 /** JSON-LD is the one place most CMSs (WordPress, Ghost, Substack, Medium) state the date and author reliably. */
 function structuredDataMetadata(document: DocumentLike): StructuredDataMetadata {
-  const ARTICLE_TYPES = /Article|BlogPosting|NewsArticle|TechArticle|ScholarlyArticle|Report|WebPage/;
+  // Medium types its posts SocialMediaPosting.
+  const ARTICLE_TYPES = /Article|BlogPosting|NewsArticle|TechArticle|ScholarlyArticle|Report|WebPage|SocialMediaPosting/;
   const found: StructuredDataMetadata = {};
   const visit = (value: unknown, depth: number) => {
     if (!value || typeof value !== "object" || depth > 4) return;
@@ -409,13 +410,59 @@ function publishedAtFromUrl(source: string): string | undefined {
 }
 
 const MONTHS = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+const LEADING_TEXT_CHARACTERS = 4000;
+const BLOCK_TAGS = new Set(["address", "article", "aside", "blockquote", "br", "dd", "details", "div", "dl", "dt", "figcaption", "figure", "footer", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "li", "main", "nav", "ol", "p", "pre", "section", "summary", "table", "td", "th", "tr", "ul"]);
+/** Phrasing that sits inside a word or a date ("16<sup>th</sup>", "<b>J</b>ohn"); any other inline element holds a field of its own. */
+const IN_WORD_TAGS = new Set(["abbr", "b", "code", "em", "i", "mark", "q", "s", "small", "strong", "sub", "sup", "u", "wbr"]);
+
+/**
+ * Text with a line break at block boundaries and a space at other element boundaries, up to `limit`
+ * characters: textContent glues "OpenAI" and "May 13, 2024" into one word that no date pattern finds.
+ */
+function separatedText(root: Node, limit: number) {
+  const parts: string[] = [];
+  let length = 0;
+  const visit = (node: Node) => {
+    if (length > limit) return;
+    if (node.nodeType === 3) { const text = node.textContent ?? ""; parts.push(text); length += text.length; return; }
+    if (node.nodeType !== 1) return;
+    const tag = (node as Element).tagName.toLowerCase();
+    const separator = BLOCK_TAGS.has(tag) ? "\n" : IN_WORD_TAGS.has(tag) ? "" : " ";
+    parts.push(separator);
+    for (const child of Array.from(node.childNodes)) visit(child);
+    parts.push(separator);
+  };
+  visit(root);
+  return parts.join("");
+}
 
 /** The first stretch of visible text after the chrome is dropped: where a page states its date and author. */
 function leadingText(document: DocumentLike) {
   const clone = document.cloneNode(true) as unknown as DocumentLike;
   clone.querySelectorAll("script, style, noscript, nav, footer, header nav, [role='navigation'], [class*='comment']").forEach((element) => element.remove());
-  const text = (clone.body?.textContent ?? "").replace(/[ \t]+/gu, " ").replace(/\n\s*\n+/gu, "\n").trim();
-  return text.slice(0, 4000);
+  const text = (clone.body ? separatedText(clone.body, LEADING_TEXT_CHARACTERS * 2) : "").replace(/[ \t]+/gu, " ").replace(/ ?\n[\s]*/gu, "\n").trim();
+  return text.slice(0, LEADING_TEXT_CHARACTERS);
+}
+
+/** The first `<time>` outside comment threads; React writes the attribute `dateTime`, which linkedom keeps as written. */
+function timeDatetime(document: DocumentLike) {
+  for (const time of Array.from(document.querySelectorAll("time"))) {
+    if (time.closest("[class*='comment'], [id*='comment']")) continue;
+    const value = time.getAttribute("datetime") ?? time.getAttribute("dateTime");
+    if (value?.trim()) return value;
+  }
+  return undefined;
+}
+
+/**
+ * The first declared date, unless another one is the day the page shows its readers: Medium's
+ * article:published_time is the 2021 republication of a post its JSON-LD and its text date 2017.
+ */
+function declaredPublishedAt(candidates: readonly (string | null | undefined)[], shown: string | undefined) {
+  const dates = candidates.map(normalizedPublishedAt).filter((date): date is string => date !== undefined);
+  const shownDay = shown ? Date.parse(shown.slice(0, 10)) : Number.NaN;
+  const onShownDay = Number.isFinite(shownDay) ? dates.find((date) => Math.abs(Date.parse(date.slice(0, 10)) - shownDay) <= 86_400_000) : undefined;
+  return onShownDay ?? dates[0];
 }
 
 function monthNumber(name: string) {
@@ -433,6 +480,9 @@ function publishedAtFromText(text: string): string | undefined {
   if (mdy) { const month = monthNumber(mdy[1]!); if (month) return normalizedPublishedAt(`${mdy[3]}-${String(month).padStart(2, "0")}-${mdy[2]!.padStart(2, "0")}T00:00:00Z`); }
   const dmy = /\b(\d{1,2})(?:st|nd|rd|th)?\s+(Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|June?|July?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\.?,?\s+((?:19|20)\d{2})\b/u.exec(text);
   if (dmy) { const month = monthNumber(dmy[2]!); if (month) return normalizedPublishedAt(`${dmy[3]}-${String(month).padStart(2, "0")}-${dmy[1]!.padStart(2, "0")}T00:00:00Z`); }
+  // "July 2023" heading an essay (paulgraham.com) is the only date it states; further down, a month and a year is anything.
+  const monthYear = /\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+((?:19|20)\d{2})\b/u.exec(text.slice(0, 300));
+  if (monthYear) { const month = monthNumber(monthYear[1]!); if (month) return normalizedPublishedAt(`${monthYear[2]}-${String(month).padStart(2, "0")}-01T00:00:00Z`); }
   return undefined;
 }
 
@@ -447,15 +497,45 @@ function bylineFromText(text: string): string | undefined {
   return undefined;
 }
 
+/** Comment threads carry rel=author links and avatars for every commenter. */
+const NOT_THE_ARTICLE_AUTHOR = "[class*='comment'], [id*='comment'], footer, nav";
+
 /** Visible author markup that pages use when they have no author meta tag. */
 function bylineFromMarkup(document: DocumentLike): string | undefined {
+  const paperAuthors = latexmlAuthors(document);
+  if (paperAuthors) return paperAuthors;
   for (const selector of ["a[rel~='author']", "[itemprop~='author'] [itemprop~='name']", "[itemprop~='author']", ".author-name", ".byline .author", "[class~='byline'] a", "[class~='byline']", "[class~='author']", "[class*='post-author']", "[class*='author-name']"]) {
     for (const element of Array.from(document.querySelectorAll(selector))) {
-      // Comment threads carry rel=author links for every commenter.
-      if (element.closest("[class*='comment'], [id*='comment'], footer, nav")) continue;
+      if (element.closest(NOT_THE_ARTICLE_AUTHOR)) continue;
       const text = cleanByline(normalizedOptionalString(element.textContent, 160));
       if (text) return text;
     }
+  }
+  return avatarAuthorName(document);
+}
+
+/** LaTeXML papers (arXiv HTML) name each author in .ltx_personname, beside the affiliations; the name ends at the first line break. */
+function latexmlAuthors(document: DocumentLike) {
+  const names = Array.from(document.querySelectorAll(".ltx_authors .ltx_personname")).flatMap((element) => {
+    const lines: string[] = [];
+    for (const node of Array.from(element.childNodes)) {
+      if (node.nodeType === 1 && (node as Element).tagName.toLowerCase() === "br") break;
+      lines.push(node.textContent ?? "");
+    }
+    const name = normalizedOptionalString(lines.join(""), 120);
+    return name ? [name] : [];
+  });
+  return names.length ? names.slice(0, 5).join(", ") : undefined;
+}
+
+/** An author block whose avatar's alt is the name written beside it (web.dev's .wd-author): that name, not the icon links around it. */
+function avatarAuthorName(document: DocumentLike) {
+  for (const image of Array.from(document.querySelectorAll("[class*='author'] img[alt]"))) {
+    if (image.closest(NOT_THE_ARTICLE_AUTHOR)) continue;
+    const name = normalizedOptionalString(image.getAttribute("alt"), 120);
+    const block = image.parentElement?.closest("[class*='author']");
+    if (!name || !block || name.split(" ").length > 5) continue;
+    if ((block.textContent ?? "").replace(/\s+/gu, " ").includes(name)) return cleanByline(name);
   }
   return undefined;
 }
@@ -512,11 +592,45 @@ function headingOwnText(element: Element) {
   return normalizedOptionalString(clone.textContent, 500);
 }
 
-function preferredArticleTitle(document: DocumentLike) {
+/** An h1 the article only reaches after this much of its text is one of its sections. */
+const MAX_TEXT_BEFORE_TITLE = 500;
+
+/** Characters of text before `target` inside `root`, counted up to just past `limit` (a plain walk; no TreeWalker in linkedom). */
+function textLengthBefore(root: Node, target: Node, limit: number) {
+  let count = 0;
+  let reached = false;
+  const visit = (node: Node) => {
+    if (reached || count > limit) return;
+    if (node === target) { reached = true; return; }
+    if (node.nodeType === 3) { count += (node.textContent ?? "").replace(/\s+/gu, " ").trim().length; return; }
+    for (const child of Array.from(node.childNodes)) visit(child);
+  };
+  visit(root);
+  return count;
+}
+
+/** The heading says what the page calls itself, perhaps padded with UI text; a heading that is only the start of it ("Centaurs and Cyborgs") is a section. */
+function headingStatesTitle(heading: string, declared: string) {
+  const text = lettersOnly(heading);
+  const name = lettersOnly(declared);
+  return name.length > 0 && text.includes(name);
+}
+
+/**
+ * A section heading the page marked up as h1 (This Week in Rust's "Quote of the Week", the h1 sections
+ * of Embedded in Academia): it comes after the article has started and is not what the page calls itself.
+ */
+function isSectionH1(heading: Element, title: string, declared: readonly string[]) {
+  if (declared.length === 0 || declared.some((name) => headingStatesTitle(title, name))) return false;
+  const region = heading.closest("article, main, [role='main']") ?? heading.ownerDocument?.body;
+  return !!region && textLengthBefore(region, heading, MAX_TEXT_BEFORE_TITLE) > MAX_TEXT_BEFORE_TITLE;
+}
+
+function preferredArticleTitle(document: DocumentLike, declared: readonly string[] = []) {
   for (const selector of ["article h1", "main h1", "[role='main'] h1", "h1"]) {
     for (const heading of Array.from(document.querySelectorAll(selector))) {
       const title = headingOwnText(heading);
-      if (title) return title;
+      if (title && !isSectionH1(heading, title, declared)) return title;
     }
   }
   return undefined;
@@ -538,12 +652,14 @@ function siteNames(document: DocumentLike, source: string) {
   for (const selector of ["[class*='site-title']", "[class*='site-name']", "[class*='logo'] a", "#logo", ".brand", "a[rel~='home']"]) {
     add(normalizedOptionalString(document.querySelector(selector)?.textContent, 120));
   }
-  const origin = new URL(source).origin;
+  const page = new URL(source);
   for (const link of Array.from(document.querySelectorAll("a[href]")).slice(0, 200)) {
     const href = link.getAttribute("href") ?? "";
     let target: URL | undefined;
     try { target = new URL(href, source); } catch { continue; }
-    if (target.origin !== origin) continue;
+    if (target.origin !== page.origin) continue;
+    // An h1 linking to the article itself ("GPS" on ciechanowski.com/gps/) or into a section of a page names that page, not the site.
+    if (target.pathname === page.pathname || target.hash || target.search) continue;
     const segments = target.pathname.split("/").filter(Boolean);
     // The home link, or an h1 that links one level deep ("/blog/"): a section or site title, not an article's.
     if (segments.length === 0 || (segments.length === 1 && link.closest("h1"))) add(normalizedOptionalString(link.textContent, 120));
@@ -563,23 +679,31 @@ function stripTitleAnchors(value: string) {
   return value.replace(/[\s¶#🔗]+$/u, "").replace(/^[\s¶#🔗]+/u, "").trim();
 }
 
-function isSiteLike(value: string, names: Set<string>, label: string) {
+/** "This Week in Rust 673" on this-week-in-rust.org: the site's name and an issue number is that issue's title. */
+function isNumberedIssue(value: string, label: string) {
+  const letters = lettersOnly(value);
+  return label.length >= 4 && letters.includes(label) && /^\d+$/u.test(letters.replace(label, ""));
+}
+
+function isSiteLike(value: string, names: ReadonlySet<string>, label: string) {
   const lower = value.toLowerCase();
   if (names.has(lower) || /^\d+$/u.test(value) || value.length < 3) return true;
+  if (isNumberedIssue(value, label)) return false;
   // "Brendan Gregg's Blog" on brendangregg.com, "null program" on nullprogram.com.
   const letters = lettersOnly(value);
   return label.length >= 6 && letters.length <= label.length + 8 && letters.includes(label);
 }
 
 /** A short side of a split title that is the site: a known name, "Lil'Log" / "Gwern.net"-like words, or the host label. */
-function isSiteSide(part: string, names: Set<string>, label: string) {
+function isSiteSide(part: string, names: ReadonlySet<string>, label: string) {
   if (names.has(part.toLowerCase())) return true;
+  if (isNumberedIssue(part, label)) return false;
   const words = part.split(/\s+/u).length;
   return words <= 4 && (SITE_WORDS.test(part) || (label.length >= 4 && lettersOnly(part).includes(label)));
 }
 
 /** Drops a "| Site" / "– Site" side of a title when that side is the page's own name. */
-function withoutSiteSuffix(value: string, names: Set<string>, label: string) {
+function withoutSiteSuffix(value: string, names: ReadonlySet<string>, label: string) {
   const parts = value.split(TITLE_SEPARATOR).map((part) => part.trim()).filter(Boolean);
   if (parts.length < 2) return value;
   const kept = parts.filter((part) => !isSiteSide(part, names, label));
@@ -587,11 +711,19 @@ function withoutSiteSuffix(value: string, names: Set<string>, label: string) {
   return kept.join(" – ");
 }
 
+/** What the page calls itself in og:title and <title>, without the site's side; empty when that is only the site's name. */
+function declaredTitles(document: DocumentLike, source: string, names: ReadonlySet<string>) {
+  const label = hostLabel(document, source);
+  return [metaContent(document, ["meta[property='og:title']", "meta[name='twitter:title']"]), normalizedOptionalString(document.title, 500)]
+    .map((value) => (value ? stripTitleAnchors(withoutSiteSuffix(stripTitleAnchors(value), names, label)) : ""))
+    .filter((value) => value.length > 0 && !isSiteLike(value, names, label));
+}
+
 /** First candidate that, once cleaned, is a title of its own rather than the site's name or a number. */
-function chooseArticleTitle(document: DocumentLike, source: string, candidates: readonly (string | undefined)[], byline?: string) {
-  const names = siteNames(document, source);
+function chooseArticleTitle(document: DocumentLike, source: string, siteNameSet: ReadonlySet<string>, candidates: readonly (string | undefined)[], byline?: string) {
   // "GPS – Bartosz Ciechanowski": the author's name is not part of the title either.
-  if (byline) for (const name of byline.split(/,|&| and /u)) { const v = name.trim().toLowerCase(); if (v.length >= 4) names.add(v); }
+  const bylineNames = (byline?.split(/,|&| and /u) ?? []).map((name) => name.trim().toLowerCase()).filter((name) => name.length >= 4);
+  const names = new Set([...siteNameSet, ...bylineNames]);
   const label = hostLabel(document, source);
   const cleanedCandidates = candidates
     .map((candidate) => (candidate ? stripTitleAnchors(withoutSiteSuffix(stripTitleAnchors(candidate), names, label)) : ""))
@@ -611,10 +743,10 @@ function firstHeadingText(html: string, tag: "h2" | "h3") {
   return normalizedOptionalString(document.querySelector(tag)?.textContent, 500);
 }
 
-function preferredExtractedTitle(html: string) {
+function preferredExtractedTitle(html: string, declared: readonly string[] = []) {
   const document = parseHTML(`<html><body>${html}</body></html>`)
     .document as unknown as DocumentLike;
-  return preferredArticleTitle(document);
+  return preferredArticleTitle(document, declared);
 }
 
 function sameTitle(a: string | undefined, b: string | undefined) {
@@ -999,25 +1131,28 @@ export function normalizeArticleCapture(
     failureFallbackText =
       plainTextFallbackFromDocument(document, input.budget.maxOutputBytes) ??
       failureFallbackText;
-    const preferredTitle = preferredArticleTitle(document);
+    const names = siteNames(document, source);
+    const declared = declaredTitles(document, source, names);
+    const preferredTitle = preferredArticleTitle(document, declared);
+    const structured = structuredDataMetadata(document);
+    const leadText = leadingText(document);
     const rawByline =
       metaContent(document, [
         "meta[name='author']",
         "meta[property='article:author']",
         "meta[name='byl']",
-      ]) ?? cleanByline(structuredDataMetadata(document).author) ?? bylineFromMarkup(document) ?? bylineFromText(leadingText(document));
-    const structured = structuredDataMetadata(document);
-    const leadText = leadingText(document);
-    const rawPublishedAt =
-      normalizedPublishedAt(
-        metaContent(document, [
-          "meta[property='article:published_time']",
-          "meta[name='date']",
-          "meta[itemprop='datePublished']",
-        ]) ??
-          structured.datePublished ??
-          document.querySelector("time[datetime]")?.getAttribute("datetime"),
-      ) ?? publishedAtFromUrlOrText(source, leadText);
+      ]) ?? cleanByline(structured.author) ?? bylineFromMarkup(document) ?? bylineFromText(leadText);
+    const declaredDates = [
+      metaContent(document, [
+        "meta[property='article:published_time']",
+        "meta[name='date']",
+        "meta[itemprop='datePublished']",
+      ]),
+      structured.datePublished,
+      timeDatetime(document),
+    ];
+    const shownDate = publishedAtFromText(leadText);
+    const rawPublishedAt = declaredPublishedAt(declaredDates, shownDate) ?? publishedAtFromUrlOrText(source, leadText);
     let defuddle: ExtractionCandidate | undefined;
     let readability: ExtractionCandidate | undefined;
     const siteAdapterApplication = applyArticleSiteAdapter({
@@ -1189,6 +1324,7 @@ export function normalizeArticleCapture(
     const title = chooseArticleTitle(
       document,
       source,
+      names,
       // The article's own h1 first; the page metadata only when the h1 turns
       // out to be the site header or something else that is not a title. When
       // the page's h1 and og:title agree, that pair outranks whatever h1 the
@@ -1198,7 +1334,7 @@ export function normalizeArticleCapture(
         const agreed = sameTitle(preferredTitle, ogTitle) ? [preferredTitle] : [];
         return [
           ...agreed,
-          preferredExtractedTitle(selected.content),
+          preferredExtractedTitle(selected.content, declared),
           preferredTitle,
           ogTitle,
           normalizedOptionalString(document.title, 500),
@@ -1209,7 +1345,8 @@ export function normalizeArticleCapture(
       })(),
       cleanByline(defuddle?.byline ?? readability?.byline) ?? rawByline,
     );
-    const pruned = pruneArticleChrome(selected.content, { title, siteNames: siteNames(document, source), byline: cleanByline(selected.byline) ?? rawByline });
+    const publishedAt = declaredPublishedAt([selected.publishedAt, ...declaredDates], shownDate) ?? rawPublishedAt;
+    const pruned = pruneArticleChrome(selected.content, { title, siteNames: names, byline: cleanByline(selected.byline) ?? rawByline, source });
     const representationResult = createRepresentations({
       baseUri: source,
       content: pruned.content,
@@ -1290,9 +1427,7 @@ export function normalizeArticleCapture(
       ...((selected.dir ?? rawDir) ? { dir: selected.dir ?? rawDir } : {}),
       ...((selected.lang ?? rawLang) ? { lang: selected.lang ?? rawLang } : {}),
       materialization,
-      ...((selected.publishedAt ?? rawPublishedAt)
-        ? { publishedAt: selected.publishedAt ?? rawPublishedAt }
-        : {}),
+      ...(publishedAt ? { publishedAt } : {}),
       source,
       sourceFingerprint,
       sourceIdentity,

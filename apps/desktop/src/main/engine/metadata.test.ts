@@ -48,6 +48,12 @@ describe("extractMetadata", () => {
     });
   });
 
+  it("reads Medium's SocialMediaPosting JSON-LD, whose date outranks the republication date in article:published_time", () => {
+    const jsonLd = JSON.stringify({ "@context": "http://schema.org", "@type": "SocialMediaPosting", headline: "Software 2.0", datePublished: "2017-11-11T22:18:53Z", author: { "@type": "Person", name: "Andrej Karpathy" } });
+    const meta = extractMetadata({ html: `<html><head><meta property="article:published_time" content="2021-03-13T18:18:43.264Z"><script type="application/ld+json">${jsonLd}</script></head></html>`, url: "https://karpathy.medium.com/software-2-0-a64152b37c35", mediaType: "text/html", origin: "web", fetchedAt: FETCHED, fallback: { title: "Software 2.0" } });
+    expect(meta).toMatchObject({ kind: "blogPost", date: "2017-11-11T22:18:53.000Z", creators: [{ role: "author", name: "Andrej Karpathy" }] });
+  });
+
   it("falls back to og:site_name, the plain author tag and <html lang> on a bare page", async () => {
     const meta = extractMetadata({ html: await fixture("bare-page.html"), url: "https://beweise.example.test/p/1", mediaType: "text/html", origin: "web", fetchedAt: FETCHED, fallback: { title: "Beweise, die man nicht braucht", byline: "Emmy Noether and Someone Else" } });
     expect(meta).toEqual({
