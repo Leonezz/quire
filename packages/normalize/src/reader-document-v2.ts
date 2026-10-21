@@ -14,8 +14,10 @@ import rehypeSanitize, {
 import { unified } from "unified";
 
 import {
+  READER_V2_CALLOUT_KINDS,
   readerDocumentV2Schema,
   type ReaderDocumentV2,
+  type ReaderV2CalloutKind,
   type ReaderV2FlowNode,
   type ReaderV2FootnoteDefinition,
   type ReaderV2Figure,
@@ -155,6 +157,7 @@ const sanitizerSchema: SanitizeOptions = {
     ]),
     abbr: appendAttributes("abbr", ["title"]),
     annotation: ["encoding"],
+    blockquote: appendAttributes("blockquote", ["dataCallout"]),
     code: appendAttributes("code", ["className"]),
     div: appendAttributes("div", ["className", "role"]),
     img: appendAttributes("img", ["alt", "height", "src", "title", "width"]),
@@ -1391,6 +1394,13 @@ function footnoteDefinitionsFromSection(
   });
 }
 
+/** A blockquote marked data-callout (the extractors' copy of a page's asides and admonitions) is a callout; a kind outside the vocabulary is a plain note. */
+function calloutKind(element: Element): ReaderV2CalloutKind | undefined {
+  if (!hasProperty(element, "dataCallout")) return undefined;
+  const value = propertyString(element, "dataCallout")?.trim().toLowerCase();
+  return READER_V2_CALLOUT_KINDS.find((kind) => kind === value) ?? "note";
+}
+
 function isFootnoteSection(element: Element) {
   const id = propertyString(element, "id")
     ?.replace(/^reader-/u, "")
@@ -1428,11 +1438,14 @@ function flowFromElement(
       : undefined;
   if (delimitedDisplayMath) return delimitedDisplayMath;
   if (element.tagName === "p") return flowFromParagraph(element, path, context);
-  if (element.tagName === "blockquote")
+  if (element.tagName === "blockquote") {
+    const callout = calloutKind(element);
     return {
+      ...(callout ? { callout } : {}),
       children: flowFromChildren(element.children, path, context),
       type: "blockquote",
     };
+  }
   if (element.tagName === "section") {
     const anchor = sourceAnchor(element, context);
     return {

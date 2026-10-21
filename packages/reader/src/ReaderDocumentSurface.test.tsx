@@ -92,6 +92,44 @@ describe("ReaderDocumentSurface", () => {
     expect(surface.querySelector("blockquote")?.textContent).toBe("A plain quote.");
   });
 
+  it("renders a blockquote that carries a callout kind as a labelled callout", () => {
+    const surface = renderSurface({
+      fallback: { content: "Fallback", format: "plain" },
+      payload: {
+        type: "root",
+        losses: [],
+        children: [
+          {
+            type: "blockquote",
+            callout: "key-point",
+            children: [{ type: "paragraph", children: [{ type: "strong", children: [{ type: "text", value: "Key point:" }] }, { type: "text", value: " Stable metrics aren't permanent." }] }],
+          },
+          {
+            type: "blockquote",
+            callout: "note",
+            children: [
+              { type: "paragraph", children: [{ type: "text", value: "Read The Samples" }] },
+              { type: "paragraph", children: [{ type: "text", value: "Note that the samples are uncurated." }] },
+            ],
+          },
+          { type: "blockquote", callout: "warning", children: [{ type: "paragraph", children: [{ type: "text", value: "Warning: rate limits apply." }] }] },
+        ],
+      },
+      schema: "reader.document.v2",
+    });
+
+    const [keyPoint, note, warning] = [...surface.querySelectorAll("aside.reader-callout")];
+    expect(keyPoint?.getAttribute("data-callout")).toBe("key-point");
+    expect(keyPoint?.querySelector(".reader-callout-title")?.textContent).toBe("Key point");
+    // The source's own "Key point:" lead-in is what the title already says.
+    expect(keyPoint?.querySelector("p:not(.reader-callout-title)")?.textContent).toBe("Stable metrics aren't permanent.");
+    expect(note?.querySelector(".reader-callout-title")?.textContent).toBe("Note");
+    expect([...(note?.querySelectorAll("p:not(.reader-callout-title)") ?? [])].map((p) => p.textContent)).toEqual(["Read The Samples", "Note that the samples are uncurated."]);
+    expect(warning?.querySelector(".reader-callout-title")?.textContent).toBe("Warning");
+    expect(warning?.querySelector("p:not(.reader-callout-title)")?.textContent).toBe("rate limits apply.");
+    expect(surface.querySelector("blockquote")).toBeNull();
+  });
+
   it("lets the host render text in the GFM fallback too", () => {
     const surface = renderSurface({
       fallback: { content: "claim [ref] and *more [ref]* `[ref]`", format: "gfm" },

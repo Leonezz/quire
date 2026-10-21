@@ -84,7 +84,13 @@ export type ReaderV2Section = {
   type: "section";
 };
 
+/** What a callout box says it is; the reader labels the box by it. */
+export const READER_V2_CALLOUT_KINDS = ["note", "tip", "important", "key-point", "warning", "caution"] as const;
+export type ReaderV2CalloutKind = (typeof READER_V2_CALLOUT_KINDS)[number];
+
 export type ReaderV2Blockquote = {
+  /** Set when the source drew the block as a callout (a note, a key point, a warning) rather than a quotation. */
+  callout?: ReaderV2CalloutKind;
   children: ReaderV2FlowNode[];
   type: "blockquote";
 };
@@ -240,7 +246,7 @@ const readerV2NodeSchema: z.ZodType<unknown> = z.lazy(() =>
       children: z.array(readerV2NodeSchema),
       type: z.literal("section"),
     }).strict(),
-    z.object({ children: z.array(readerV2NodeSchema), type: z.literal("blockquote") }).strict(),
+    z.object({ callout: z.enum(READER_V2_CALLOUT_KINDS).optional(), children: z.array(readerV2NodeSchema), type: z.literal("blockquote") }).strict(),
     z.object({
       children: z.array(readerV2NodeSchema),
       ordered: z.boolean(),

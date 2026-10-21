@@ -69,6 +69,55 @@ describe("preextractArticleDocument", () => {
     );
   });
 
+  it("turns callouts and content asides into blockquotes that carry the callout's kind", () => {
+    const document = documentFor(
+      `<aside class="note"> <b>Note:</b> Tools like Lighthouse cannot measure <a href="/inp">INP</a>. </aside>` +
+        `<aside class="key-point"><b>Key point:</b> Stable metrics aren't necessarily permanent.</aside>` +
+        `<div class="admonition note"><div class="admonition-title"><p>Read The Samples</p></div><p>On GPT-3, compare the poems.</p></div>` +
+        `<div class="callout callout-style-default callout-warning callout-titled"><div class="callout-header"><span class="screen-reader-only">Warning</span>Important Note</div><div class="callout-body"><p>Measure precision and recall.</p></div></div>` +
+        `<aside class="admn note"><div><p>This post is a part of <a href="/rust100k">“One Hundred Thousand Lines of Rust”</a>.</p></div></aside>` +
+        `<aside id="memo" class="i6el1g6 b1btlj5u"><strong>This could change in the future!</strong><div><p>The React team is investigating whether it's possible to auto-memoize code.</p><div class="note">Nested.</div></div></aside>`,
+    );
+
+    expect(preextractArticleDocument(document, PAGE)).toEqual(["article.preextract.callouts@1"]);
+    expect(document.body.innerHTML).toBe(
+      `<blockquote data-callout="note"> <b>Note:</b> Tools like Lighthouse cannot measure <a href="/inp">INP</a>. </blockquote>` +
+        `<blockquote data-callout="key-point"><b>Key point:</b> Stable metrics aren't necessarily permanent.</blockquote>` +
+        `<blockquote data-callout="note"><div class="admonition-title"><p>Read The Samples</p></div><p>On GPT-3, compare the poems.</p></blockquote>` +
+        `<blockquote data-callout="warning"><div class="callout-header">Important Note</div><div class="callout-body"><p>Measure precision and recall.</p></div></blockquote>` +
+        `<blockquote data-callout="note"><div><p>This post is a part of <a href="/rust100k">“One Hundred Thousand Lines of Rust”</a>.</p></div></blockquote>` +
+        `<blockquote data-callout="note" id="memo"><strong>This could change in the future!</strong><div><p>The React team is investigating whether it's possible to auto-memoize code.</p><div class="note">Nested.</div></div></blockquote>`,
+    );
+  });
+
+  it("leaves pull quotes, print-only boxes, page chrome, link lists and page-wide wrappers alone", () => {
+    const quote = "Understanding language requires understanding the world, and a machine exposed only to language cannot.";
+    const body =
+      `<p>${quote}</p><aside class="post__aside"><div class="mb1"><p>${quote}</p></div></aside>` +
+      `<aside class="post__aside hide-on-print"><h2>Quantized Columns</h2><p>A regular column in which top researchers explore the process of discovery.</p></aside>` +
+      `<aside class="post__aside"><div class="pullquote"><p>Neural network language models have achieved about 97% accuracy on Winograd schemas.</p></div></aside>` +
+      `<aside class="widget widget_text" id="text-3"><p>Your host. I’m Joel Spolsky, a software developer in New York City, and I write about software.</p></aside>` +
+      `<aside class="post-toc"><p>On this page</p></aside>` +
+      `<aside><p><a href="/related/1">Machines Beat Humans on a Reading Test. But Do They Understand?</a> More: <a href="/related/2">Why AlphaZero has trouble</a></p></aside>` +
+      `<aside> Discuss this page on <a href="/comments">Reddit</a>. </aside>` +
+      `<aside class="note" hidden><p>Hidden note.</p></aside>` +
+      `<nav><aside class="note"><p>A note in the navigation.</p></aside></nav>` +
+      `<div class="note single"><h1>Patterns for Building LLM-based Systems</h1><p>The whole post.</p></div>` +
+      `<span class="note">An inline note.</span>`;
+    const document = documentFor(body);
+
+    expect(preextractArticleDocument(document, PAGE)).toEqual([]);
+    expect(document.body.innerHTML).toBe(body);
+  });
+
+  it("leaves a callout that only scripts-off visitors see alone", () => {
+    const body = `<noscript><div class="admonition error"><div class="admonition-title"><p><strong>Error:</strong> JavaScript disabled.</p></div><p>Backlinks require JS.</p></div></noscript>`;
+    const document = documentFor(body);
+
+    expect(preextractArticleDocument(document, PAGE)).toEqual([]);
+    expect(document.body.innerHTML).toBe(body);
+  });
+
   it("leaves objects of other types, without an http(s) URL, or hidden alone", () => {
     const body =
       `<object type="application/pdf" data="/paper.pdf"></object><object data="/figure.svg"></object><object type="image/tiff" data="/scan.tiff"></object>` +

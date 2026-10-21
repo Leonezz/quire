@@ -18,6 +18,7 @@ import type {
   ReaderDocumentV1,
   ReaderDocumentV2,
   ReaderNode,
+  ReaderV2CalloutKind,
   ReaderV2FlowNode,
   ReaderV2FootnoteDefinition,
   ReaderV2FootnoteReference,
@@ -840,24 +841,53 @@ function StructuredReaderV1({ document }: { document: ReaderDocumentV1 }) {
 
 type ReaderV2RenderableNode = ReaderV2FlowNode | ReaderV2PhrasingNode;
 
-const CALLOUT_KINDS = ["note", "tip", "important", "warning", "caution"] as const;
-type CalloutKind = (typeof CALLOUT_KINDS)[number];
-const CALLOUT_LABELS: Record<CalloutKind, string> = { note: "Note", tip: "Tip", important: "Important", warning: "Warning", caution: "Caution" };
+const CALLOUT_LABELS: Record<ReaderV2CalloutKind, string> = { note: "Note", tip: "Tip", important: "Important", "key-point": "Key point", warning: "Warning", caution: "Caution" };
 const CALLOUT_MARKER = /^\[!(note|tip|important|warning|caution)\][ \t]*/i;
+const LABEL_COLON = /^\s*[:：]\s*/u;
+
+/** The phrasing after a lead-in that only repeats the callout's label ("Warning: …", web.dev's bold "Key point:"); undefined when there is none. */
+function phrasingAfterLabel(phrasing: readonly ReaderV2PhrasingNode[], label: string): ReaderV2PhrasingNode[] | undefined {
+  const [lead, ...rest] = phrasing;
+  const name = label.toLowerCase();
+  if (lead?.type === "text") {
+    const value = lead.value.trimStart();
+    const after = value.slice(label.length);
+    return value.toLowerCase().startsWith(name) && LABEL_COLON.test(after) ? [{ ...lead, value: after.replace(LABEL_COLON, "") }, ...rest] : undefined;
+  }
+  if (lead?.type !== "strong" && lead?.type !== "emphasis") return undefined;
+  const leadText = readerV2PhrasingText(lead.children).trim().toLowerCase();
+  const [next, ...following] = rest;
+  // The colon is inside the bold label ("Key point:") or just after it ("Note: …").
+  if (leadText.replace(/\s*[:：]$/u, "") === name && leadText !== name) return next?.type === "text" ? [{ ...next, value: next.value.trimStart() }, ...following] : rest;
+  if (leadText === name && next?.type === "text" && LABEL_COLON.test(next.value)) return [{ ...next, value: next.value.replace(LABEL_COLON, "") }, ...following];
+  return undefined;
+}
+
+/** A callout the source drew as one (an aside, an admonition): titled by its kind, without a lead-in that repeats it. */
+function declaredCallout(node: Extract<ReaderV2FlowNode, { type: "blockquote" }>, kind: ReaderV2CalloutKind) {
+  const title = CALLOUT_LABELS[kind];
+  const [first, ...rest] = node.children;
+  if (first?.type !== "paragraph") return { kind, title, children: node.children };
+  const phrasing = phrasingAfterLabel(first.children, title)?.filter((child) => child.type !== "text" || child.value !== "");
+  if (!phrasing) return { kind, title, children: node.children };
+  return { kind, title, children: phrasing.length > 0 ? [{ ...first, children: phrasing }, ...rest] : rest };
+}
 
 /**
- * A GitHub alert (`> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]`) as a callout:
- * its kind, its title (the rest of the marker's line when more follows, else the kind's label) and
- * its body. Undefined for an ordinary blockquote.
+ * A callout: a blockquote the source marked as one, or a GitHub alert (`> [!NOTE]`, `[!TIP]`,
+ * `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]`). Gives its kind, its title (for an alert, the rest
+ * of the marker's line when more follows, else the kind's label) and its body. Undefined for an
+ * ordinary blockquote.
  */
-export function readerV2Callout(node: Extract<ReaderV2FlowNode, { type: "blockquote" }>): { kind: CalloutKind; title: string; children: ReaderV2FlowNode[] } | undefined {
+export function readerV2Callout(node: Extract<ReaderV2FlowNode, { type: "blockquote" }>): { kind: ReaderV2CalloutKind; title: string; children: ReaderV2FlowNode[] } | undefined {
+  if (node.callout) return declaredCallout(node, node.callout);
   const [first, ...rest] = node.children;
   if (first?.type !== "paragraph") return undefined;
   const [lead, ...phrasing] = first.children;
   if (lead?.type !== "text") return undefined;
   const marker = CALLOUT_MARKER.exec(lead.value);
   if (!marker) return undefined;
-  const kind = marker[1]!.toLowerCase() as CalloutKind;
+  const kind = marker[1]!.toLowerCase() as ReaderV2CalloutKind;
   const after = lead.value.slice(marker[0].length);
   const newline = after.indexOf("\n");
   // The marker's own line is the title when the body goes on below it; a one-line callout is all body.

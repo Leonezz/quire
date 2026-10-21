@@ -538,6 +538,31 @@ describe("ContentNormalizationModule", () => {
     ]);
   });
 
+  it("carries a callout's kind on its blockquote and keeps plain quotes plain", () => {
+    const result = readerDocumentV2FromHtml({
+      html: `<blockquote data-callout="key-point"><b>Key point:</b> Stable metrics are not permanent.</blockquote><blockquote data-callout="sidebar"><p>A side note.</p></blockquote><blockquote><p>A quotation.</p></blockquote>`,
+      maxDepth: 40,
+      maxNodes: 10_000,
+      maxOutputBytes: 2 * 1024 * 1024,
+      outputBudgetErrorCode: "SOURCE_ARTICLE_OUTPUT_BUDGET_EXCEEDED",
+    });
+
+    expect(result.document.children).toEqual([
+      {
+        callout: "key-point",
+        children: [{ children: [{ children: [{ type: "text", value: "Key point:" }], type: "strong" }, { type: "text", value: " Stable metrics are not permanent." }], type: "paragraph" }],
+        type: "blockquote",
+      },
+      { callout: "note", children: [{ children: [{ type: "text", value: "A side note." }], type: "paragraph" }], type: "blockquote" },
+      { children: [{ children: [{ type: "text", value: "A quotation." }], type: "paragraph" }], type: "blockquote" },
+    ]);
+    // Stored documents from before the field still validate; a kind outside the vocabulary does not.
+    const quote = (extra: object) => ({ children: [{ children: [], type: "blockquote", ...extra }], losses: [], type: "root" });
+    expect(readerDocumentV2Schema.safeParse(quote({})).success).toBe(true);
+    expect(readerDocumentV2Schema.safeParse(quote({ callout: "warning" })).success).toBe(true);
+    expect(readerDocumentV2Schema.safeParse(quote({ callout: "sidebar" })).success).toBe(false);
+  });
+
   it("accepts a bounded article when a malformed TOC leaves a stray list item", () => {
     const body =
       "The article records an implementation detail and keeps the evidence available for review. ".repeat(
@@ -1186,6 +1211,30 @@ describe("ContentNormalizationModule", () => {
     expect(serialized).toContain(
       "Hidden protocol details remain part of the article.",
     );
+  });
+
+  it("keeps an article's callouts as callouts through extraction and still drops its pull quotes", () => {
+    const pullQuote = "Every measurement in this study was repeated by a second team before it was reported.";
+    const html = `<!doctype html><html><body><article>
+      <h1>Structural evidence</h1>
+      <p>${"The experiment records a bounded result for later review and independent reproduction. ".repeat(12)}</p>
+      <aside class="note"><b>Note:</b> Lab tools cannot measure input delay, as there is no user input.</aside>
+      <p>${pullQuote} ${"Each result was checked against the original protocol and archived. ".repeat(10)}</p>
+      <aside class="post__aside"><p>${pullQuote}</p></aside>
+      <p>${"The discussion closes with the limits of the method and the open questions. ".repeat(10)}</p>
+    </article></body></html>`;
+
+    const result = normalizeArticleCapture(articleCapture(html));
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    const readerV2 = result.article.materialization.representations.find((value) => value.schema === "reader.document.v2");
+    const children = JSON.parse(readerV2?.content ?? "{}").children as { type: string; callout?: string }[];
+    const quotes = children.filter((node) => node.type === "blockquote");
+    expect(quotes).toHaveLength(1);
+    expect(quotes[0]?.callout).toBe("note");
+    expect(JSON.stringify(quotes[0])).toContain("Lab tools cannot measure input delay");
+    expect(result.article.materialization.provenance.rulesApplied).toContain("article.preextract.callouts@1");
   });
 
   it("removes a duplicate page title even when Readability demotes the source h1", () => {
