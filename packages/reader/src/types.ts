@@ -12,6 +12,7 @@ export interface TextAnnotation {
   note?: string;
   kind?: TextAnnotationKind;
   color?: TextAnnotationColor;
+  /** "stale": the host knows the text changed under it; drawn marked, as an approximate placement is. */
   status?: "current" | "stale";
   /** Carried for hosts that key annotations by interpretation; unused by the reader. */
   interpretationKey?: string;
