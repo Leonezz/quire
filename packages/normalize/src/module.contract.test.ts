@@ -356,6 +356,19 @@ describe("ContentNormalizationModule", () => {
     ]);
   });
 
+  it("drops paragraphs with nothing to read, which would only print as blank gaps (anthropic-mapping, jalammar-transformer)", () => {
+    const result = readerDocumentV2FromHtml({
+      html: `<p>First.</p><p></p><p><br></p><p>&nbsp;</p><p> <br> <br> </p><p><img src="https://x.test/a.png" alt="A"></p><p>Last.</p>`,
+      maxDepth: 40,
+      maxNodes: 10_000,
+      maxOutputBytes: 2 * 1024 * 1024,
+      outputBudgetErrorCode: "SOURCE_ARTICLE_OUTPUT_BUDGET_EXCEEDED",
+    });
+
+    expect(result.document.children.map((node) => node.type)).toEqual(["paragraph", "paragraph", "paragraph"]);
+    expect(JSON.stringify(result.document.children[1])).toContain('"type":"image"');
+  });
+
   it("reads \\( \\) standing on lines of their own around a formula as display math, and leaves inline \\( \\) inline (ruder-optim)", () => {
     const result = readerDocumentV2FromHtml({
       html: `<p>\\(<br>\nv_t = \\beta_2 v_{t-1} + (1 - \\beta_2) g_t^2<br>\n\\)</p><p>Instead of using \\(v_t\\) directly, we employ \\(v_{t-1}\\):</p>`,

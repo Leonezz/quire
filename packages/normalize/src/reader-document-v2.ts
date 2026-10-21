@@ -615,7 +615,8 @@ function paragraphsSplitOnDoubleBreaks(children: ReaderV2PhrasingNode[]): Reader
     })
     .filter((group) => group.some((node) => node.type !== "text" || node.value.trim().length > 0))
     .map((group): ReaderV2FlowNode => ({ children: group, type: "paragraph" }));
-  return paragraphs.length ? paragraphs : [{ children, type: "paragraph" }];
+  // A paragraph of nothing but spaces and breaks ("<p>&nbsp;</p>", "<p><br></p>") would only print as a blank gap.
+  return paragraphs;
 }
 
 function normalizedHeadingIdentity(value: string) {
