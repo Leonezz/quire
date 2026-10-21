@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { arxivCategoryFromInput, arxivEntryMetaOf, arxivIdOf, arxivItemsOf, arxivQueryUrl, isArxivCategory } from "./arxiv";
+import { arxivCategoryFromInput, arxivEntryMetaOf, arxivIdOf, arxivItemsOf, arxivQueryUrl, arxivRenderingVersion, arxivVersionOf, isArxivCategory } from "./arxiv";
 import { parseFeed } from "./feeds";
 
 describe("arXiv categories", () => {
@@ -30,6 +30,23 @@ describe("arXiv categories", () => {
     expect(arxivIdOf("https://arxiv.org/pdf/2409.12345v3")).toBe("2409.12345");
     expect(arxivIdOf("https://arxiv.org/abs/hep-th/9901001v2")).toBe("hep-th/9901001");
     expect(arxivIdOf("https://example.test/")).toBeUndefined();
+  });
+});
+
+describe("arXiv versions", () => {
+  it("keeps the version a link names as data while the id stays version-free", () => {
+    expect(arxivVersionOf("http://arxiv.org/abs/2409.12345v2")).toBe(2);
+    expect(arxivVersionOf("https://arxiv.org/pdf/hep-th/9901001v12")).toBe(12);
+    expect(arxivVersionOf("https://arxiv.org/html/2409.12345")).toBeUndefined();
+    expect(arxivVersionOf("https://example.test/")).toBeUndefined();
+  });
+
+  it("reads which version a rendering is: the one its URL asks for, else the highest one it stamps on itself", () => {
+    const html = '<a href="/abs/2409.12345v3">abs</a><div class="ltx_page_logo">arXiv:2409.12345v3 [cs.CL] 2 Oct 2026</div><p>Extends arXiv:2409.12345v1 and builds on arXiv:2301.00001v7, 12409.12345v9.</p>';
+    expect(arxivRenderingVersion("2409.12345", ["https://arxiv.org/html/2409.12345"], html)).toBe(3);
+    expect(arxivRenderingVersion("2409.12345", ["https://arxiv.org/abs/2409.12345v1", "https://arxiv.org/abs/2409.12345"], html)).toBe(1);
+    expect(arxivRenderingVersion("hep-th/9901001", ["https://arxiv.org/pdf/hep-th/9901001"], "arXiv:hep-th/9901001v2 6 Jan 1999")).toBe(2);
+    expect(arxivRenderingVersion("2409.12345", ["https://arxiv.org/pdf/2409.12345"], "No stamp, only arXiv:2301.00001v7.")).toBeUndefined();
   });
 });
 

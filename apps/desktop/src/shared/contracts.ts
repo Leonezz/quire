@@ -58,8 +58,14 @@ export interface MaterialRecord extends MaterialSummary {
   /** The page's <link rel="canonical"> when it names another page of the same site (never the site's home page). */
   canonicalUrl?: string;
   pdf?: PdfInfo;
-  /** The raw page as captured (kept next to the record as <id>.html) so the agent can rebuild from it. */
-  capture?: { byteLength: number; mediaType: string };
+  /**
+   * The raw page as captured (kept next to the record as <id>.html) so the agent can rebuild from it.
+   * `sha256` (the normalizer's contentIdentity) and `fetchedAt` say which bytes, read when; captures
+   * from before #27 have neither.
+   */
+  capture?: { byteLength: number; mediaType: string; sha256?: `sha256:${string}`; fetchedAt?: string };
+  /** A paper read from arXiv: the version it is (2 for 2401.01234v2), while `meta.arxivId` stays version-free. */
+  arxivVersion?: number;
   /** What the source declared (citation_* / Dublin Core / JSON-LD / Open Graph / arXiv), never edited. */
   extracted: MaterialMeta;
   /** What the user overrode; the top-level fields already carry the effective values. */

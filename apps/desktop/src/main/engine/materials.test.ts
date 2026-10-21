@@ -66,7 +66,11 @@ describe("MaterialStore capture", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const { id } = result.material;
-    expect(result.material.capture).toEqual({ byteLength: new TextEncoder().encode(article("Cache keys")).byteLength, mediaType: "text/html" });
+    const bytes = new TextEncoder().encode(article("Cache keys"));
+    const { createHash } = await import("node:crypto");
+    // Which bytes, read when (#27): the hash is the normalizer's contentIdentity.
+    expect(result.material.capture).toEqual({ byteLength: bytes.byteLength, mediaType: "text/html", sha256: `sha256:${createHash("sha256").update(bytes).digest("hex")}`, fetchedAt: result.material.fetchedAt });
+    expect(JSON.parse(await readFile(join(root, "materials", `${id}.json`), "utf8"))).toMatchObject({ capture: result.material.capture });
     expect((await stat(join(root, "materials", `${id}.html`))).size).toBe(result.material.capture!.byteLength);
     const text = await store.captureText(id);
     expect(text).toMatch(/^Home\n\n# Cache keys\n\nTwo harnesses cache/);
@@ -373,6 +377,61 @@ describe("MaterialStore identity", () => {
   });
 });
 
+describe("MaterialStore versions", () => {
+  const page = (title: string, body = "") => ({ bytes: new TextEncoder().encode(article(title).replace("</article>", `${body}</article>`)), mediaType: "text/html" });
+
+  it("records which version of an arXiv paper was read: the one its link asks for, else the one the rendering stamps", async () => {
+    const pdf = new Uint8Array(await readFile(join(__dirname, "__fixtures__", "two-pages.pdf")));
+    const answers: Record<string, () => { bytes: Uint8Array; mediaType: string }> = {
+      "/html/2409.12345": () => page("Retrieval Without Regret", '<div class="ltx_page_logo">arXiv:2409.12345v3 [cs.CL] 2 Oct 2026</div><a href="/abs/2409.12345v3">abs</a>'),
+      "/abs/2409.11111v2": () => page("Calibrated abstention", ["v1", "v2", "v3", "v4"].map((v) => `<a href="/abs/2409.11111${v}">[${v}]</a>`).join("")),
+      "/pdf/2409.22222": () => ({ bytes: pdf, mediaType: "application/pdf" }),
+      "/post": () => page("A post", "<p>See arXiv:2409.12345v5.</p>"),
+    };
+    const store = new MaterialStore(root, async (url) => ({ ...answers[url.pathname]!(), finalUrl: url.toString() }));
+    const read = async (link: string) => { const result = await store.openUrl(link); if (!result.ok) throw new Error(result.message); return result.material; };
+    const html = await read("https://arxiv.org/html/2409.12345");
+    expect(html).toMatchObject({ arxivVersion: 3, meta: { arxivId: "2409.12345" } });
+    expect(await read("https://arxiv.org/abs/2409.11111v2")).toMatchObject({ arxivVersion: 2, meta: { arxivId: "2409.11111" } });
+    // A PDF with no stamp in its text layer, and a page elsewhere that quotes a paper, have no version.
+    expect(await read("https://arxiv.org/pdf/2409.22222")).not.toHaveProperty("arxivVersion");
+    expect(await read("https://blog.example.test/post")).not.toHaveProperty("arxivVersion");
+    // The version read stays when the paper is opened by another version's link.
+    expect(await read("https://arxiv.org/abs/2409.12345v4")).toMatchObject({ id: html.id, arxivVersion: 3 });
+    expect(JSON.parse(await readFile(join(root, "materials", `${html.id}.json`), "utf8"))).toMatchObject({ arxivVersion: 3 });
+  });
+
+  it("loads a record written before captures had a hash and papers a version", async () => {
+    const { createHash } = await import("node:crypto");
+    const { mkdir, writeFile } = await import("node:fs/promises");
+    const url = "https://arxiv.org/html/2409.12345";
+    const id = createHash("sha256").update(url).digest("hex").slice(0, 16);
+    const html = article("Retrieval Without Regret");
+    // As alpha.4 wrote it: a capture with no sha256 or fetchedAt, no arxivVersion, no aliases.
+    const fixture = {
+      id, url, finalUrl: url, mediaType: "text/html", fetchedAt: "2026-09-18T12:00:00.000Z", origin: "feed",
+      title: "Retrieval Without Regret", markdown: "Two harnesses cache the tokenised prompt.", readingMinutes: 1,
+      quality: { completeness: "declared_full", conformance: "conformant", identityConfidence: "strong", safety: "safe", warnings: [] }, problems: [],
+      capture: { byteLength: Buffer.byteLength(html), mediaType: "text/html" },
+      extracted: { kind: "preprint", title: "Retrieval Without Regret", arxivId: "2409.12345", url, accessed: "2026-09-18T12:00:00.000Z" },
+      views: [{ id: "web", label: "Web page", url, mediaType: "text/html", status: "ready", fetchedAt: "2026-09-18T12:00:00.000Z", byteLength: Buffer.byteLength(html) }], primaryView: "web",
+    };
+    await mkdir(join(root, "materials"), { recursive: true });
+    await writeFile(join(root, "materials", `${id}.json`), JSON.stringify(fixture));
+    await writeFile(join(root, "materials", `${id}.html`), html);
+    const fetch = countingFetcher(() => html);
+    const store = new MaterialStore(root, fetch);
+    const loaded = await store.get(id);
+    expect(loaded).toMatchObject({ id, title: "Retrieval Without Regret", capture: { byteLength: fixture.capture.byteLength, mediaType: "text/html" } });
+    expect(loaded?.capture).not.toHaveProperty("sha256");
+    expect(loaded).not.toHaveProperty("arxivVersion");
+    expect((await store.list()).map((m) => m.id)).toEqual([id]);
+    expect(await store.openUrl("https://arxiv.org/abs/2409.12345v1")).toMatchObject({ ok: true, existing: true, material: { id } });
+    expect((await store.refreshMetadata(id)).meta.arxivId).toBe("2409.12345");
+    expect(fetch.calls).toEqual([]);
+  });
+});
+
 describe("MaterialStore overrides", () => {
   it("lays the metadata over the record and the list, with tags and rebuiltAs", async () => {
     const db = openDatabase(":memory:");
@@ -559,6 +618,7 @@ describe("MaterialStore corpus import", () => {
     expect(first.failed.map((f) => f.slug)).toEqual(["broken"]);
     expect((await store.list()).map((m) => m.title)).toEqual(["Cache keys"]);
     expect((await store.list())[0]?.fetchedAt).toBe("2026-09-17T00:00:00.000Z");
+    expect((await store.get((await store.list())[0]!.id))?.capture?.fetchedAt).toBe("2026-09-17T00:00:00.000Z");
     const second = await store.importSnapshots(corpus);
     expect(second).toMatchObject({ imported: 0, skipped: 1 });
   });

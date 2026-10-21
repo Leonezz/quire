@@ -9,7 +9,8 @@ import { applyArtifactEdit, artifactContent, artifactInfoOf, artifactSourceOf, a
 import { captureTextOf } from "./capture-text";
 import { FetchError, assertPublicHttpUrl, fetchPage, type Fetcher } from "./fetch";
 import { NORMALIZE_BUDGET, degradedQuality, imageReferencesOf, isHtml, isPdf, markdownParts, mediaTypeForName, pdfContent, pickRepresentations, titleFromHtml, type ContentFields } from "./material-content";
-import { idFor, materialIdOf, storedIdsOf } from "./material-identity";
+import { arxivRenderingVersion } from "./arxiv";
+import { arxivIdOfUrl, idFor, materialIdOf, storedIdsOf } from "./material-identity";
 import { IdentityIndex, identityKeysOf, pageKeysOf, requestKeysOf, withAliases, withNamesOf } from "./material-index";
 import { effectiveOf, searchFieldsOf, summaryOf, withExtracted, withItemMeta, type StoredRecord } from "./material-record";
 import { MATERIAL_VIEW_IDS, failedView, mediaTypeFitsView, mergeViews, primaryContentOf, primaryPdfPath, primaryViewOf, readViewContent, readyView, swapPrimaryFiles, upsertView, viewFilePaths, viewPdfPath, viewsOf, withContent, withPrimaryView, writeViewContent } from "./material-views";
@@ -25,6 +26,18 @@ export { imageUrlsOf, withoutTitleHeading } from "./material-content";
 
 function sha256(bytes: Uint8Array): `sha256:${string}` {
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
+}
+
+/**
+ * A paper read from arXiv with the version it is (#27); any other record as it is. The unversioned links
+ * the inbox fetches name none, so the page's bytes, or a PDF's text layer, are read for its stamp.
+ */
+function withArxivVersion(record: StoredRecord, bytes: Uint8Array): StoredRecord {
+  const id = record.extracted?.arxivId;
+  if (!id || !URL.canParse(record.finalUrl) || arxivIdOfUrl(new URL(record.finalUrl)) !== id) return record;
+  const text = record.mediaType === "application/pdf" ? record.plain ?? "" : new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  const version = arxivRenderingVersion(id, [record.finalUrl, record.url], text);
+  return version === undefined ? record : { ...record, arxivVersion: version };
 }
 
 /** A page the extractor could not read (a bot challenge, an error page), kept as its plain text. */
@@ -156,15 +169,21 @@ export class MaterialStore {
     }
   }
 
-  /** PDFs keep their bytes on disk next to the record; pages keep their capture when the setting says so; everything else is materialized synchronously. */
+  /** Materializes fetched or dropped bytes; a paper read from arXiv records which version it is. */
   private async materializeAny(bytes: Uint8Array, mediaType: string, finalUrl: string, requestedUrl: string, origin: StoredRecord["origin"] = "web", id = materialIdOf(new URL(finalUrl)), item?: MaterialMeta): Promise<StoredRecord> {
+    return withArxivVersion(await this.materializeBytes(bytes, mediaType, finalUrl, requestedUrl, origin, id, item), bytes);
+  }
+
+  /** PDFs keep their bytes on disk next to the record; pages keep their capture, with its hash and fetch time, when the setting says so; everything else is materialized synchronously. */
+  private async materializeBytes(bytes: Uint8Array, mediaType: string, finalUrl: string, requestedUrl: string, origin: StoredRecord["origin"], id: string, item: MaterialMeta | undefined): Promise<StoredRecord> {
     if (!isPdf(bytes, mediaType)) {
-      const record = withExtracted({ ...this.materialize(bytes, mediaType, finalUrl, requestedUrl, origin, id), ...(item ? { itemMeta: item } : {}) }, bytes);
+      const contentIdentity = sha256(bytes);
+      const record = withExtracted({ ...this.materialize(bytes, mediaType, finalUrl, requestedUrl, origin, id, contentIdentity), ...(item ? { itemMeta: item } : {}) }, bytes);
       if (!isHtml(mediaType)) return record;
       if (!this.keepCapture()) { await rm(this.htmlPath(id), { force: true }); return record; }
       await mkdir(this.dir, { recursive: true });
       await writeFile(this.htmlPath(id), bytes);
-      return { ...record, capture: { byteLength: bytes.byteLength, mediaType } };
+      return { ...record, capture: { byteLength: bytes.byteLength, mediaType, sha256: contentIdentity, fetchedAt: record.fetchedAt } };
     }
     const inspection = await inspectPdf(bytes);
     await mkdir(this.dir, { recursive: true });
@@ -179,11 +198,11 @@ export class MaterialStore {
     });
   }
 
-  private materialize(bytes: Uint8Array, mediaType: string, finalUrl: string, requestedUrl: string, origin: StoredRecord["origin"] = "web", id = materialIdOf(new URL(finalUrl))): StoredRecord {
+  private materialize(bytes: Uint8Array, mediaType: string, finalUrl: string, requestedUrl: string, origin: StoredRecord["origin"] = "web", id = materialIdOf(new URL(finalUrl)), contentIdentity = sha256(bytes)): StoredRecord {
     const fetchedAt = new Date().toISOString();
     const base = { id, url: requestedUrl, finalUrl, mediaType, fetchedAt, origin };
     if (isHtml(mediaType)) {
-      const outcome = normalizeArticleCapture({ budget: NORMALIZE_BUDGET, capture: { baseLocator: finalUrl, bytes, contentIdentity: sha256(bytes), mediaType } });
+      const outcome = normalizeArticleCapture({ budget: NORMALIZE_BUDGET, capture: { baseLocator: finalUrl, bytes, contentIdentity, mediaType } });
       if (!outcome.ok) {
         const plain = outcome.fallbackText ?? "";
         return { ...base, title: new URL(finalUrl).hostname, plain, readingMinutes: readingMinutes(plain), quality: degradedQuality(outcome.problems), problems: outcome.problems };
@@ -486,7 +505,7 @@ export class MaterialStore {
         if (await this.findByUrl(new URL(meta.finalUrl))) { result.skipped += 1; continue; }
         const bytes = new Uint8Array(gunzipSync(await readFile(join(corpusDir, slug, "page.html.gz"))));
         const record = await this.materializeAny(bytes, "text/html", meta.finalUrl, meta.url);
-        await this.save({ ...record, fetchedAt: meta.fetchedAt });
+        await this.save({ ...record, fetchedAt: meta.fetchedAt, ...(record.capture ? { capture: { ...record.capture, fetchedAt: meta.fetchedAt } } : {}) });
         result.imported += 1;
       } catch (error) {
         result.failed.push({ slug, message: error instanceof Error ? error.message : String(error) });

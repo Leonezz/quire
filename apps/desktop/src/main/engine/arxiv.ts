@@ -34,10 +34,30 @@ export function arxivSourceTitle(category: string): string {
   return `arXiv ${category}`;
 }
 
-/** "2409.12345" from an abs / pdf / html URL or an Atom id, with any version suffix removed. */
+const ARXIV_LINK = /arxiv\.org\/(?:abs|pdf|html)\/([a-z-]+\/\d{7}|\d{4}\.\d{4,5})(?:v(\d+))?/i;
+
+/** "2409.12345" from an abs / pdf / html URL or an Atom id, with any version suffix removed (arxivVersionOf keeps it). */
 export function arxivIdOf(link: string): string | undefined {
-  const match = /arxiv\.org\/(?:abs|pdf|html)\/([a-z-]+\/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?/i.exec(link);
-  return match?.[1];
+  return ARXIV_LINK.exec(link)?.[1];
+}
+
+/** The version a link names, 2 for …/abs/2409.12345v2; undefined for an unversioned link, which arXiv answers with the latest. */
+export function arxivVersionOf(link: string): number | undefined {
+  const version = ARXIV_LINK.exec(link)?.[2];
+  return version === undefined ? undefined : Number(version);
+}
+
+/**
+ * Which version of paper `id` a rendering is (#27): the one its URL asks for, else the highest one it
+ * stamps on itself ("arXiv:2409.12345v2 [cs.CL]" in the margin, its links to /abs/2409.12345v2), since
+ * the unversioned links the app fetches are answered with the latest.
+ */
+export function arxivRenderingVersion(id: string, urls: readonly string[], text: string): number | undefined {
+  const asked = urls.find((url) => arxivIdOf(url) === id && arxivVersionOf(url) !== undefined);
+  if (asked) return arxivVersionOf(asked);
+  const stamp = new RegExp(`(?<![\\w.])${id.replace(/[.*+?^${}()|[\]\\/]/g, "\\$&")}v(\\d+)`, "g");
+  const versions = [...text.matchAll(stamp)].map(([, version]) => Number(version));
+  return versions.length > 0 ? Math.max(...versions) : undefined;
 }
 
 export function arxivAbsUrl(id: string): string { return `https://arxiv.org/abs/${id}`; }
