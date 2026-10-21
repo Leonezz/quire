@@ -56,6 +56,18 @@ describe("extractMetadata", () => {
     });
   });
 
+  it("drops the site's side of a declared title: the side the extractor left out, or og:site_name", () => {
+    const titleOf = (head: string, extracted: string) =>
+      extractMetadata({ html: `<html><head>${head}</head></html>`, url: "https://docs.example.test/a/b", mediaType: "text/html", origin: "web", fetchedAt: FETCHED, fallback: { title: extracted } }).title;
+    expect(titleOf('<meta property="og:title" content="Access Foundry Models and Other Language Models Through a Gateway - Azure Architecture Center">', "Access Foundry Models and other language models through a gateway"))
+      .toBe("Access Foundry Models and Other Language Models Through a Gateway");
+    expect(titleOf('<meta property="og:title" content="Systems Notes | Cache keys">', "Cache keys")).toBe("Cache keys");
+    expect(titleOf('<meta property="og:title" content="Cache keys · Systems Notes"><meta property="og:site_name" content="Systems Notes">', "Cache keys, revisited")).toBe("Cache keys");
+    // Neither side is the extractor's title nor the site's name, or the extractor kept the whole title: kept as declared.
+    expect(titleOf('<meta property="og:title" content="Rust 2024 - What changed">', "Rust 2024 edition notes")).toBe("Rust 2024 - What changed");
+    expect(titleOf('<meta property="og:title" content="Rust 2024 - What changed"><meta property="og:site_name" content="What changed">', "Rust 2024 - what changed")).toBe("Rust 2024 - What changed");
+  });
+
   it("builds the layer from the extractor's fallback alone, splitting the byline and inferring the kind from origin and media type", () => {
     const fallback = { title: "Attention is not all you need", byline: "By A. Researcher, B. Author & C. Writer · D. Editor", publishedAt: "2024-05-12T00:00:00.000Z", lang: "en" };
     expect(extractMetadata({ url: "https://file.local/paper.pdf", mediaType: "application/pdf", origin: "file", fetchedAt: FETCHED, fallback })).toEqual({

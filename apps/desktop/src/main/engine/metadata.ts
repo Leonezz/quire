@@ -26,6 +26,8 @@ const ITEM_FIRST: readonly (keyof MaterialMeta)[] = ["creators", "abstract", "ar
 const MERGED_FIELDS: readonly (keyof MaterialMeta)[] = ["title", "shortTitle", "creators", "abstract", "publication", "volume", "issue", "pages", "publisher", "place", "edition", "series", "date", "language", "doi", "arxivId", "isbn", "issn", "extra"];
 const MAX_CREATORS = 50;
 const DOI = /^10\.\d{4,9}\/\S+$/;
+/** The separators of "Title - Site" / "Site | Title"; captured so the kept side reads as declared. */
+const TITLE_SEPARATOR = /(\s+(?:\||–|—|-|·|»|::)\s+)/u;
 
 function isEmpty(value: unknown): boolean {
   return value === undefined || value === "" || (Array.isArray(value) && value.length === 0);
@@ -59,6 +61,31 @@ export function normalizeArxivId(raw: string | undefined): string | undefined {
   const text = raw?.trim().replace(/^arxiv:\s*/i, "");
   if (!text) return undefined;
   return arxivIdOf(`arxiv.org/abs/${text}`) ?? text;
+}
+
+function comparableTitle(value: string): string {
+  return value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+/**
+ * A declared title without the site's side ("… - Azure Architecture Center", "Site | …"): the side that is
+ * what the extractor kept as the title, else the one that is og:site_name. Anything else stays as declared.
+ */
+function withoutSiteSide(title: string, extracted: string | undefined, siteName: string | undefined): string {
+  const tokens = title.split(TITLE_SEPARATOR);
+  if (tokens.length < 3) return title;
+  const kept = extracted ? comparableTitle(extracted) : "";
+  if (kept && comparableTitle(title) === kept) return title;
+  for (let end = 1; kept && end < tokens.length; end += 2) {
+    const head = tokens.slice(0, end).join("");
+    const tail = tokens.slice(end + 1).join("");
+    if (comparableTitle(head) === kept) return head.trim();
+    if (comparableTitle(tail) === kept) return tail.trim();
+  }
+  const site = siteName ? comparableTitle(siteName) : "";
+  if (site && comparableTitle(tokens[tokens.length - 1]!) === site) return tokens.slice(0, -2).join("").trim();
+  if (site && comparableTitle(tokens[0]!) === site) return tokens.slice(2).join("").trim();
+  return title;
 }
 
 /** "By Ada Lovelace, Charles Babbage and Alan Turing" → three authors. */
@@ -150,8 +177,9 @@ export function extractMetadata(input: ExtractInput): MaterialMeta {
     ...(fallback.publishedAt ? { date: fallback.publishedAt } : {}),
     ...(fallback.lang ? { language: fallback.lang } : {}),
   };
-  const { date: rawDate, doi: rawDoi, arxivId: rawArxivId, publication: declaredPublication, creators: rawCreators, ...rest } =
+  const { title: rawTitle, date: rawDate, doi: rawDoi, arxivId: rawArxivId, publication: declaredPublication, creators: rawCreators, ...rest } =
     mergeLayers([...page.layers, fromUrl ? { arxivId: fromUrl } : {}, pick(item, ITEM_FIRST), fallbackLayer, item ?? {}]);
+  const title = rawTitle ? withoutSiteSide(rawTitle, fallback.title, page.siteName) : undefined;
   const date = normalizeDate(rawDate);
   const doi = normalizeDoi(rawDoi);
   const arxivId = normalizeArxivId(rawArxivId);
@@ -161,6 +189,7 @@ export function extractMetadata(input: ExtractInput): MaterialMeta {
   return {
     ...rest,
     kind,
+    ...(title ? { title } : {}),
     ...(date ? { date } : {}), ...(doi ? { doi } : {}), ...(arxivId ? { arxivId } : {}),
     ...(publication ? { publication } : {}),
     ...(creators.length > 0 ? { creators } : {}),
