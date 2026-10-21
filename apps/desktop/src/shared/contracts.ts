@@ -215,7 +215,8 @@ export type ItemDecision = "queue" | "dismiss" | "unqueue" | "undismiss";
 export type SourceDetection =
   | { kind: "feed"; url: string; title?: string }
   | { kind: "arxiv"; category: string; title: string }
-  | { kind: "page"; url: string };
+  /** A page to read; `feed` is the feed it declares, offered as a subscription beside reading. */
+  | { kind: "page"; url: string; feed?: string };
 
 export type AddSourceResult =
   | { ok: true; source: SourceRecord; added: number }

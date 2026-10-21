@@ -44,6 +44,30 @@ describe("AddSheet", () => {
     expect(onSubmit).toHaveBeenCalledWith("https://example.org/post");
   });
 
+  it("holds a page that declares a feed: reading it is the next step, subscribing to its feed the other", async () => {
+    const page = { kind: "page" as const, url: "https://example.org/docs/guide", feed: "https://example.org/rss.xml" };
+    api.read = mockRead({ detectSource: vi.fn(async () => page), addSource: vi.fn(async () => ({ ok: true as const, source, added: 3 })) });
+    const { input, form, onSubmit, onSubscribed } = setup();
+    fireEvent.change(input, { target: { value: page.url } });
+    await act(async () => { fireEvent.submit(form); await flush(); });
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(screen.getByRole("status").textContent).toContain("Page · example.org");
+    expect(screen.getByRole("button", { name: "Read" })).toBeTruthy();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Subscribe to example.org" })); await flush(); });
+    expect(api.read.addSource).toHaveBeenCalledWith("https://example.org/rss.xml");
+    expect(onSubscribed).toHaveBeenCalledWith({ source, added: 3 });
+  });
+
+  it("reads a page that declares a feed when the field is submitted again", async () => {
+    api.read = mockRead({ detectSource: vi.fn(async () => ({ kind: "page" as const, url: "https://example.org/docs/guide", feed: "https://example.org/rss.xml" })) });
+    const { input, form, onSubmit } = setup();
+    fireEvent.change(input, { target: { value: "https://example.org/docs/guide" } });
+    await act(async () => { fireEvent.submit(form); await flush(); });
+    await act(async () => { fireEvent.submit(form); await flush(); });
+    expect(onSubmit).toHaveBeenCalledWith("https://example.org/docs/guide");
+    expect(api.read.addSource).not.toHaveBeenCalled();
+  });
+
   it("detects a feed, offers to subscribe, and shows a refused subscription in the field", async () => {
     api.read = mockRead({
       detectSource: vi.fn(async () => ({ kind: "feed" as const, url: "https://example.org/feed.xml", title: "Example" })),

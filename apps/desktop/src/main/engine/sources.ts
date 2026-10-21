@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 import type { SourceDetection, SourceKind, SourceRecord } from "../../shared/contracts";
 import { arxivCategoryFromInput, arxivSourceTitle } from "./arxiv";
 import type { Database } from "./db";
-import { FEED_ACCEPT, assertPublicHttpUrl, type Fetcher } from "./fetch";
+import { FEED_ACCEPT, FetchError, assertPublicHttpUrl, type Fetcher } from "./fetch";
 import type { ItemStore } from "./items";
 
 export const DEFAULT_INTERVAL_MINUTES = 30;
@@ -123,6 +123,23 @@ export function alternateFeedOf(html: string, baseUrl: string): string | undefin
   try { return new URL(chosen.href, baseUrl).toString(); } catch { return undefined; }
 }
 
+/** A site's front page, or the section its feed lives under (/blog/ for /blog/feed.xml), stands for the feed; any other page is read. */
+function isFeedHome(pageUrl: string, feedUrl: string): boolean {
+  const page = new URL(pageUrl);
+  const feed = new URL(feedUrl);
+  const home = page.pathname.replace(/index\.html?$/i, "");
+  if (page.search !== "" || !home.endsWith("/")) return false;
+  return home === "/" || (feed.origin === page.origin && feed.pathname.startsWith(home));
+}
+
+/** The feed a page offers beside reading, or none when the app would refuse to fetch it (localhost, a private host). */
+function offeredFeed(url: string): string | undefined {
+  try { return assertPublicHttpUrl(url).toString(); } catch (error) {
+    if (error instanceof FetchError) return undefined;
+    throw error;
+  }
+}
+
 /**
  * What a pasted string is. arXiv categories never touch the network; URLs are fetched once
  * with a feed-first accept header, and an HTML page is searched for its declared feed.
@@ -140,9 +157,22 @@ export async function detectSource(input: string, fetch: Fetcher): Promise<Sourc
   }
   const alternate = alternateFeedOf(head, page.finalUrl);
   if (alternate) {
+    if (!isFeedHome(page.finalUrl, alternate)) {
+      const feed = offeredFeed(alternate);
+      return { kind: "page", url: page.finalUrl, ...(feed ? { feed } : {}) };
+    }
     assertPublicHttpUrl(alternate);
     const title = htmlTitleOf(head);
     return { kind: "feed", url: alternate, ...(title ? { title } : {}) };
   }
   return { kind: "page", url: page.finalUrl };
+}
+
+/** What subscribing to a detection adds: the feed, the feed a page declares, or the arXiv category; nothing for a bare page. */
+export function subscriptionOf(detection: SourceDetection): SourceInput | undefined {
+  switch (detection.kind) {
+    case "arxiv": return { kind: "arxiv", locator: detection.category, title: detection.title };
+    case "feed": return { kind: "feed", locator: detection.url, title: detection.title ?? new URL(detection.url).hostname };
+    case "page": return detection.feed ? { kind: "feed", locator: detection.feed, title: new URL(detection.feed).hostname } : undefined;
+  }
 }

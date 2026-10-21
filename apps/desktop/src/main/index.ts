@@ -10,7 +10,7 @@ import type { AddSourceResult, AgentContext, AgentEvent, AgentRequest, AgentTask
 import { MAX_BYTES, fetchPage } from "./engine/fetch";
 import { DATABASE_FILE, openDatabase } from "./engine/db";
 import { ItemStore } from "./engine/items";
-import { SourceStore, detectSource } from "./engine/sources";
+import { SourceStore, detectSource, subscriptionOf } from "./engine/sources";
 import { EventStore } from "./engine/events";
 import { syncDue, syncSource } from "./engine/sync";
 import { Scheduler } from "./engine/scheduler";
@@ -145,12 +145,11 @@ async function addSource(input: string): Promise<AddSourceResult> {
   let detection;
   try { detection = await detectSource(input, fetchPage); }
   catch (error) { return { ok: false, code: "DETECT_FAILED", message: error instanceof Error ? error.message : String(error) }; }
-  if (detection.kind === "page") return { ok: false, code: "NOT_A_FEED", message: `${detection.url} is a page without a feed. Paste its feed URL, or open the page itself in the library.` };
+  const subscription = subscriptionOf(detection);
+  if (!subscription) return { ok: false, code: "NOT_A_FEED", message: `${input.trim()} is a page without a feed. Paste its feed URL, or open the page itself in the library.` };
   let created;
   try {
-    created = detection.kind === "arxiv"
-      ? sources.add({ kind: "arxiv", locator: detection.category, title: detection.title })
-      : sources.add({ kind: "feed", locator: detection.url, title: detection.title ?? new URL(detection.url).hostname });
+    created = sources.add(subscription);
   } catch (error) { return { ok: false, code: "SOURCE_EXISTS", message: error instanceof Error ? error.message : String(error) }; }
   const synced = await syncSource(created, { fetch: fetchPage, sources, items });
   broadcast("sources:changed");

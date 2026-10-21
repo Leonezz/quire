@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { openDatabase } from "./db";
 import type { FetchedPage, Fetcher } from "./fetch";
 import { ItemStore } from "./items";
-import { SourceStore, alternateFeedOf, detectSource } from "./sources";
+import { SourceStore, alternateFeedOf, detectSource, subscriptionOf } from "./sources";
 
 const fixture = (name: string) => readFile(join(__dirname, "__fixtures__", name));
 
@@ -73,15 +73,46 @@ describe("detectSource", () => {
     expect(fetch.calls[0]).toContain("application/rss+xml,application/atom+xml");
   });
 
-  it("finds the declared feed of an HTML page, preferring Atom, and resolves relative hrefs", async () => {
+  it("finds the declared feed of a site's front page or the section it lives under, preferring Atom, and resolves relative hrefs", async () => {
     const html = `<!doctype html><html><head><title>Systems Notes — home</title>
       <link rel="stylesheet" href="/x.css">
       <link rel="alternate" type="application/rss+xml" title="RSS" href="/feed.xml">
       <link rel="alternate" type="application/atom+xml" title="Atom" href="feed.atom"></head><body></body></html>`;
-    const fetch = answering({ "https://systems.example.test/blog/": { bytes: html, mediaType: "text/html" } });
+    const fetch = answering({
+      "https://systems.example.test/": { bytes: html, mediaType: "text/html" },
+      "https://systems.example.test/blog/": { bytes: html, mediaType: "text/html" },
+    });
+    expect(await detectSource("systems.example.test", fetch)).toEqual({ kind: "feed", url: "https://systems.example.test/feed.atom", title: "Systems Notes — home" });
     expect(await detectSource("https://systems.example.test/blog/", fetch)).toEqual({ kind: "feed", url: "https://systems.example.test/blog/feed.atom", title: "Systems Notes — home" });
     expect(alternateFeedOf('<link rel="alternate" type="application/rss+xml" href="/feed.xml">', "https://a.test/b/")).toBe("https://a.test/feed.xml");
     expect(alternateFeedOf('<link rel="alternate" type="text/html" href="/other">', "https://a.test/")).toBeUndefined();
+  });
+
+  it("reports any other page that declares a feed as a page to read, with the feed to offer", async () => {
+    const html = (title: string) => `<!doctype html><html><head><title>${title}</title>
+      <link rel="alternate" type="application/rss+xml" title="${title}" href="https://developers.example.test/rss.xml"></head><body></body></html>`;
+    const fetch = answering({
+      "https://developers.example.test/api/docs/guides/migrate": { bytes: html("Migrate | API"), mediaType: "text/html" },
+      "https://developers.example.test/blog/": { bytes: html("Blog"), mediaType: "text/html" },
+      "https://developers.example.test/?p=12": { bytes: html("A post"), mediaType: "text/html" },
+    });
+    for (const url of ["https://developers.example.test/api/docs/guides/migrate", "https://developers.example.test/blog/", "https://developers.example.test/?p=12"]) {
+      expect(await detectSource(url, fetch)).toEqual({ kind: "page", url, feed: "https://developers.example.test/rss.xml" });
+    }
+  });
+
+  it("still reads a page whose declared feed cannot be fetched, without offering that feed", async () => {
+    const html = `<!doctype html><html><head><link rel="alternate" type="application/atom+xml" href="http://localhost:4000/feed.xml"></head><body></body></html>`;
+    const fetch = answering({ "https://someone.example.test/2023/05/post.html": { bytes: html, mediaType: "text/html" } });
+    expect(await detectSource("https://someone.example.test/2023/05/post.html", fetch)).toEqual({ kind: "page", url: "https://someone.example.test/2023/05/post.html" });
+  });
+
+  it("subscribes to a detected feed, a page's declared feed or an arXiv category, and to nothing for a page without one", () => {
+    expect(subscriptionOf({ kind: "feed", url: "https://a.test/feed.xml", title: "A" })).toEqual({ kind: "feed", locator: "https://a.test/feed.xml", title: "A" });
+    expect(subscriptionOf({ kind: "feed", url: "https://a.test/feed.xml" })).toEqual({ kind: "feed", locator: "https://a.test/feed.xml", title: "a.test" });
+    expect(subscriptionOf({ kind: "page", url: "https://a.test/post", feed: "https://a.test/rss.xml" })).toEqual({ kind: "feed", locator: "https://a.test/rss.xml", title: "a.test" });
+    expect(subscriptionOf({ kind: "arxiv", category: "cs.CL", title: "arXiv cs.CL" })).toEqual({ kind: "arxiv", locator: "cs.CL", title: "arXiv cs.CL" });
+    expect(subscriptionOf({ kind: "page", url: "https://a.test/post" })).toBeUndefined();
   });
 
   it("reports a plain page and refuses private hosts", async () => {
