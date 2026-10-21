@@ -51,6 +51,8 @@ export function collectReferenceImages(contextOf: typeof precedingContext): Refe
       alt: image.alt || image.title || "",
       width: rect.width, height: rect.height,
       declaredWidth: declared(image.getAttribute("width")), declaredHeight: declared(image.getAttribute("height")),
+      naturalWidth: image.naturalWidth, naturalHeight: image.naturalHeight,
+      ariaHidden: image.closest("[aria-hidden=\"true\"]") !== null,
       top: rect.top + window.scrollY,
       context: position.has(image) ? contextOf(all, position.get(image) as number, CONTEXT_CHARS) : "",
     };
