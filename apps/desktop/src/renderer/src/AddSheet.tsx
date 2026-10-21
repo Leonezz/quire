@@ -11,13 +11,14 @@ function describe(detected: Detected): { line: string; action: string } {
   switch (detected.kind) {
     case "feed": return { line: `Feed · ${detected.title ?? hostOf(detected.url)}`, action: `Subscribe to ${detected.title ?? hostOf(detected.url)}` };
     case "arxiv": return { line: `arXiv category · ${detected.category}`, action: `Subscribe to arXiv ${detected.category}` };
-    case "page": return { line: `Page · ${hostOf(detected.url)}`, action: "Read" };
+    case "page": return { line: `Page · ${hostOf(detected.url)}${detected.feed ? " · its site has a feed" : ""}`, action: "Read" };
   }
 }
 
 /**
  * One field for everything that comes in. Submitting detects what it is (an arXiv category is
- * recognised locally, without the network); a page reads at once, a feed or category offers to subscribe.
+ * recognised locally, without the network); a page reads at once, a feed or category offers to subscribe,
+ * and a page that declares a feed offers reading first and its feed beside it.
  */
 export function AddSheet({ open, busy, error, onClose, onSubmit, onSubscribed }: { open: boolean; busy: boolean; error?: string | undefined; onClose: () => void; onSubmit: (url: string) => void; onSubscribed: (result: { source: SourceRecord; added: number }) => void }) {
   const [value, setValue] = useState("");
@@ -59,12 +60,13 @@ export function AddSheet({ open, busy, error, onClose, onSubmit, onSubscribed }:
       const result = await read.detectSource(input);
       const next = { ...result, input };
       setDetected(next);
-      if (next.kind === "page") act(next);
+      if (next.kind === "page" && !next.feed) act(next);
     } catch (cause: unknown) { setLocalError(cause instanceof Error ? cause.message : "Could not tell what this is."); }
     finally { setPhase("idle"); }
   };
 
   const label = phase === "detecting" ? "Checking…" : phase === "subscribing" ? "Subscribing…" : busy ? "Fetching…" : known ? describe(known).action : "Add";
+  const pageFeed = known?.kind === "page" ? known.feed : undefined;
   return (
     <Sheet isOpen={open} onOpenChange={(next) => { if (!next) close(); }}>
       <SheetDialog title="Add">
@@ -75,6 +77,7 @@ export function AddSheet({ open, busy, error, onClose, onSubmit, onSubscribed }:
           {known ? <p role="status" className="t-text-in m-0 -mt-2 text-[12.5px] text-label-2"><span className="rounded-pill bg-accent-soft px-2 py-px text-[11.5px] font-medium text-accent-text">recognised</span> <span className="ml-1">{describe(known).line}</span></p> : null}
           <SheetFooter>
             <Button variant="quiet" onPress={close} isDisabled={working}>Cancel</Button>
+            {pageFeed ? <Button variant="plain" onPress={() => void subscribe(pageFeed)} isDisabled={working}>Subscribe to {hostOf(pageFeed)}</Button> : null}
             <Button variant="primary" type="submit" isDisabled={working || !input}>{label}</Button>
           </SheetFooter>
         </form>
