@@ -178,12 +178,118 @@ function callouts(document: Document) {
   return changed;
 }
 
+const HEADINGS_IN_FRAGMENT_LINKS = ["h1", "h2", "h3", "h4", "h5", "h6"].map((tag) => `a[href^='#'] > ${tag}`).join(", ");
+const isBlank = (node: Node) => node.nodeType === 8 || (node.nodeType === 3 && (node.textContent ?? "").trim() === "");
+
+/**
+ * A heading wrapped in its own permalink (`<a class="anchor" href="#…"><h2>`, fasterthanli.me's five section
+ * headings) goes with the link when Defuddle removes permalinks. The heading is lifted out with the link's id.
+ */
+function anchorWrappedHeadings(document: Document) {
+  let changed = false;
+  for (const heading of Array.from(document.querySelectorAll(HEADINGS_IN_FRAGMENT_LINKS))) {
+    const link = heading.parentElement;
+    if (!link || link.closest("nav") || !Array.from(link.childNodes).every((node) => node === heading || isBlank(node))) continue;
+    const id = link.getAttribute("id");
+    if (id && !heading.id) {
+      link.removeAttribute("id");
+      heading.setAttribute("id", id);
+    }
+    link.replaceWith(heading);
+    changed = true;
+  }
+  return changed;
+}
+
+const SUBSTACK_FOOTNOTE = "div.footnote[data-component-name='FootnoteToDOM']";
+const childWithClass = (element: Element, token: string) => Array.from(element.children).find((child) => classTokens(child).includes(token));
+
+/**
+ * Substack writes each footnote as its own div (a.footnote-number, then .footnote-content), which no reader
+ * recognises as a footnote list: latent.space's notes became loose "[1]" paragraphs. A run of them becomes one
+ * <section class="footnotes"><ol>, each note an <li> carrying its number's id ("footnote-1").
+ */
+function substackFootnotes(document: Document) {
+  let changed = false;
+  for (const first of Array.from(document.querySelectorAll(SUBSTACK_FOOTNOTE))) {
+    if (!first.parentNode) continue;
+    const run = [first];
+    const between: Node[] = [];
+    for (let node = first.nextSibling; node; node = node.nextSibling) {
+      if (isBlank(node)) between.push(node);
+      else if (node.nodeType === 1 && (node as Element).matches(SUBSTACK_FOOTNOTE)) run.push(node as Element);
+      else break;
+    }
+    // A note without its number's id would have nothing to be referenced by.
+    if (!run.every((note) => childWithClass(note, "footnote-number")?.id)) continue;
+    const list = document.createElement("ol");
+    for (const note of run) {
+      const number = childWithClass(note, "footnote-number")!;
+      const item = document.createElement("li");
+      item.setAttribute("id", number.id);
+      item.append(...Array.from((childWithClass(note, "footnote-content") ?? note).childNodes).filter((child) => child !== number));
+      list.append(item);
+    }
+    const section = document.createElement("section");
+    section.setAttribute("class", "footnotes");
+    section.append(list);
+    first.replaceWith(section);
+    for (const node of [...run.slice(1), ...between]) node.parentNode?.removeChild(node);
+    changed = true;
+  }
+  return changed;
+}
+
+const FOOTNOTE_REFERENCES = ".footnote-anchor, .footnoteRef, .footnote-ref, [role='doc-noteref'], [rel^='footnote']";
+// The class tokens Defuddle's permalink selectors match: a[href^="#"][class*="anchor" i], a[href^="#"][class*="ref" i].
+const PERMALINK_CLASS = /anchor|ref/iu;
+const BACK_REFERENCE = /back|return|reverse/iu;
+
+/** The reference link of a footnote marker, when it points at a note this page holds; a back-reference (rel="footnote-backref") is none. */
+function footnoteReferenceLink(document: Document, marker: Element) {
+  const link = marker.tagName.toUpperCase() === "A" ? marker : marker.querySelector("a[href^='#']");
+  const href = link?.getAttribute("href") ?? "";
+  if (!link || !href.startsWith("#") || link.getAttribute("role") === "doc-backlink") return undefined;
+  if (BACK_REFERENCE.test(`${link.getAttribute("rel") ?? ""} ${link.getAttribute("class") ?? ""}`)) return undefined;
+  return document.getElementById(href.slice(1)) ? link : undefined;
+}
+
+/**
+ * Defuddle removes fragment links whose class holds "anchor" or "ref" as permalinks, and the footnote markers
+ * with them (Substack's footnote-anchor, Pandoc's footnote-ref, colah's footnoteRef). A marker pointing at a note
+ * on the page loses those class tokens, is marked data-footnote-ref and sits in a <sup>.
+ */
+function footnoteReferences(document: Document) {
+  let changed = false;
+  for (const marker of Array.from(document.querySelectorAll(FOOTNOTE_REFERENCES))) {
+    const link = footnoteReferenceLink(document, marker);
+    if (!link || link.hasAttribute("data-footnote-ref")) continue;
+    const kept = classTokens(link).filter((token) => !PERMALINK_CLASS.test(token));
+    if (kept.length > 0) link.setAttribute("class", kept.join(" "));
+    else link.removeAttribute("class");
+    link.setAttribute("data-footnote-ref", "");
+    // Pandoc and colah put the <sup> inside the link; one <sup> around it is enough.
+    const inner = link.children.length === 1 ? link.firstElementChild : null;
+    if (inner?.tagName.toUpperCase() === "SUP" && normalizedText(inner) === normalizedText(link)) inner.replaceWith(...Array.from(inner.childNodes));
+    if (!link.parentElement?.closest("sup")) {
+      const sup = document.createElement("sup");
+      link.replaceWith(sup);
+      sup.append(link);
+    }
+    changed = true;
+  }
+  return changed;
+}
+
 const PREEXTRACTION_PASSES: readonly PreextractionPass[] = [
   { rule: "article.preextract.icon-cells@1", apply: iconLigatureCells },
   { rule: "article.preextract.pseudo-element-classes@1", apply: pseudoElementHiddenClasses },
   { rule: "article.preextract.interactive-placeholders@1", apply: interactivePlaceholders },
   { rule: "article.preextract.image-objects@1", apply: imageObjects },
   { rule: "article.preextract.callouts@1", apply: callouts },
+  { rule: "article.preextract.anchor-headings@1", apply: anchorWrappedHeadings },
+  { rule: "article.preextract.substack-footnotes@1", apply: substackFootnotes },
+  { rule: "article.preextract.footnote-references@1", apply: footnoteReferences },
 ];
 
 /** Runs every pass over the extractor's own copy of the page at `source` and returns the rules of the passes that changed it. */

@@ -794,6 +794,9 @@ function serializeMathMl(root: Nodes, context: Context): string {
   return chunks.join("");
 }
 
+// A note's address: #fn1, #fn-1 or #fn:1 (Pandoc, markdown-it, kramdown), #footnote-1 (Substack), #footnote2-1 (WordPress).
+const FOOTNOTE_HREF = /#(?:reader-)?(?:user-content-)?(?:fn|footnote)(?:[-_:\d]|$)/iu;
+
 function footnoteReference(
   element: Element,
   context: Context,
@@ -811,13 +814,12 @@ function footnoteReference(
           candidate.tagName === "a" &&
           (propertyString(candidate, "role") === "doc-noteref" ||
             hasProperty(candidate, "dataFootnoteRef") ||
-            /#(?:reader-)?(?:user-content-)?fn(?:[-_:]|$)/iu.test(
-              propertyString(candidate, "href") ?? "",
-            )),
+            FOOTNOTE_HREF.test(propertyString(candidate, "href") ?? "")),
       )[0];
-  const identifier = normalizedIdentifier(
-    propertyString(anchor ?? element, anchor ? "href" : "id"),
-  );
+  // Readability writes the reference as an absolute URL of this page; a note on another page is a plain link.
+  const identifier = anchor
+    ? sameDocumentTargetAnchor(propertyString(anchor, "href") ?? "", context.baseUri)
+    : normalizedIdentifier(propertyString(element, "id"));
   if (!identifier) return undefined;
   const label = textContent(anchor ?? element).trim() || identifier;
   return {

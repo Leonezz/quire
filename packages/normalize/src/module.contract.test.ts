@@ -538,6 +538,39 @@ describe("ContentNormalizationModule", () => {
     ]);
   });
 
+  it("pairs #fn1, #footnote-N and same-page URL footnote references with their notes", () => {
+    const result = readerDocumentV2FromHtml({
+      baseUri: "https://example.test/post",
+      html:
+        `<p>A<sup class="footnote-ref"><a href="#fn1" id="fnref1">[1]</a></sup> B<sup><a href="https://example.test/post#fn2">2</a></sup> C<sup><a data-footnote-ref href="#footnote-3">3</a></sup>` +
+        ` D<a role="doc-noteref" href="https://example.test/post#fn4">4</a> E<sup><a href="https://other.test/post#fn5">5</a></sup></p>` +
+        `<section class="footnotes"><ol><li id="fn1"><p>One.</p></li><li id="fn2"><p>Two.</p></li><li id="footnote-3"><p>Three.</p></li><li id="fn4"><p>Four.</p></li></ol></section>`,
+      maxDepth: 40,
+      maxNodes: 10_000,
+      maxOutputBytes: 2 * 1024 * 1024,
+      outputBudgetErrorCode: "SOURCE_ARTICLE_OUTPUT_BUDGET_EXCEEDED",
+    });
+
+    const [paragraph, ...definitions] = result.document.children;
+    expect(paragraph).toEqual({
+      children: [
+        { type: "text", value: "A" },
+        { identifier: "1", label: "[1]", type: "footnoteReference" },
+        { type: "text", value: " B" },
+        { identifier: "2", label: "2", type: "footnoteReference" },
+        { type: "text", value: " C" },
+        { identifier: "3", label: "3", type: "footnoteReference" },
+        { type: "text", value: " D" },
+        { identifier: "4", label: "4", type: "footnoteReference" },
+        { type: "text", value: " E" },
+        // A note on another page is a link, not a footnote of this one.
+        { children: [{ children: [{ type: "text", value: "5" }], title: null, type: "link", url: "https://other.test/post#fn5" }], type: "superscript" },
+      ],
+      type: "paragraph",
+    });
+    expect(definitions.map((node) => node.type === "footnoteDefinition" && node.identifier)).toEqual(["1", "2", "3", "4"]);
+  });
+
   it("carries a callout's kind on its blockquote and keeps plain quotes plain", () => {
     const result = readerDocumentV2FromHtml({
       html: `<blockquote data-callout="key-point"><b>Key point:</b> Stable metrics are not permanent.</blockquote><blockquote data-callout="sidebar"><p>A side note.</p></blockquote><blockquote><p>A quotation.</p></blockquote>`,
@@ -1235,6 +1268,41 @@ describe("ContentNormalizationModule", () => {
     expect(quotes[0]?.callout).toBe("note");
     expect(JSON.stringify(quotes[0])).toContain("Lab tools cannot measure input delay");
     expect(result.article.materialization.provenance.rulesApplied).toContain("article.preextract.callouts@1");
+  });
+
+  it("keeps permalink-wrapped headings and Substack footnotes through extraction", () => {
+    const prose = (topic: string) => `<p>${`The ${topic} section records a bounded result for later review and independent reproduction. `.repeat(6)}</p>`;
+    const footnote = (n: number, text: string) =>
+      `<div data-component-name="FootnoteToDOM" class="footnote"><a id="footnote-${n}" href="#footnote-anchor-${n}" class="footnote-number">${n}</a><div class="footnote-content"><p>${text}</p></div></div>`;
+    const marker = (n: number) => `<span><a data-component-name="FootnoteAnchorToDOM" id="footnote-anchor-${n}" href="#footnote-${n}" class="footnote-anchor">${n}</a></span>`;
+    const html = `<!doctype html><html><body><article>
+      <h1>Structural evidence</h1>
+      ${prose("opening")}
+      <a id="simple-is-a-lie" href="#simple-is-a-lie" class="anchor"><h2>Simple is a lie</h2></a>
+      <p>The title is the least cringe one.${marker(1)} ${"Each result was checked against the original protocol. ".repeat(6)}</p>
+      <a id="parting-words" href="#parting-words" class="anchor"><h2>Parting words</h2></a>
+      <p>The method has limits.${marker(2)} ${"The discussion closes with the open questions of the method. ".repeat(6)}</p>
+      ${footnote(1, "Alternatives considered: Foundation Model Engineer.")}
+      ${footnote(2, "And probably could not explain transformers on a whiteboard.")}
+    </article></body></html>`;
+
+    const result = normalizeArticleCapture(articleCapture(html));
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    const readerV2 = result.article.materialization.representations.find((value) => value.schema === "reader.document.v2");
+    const nodes: { type: string; identifier?: string; children?: unknown[] }[] = [];
+    const walk = (node: { type: string; identifier?: string; children?: unknown[] }) => {
+      nodes.push(node);
+      for (const child of node.children ?? []) walk(child as typeof node);
+    };
+    walk(JSON.parse(readerV2?.content ?? "{}"));
+    expect(nodes.filter((node) => node.type === "heading").map((node) => JSON.stringify(node.children))).toEqual([
+      JSON.stringify([{ type: "text", value: "Simple is a lie" }]),
+      JSON.stringify([{ type: "text", value: "Parting words" }]),
+    ]);
+    expect(nodes.filter((node) => node.type === "footnoteReference").map((node) => node.identifier)).toEqual(["1", "2"]);
+    expect(nodes.filter((node) => node.type === "footnoteDefinition").map((node) => node.identifier)).toEqual(["1", "2"]);
   });
 
   it("removes a duplicate page title even when Readability demotes the source h1", () => {

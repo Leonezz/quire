@@ -118,6 +118,70 @@ describe("preextractArticleDocument", () => {
     expect(document.body.innerHTML).toBe(body);
   });
 
+  it("lifts a heading out of the permalink wrapped around it, giving it the link's id", () => {
+    const document = documentFor(
+      `<a id="simple-is-a-lie" href="#simple-is-a-lie" class="anchor"><h2>Simple is a lie</h2></a>` +
+        `<blockquote><a id="monotonic" href="#monotonic" class="anchor"> <h3>Transparent Monotonic Time support</h3> </a></blockquote>` +
+        `<a href="#parting-words" class="anchor"><h2 id="parting-words">Parting words</h2></a>`,
+    );
+
+    expect(preextractArticleDocument(document, PAGE)).toEqual(["article.preextract.anchor-headings@1"]);
+    expect(document.body.innerHTML).toBe(
+      `<h2 id="simple-is-a-lie">Simple is a lie</h2><blockquote><h3 id="monotonic">Transparent Monotonic Time support</h3></blockquote><h2 id="parting-words">Parting words</h2>`,
+    );
+  });
+
+  it("leaves headings in navigation and links holding more than a heading alone", () => {
+    const body = `<nav><a class="toc-entry" href="#top"><h2 class="toc-header">Contents</h2></a></nav><a href="#more">Read on: <h4>The next part</h4></a><a href="/elsewhere"><h3>Another post</h3></a>`;
+    const document = documentFor(body);
+
+    expect(preextractArticleDocument(document, PAGE)).toEqual([]);
+    expect(document.body.innerHTML).toBe(body);
+  });
+
+  it("marks footnote references so the permalink removal keeps them, each in a <sup>", () => {
+    const document = documentFor(
+      `<p>following work.<a href="#fn1" class="footnoteRef" id="fnref1"><sup>1</sup></a></p>` +
+        `<p>least cringe)<span><a data-component-name="FootnoteAnchorToDOM" id="footnote-anchor-1" href="#footnote-1" class="footnote-anchor">1</a></span></p>` +
+        `<p>scaling<a href="#fn2" class="footnote-ref" id="fnref2" role="doc-noteref"><sup>2</sup></a> works<sup class="footnote-ref"><a href="#fn3" id="fnref3">[3]</a></sup>.</p>` +
+        `<p>soon<a href="#footnote2-4-3216" id="note2-4-3216" rel="footnote2">4</a></p>` +
+        `<ol><li id="fn1">One.</li><li id="footnote-1">Substack.</li><li id="fn2">Two.</li><li id="fn3">Three.</li><li id="footnote2-4-3216">Four.</li></ol>`,
+    );
+
+    expect(preextractArticleDocument(document, PAGE)).toEqual(["article.preextract.footnote-references@1"]);
+    const references = Array.from(document.querySelectorAll("a[data-footnote-ref]"));
+    expect(references.map((reference) => reference.getAttribute("href"))).toEqual(["#fn1", "#footnote-1", "#fn2", "#fn3", "#footnote2-4-3216"]);
+    expect(references.map((reference) => reference.parentElement?.tagName)).toEqual(["SUP", "SUP", "SUP", "SUP", "SUP"]);
+    expect(references.map((reference) => reference.parentElement?.textContent)).toEqual(["1", "1", "2", "[3]", "4"]);
+    expect(references.filter((reference) => /anchor|ref/iu.test(reference.getAttribute("class") ?? ""))).toEqual([]);
+    expect(references.map((reference) => reference.id)).toEqual(["fnref1", "footnote-anchor-1", "fnref2", "fnref3", "note2-4-3216"]);
+    expect(document.querySelector("sup sup, sup > sup")).toBeNull();
+  });
+
+  it("leaves references to a note the page does not hold, back-references and links elsewhere alone", () => {
+    const body =
+      `<p><span role="doc-noteref" id="fnrefzq" class="footnote-reference"><sup><span><a href="#fnzq">[1]</a></span></sup></span></p>` +
+      `<ol><li id="fn1">Note. <a href="#fnref1" rel="footnote-backref">↩</a></li></ol><p id="fnref1">See <a href="https://example.test/other#fn1" class="footnote-ref">1</a></p>`;
+    const document = documentFor(body);
+
+    expect(preextractArticleDocument(document, PAGE)).toEqual([]);
+    expect(document.body.innerHTML).toBe(body);
+  });
+
+  it("folds a run of Substack footnote blocks into one footnote list", () => {
+    const document = documentFor(
+      `<p>The end.</p>` +
+        `<div data-component-name="FootnoteToDOM" class="footnote"><a id="footnote-1" href="#footnote-anchor-1" contenteditable="false" target="_self" class="footnote-number">1</a><div class="footnote-content"><p><span>Alternatives considered.</span></p></div></div>\n` +
+        `<div data-component-name="FootnoteToDOM" class="footnote"><a id="footnote-2" href="#footnote-anchor-2" class="footnote-number">2</a><div class="footnote-content"><p>Second.</p><p>More.</p></div></div>` +
+        `<div class="footnote">Not Substack's.</div>`,
+    );
+
+    expect(preextractArticleDocument(document, PAGE)).toEqual(["article.preextract.substack-footnotes@1"]);
+    expect(document.body.innerHTML).toBe(
+      `<p>The end.</p><section class="footnotes"><ol><li id="footnote-1"><p><span>Alternatives considered.</span></p></li><li id="footnote-2"><p>Second.</p><p>More.</p></li></ol></section><div class="footnote">Not Substack's.</div>`,
+    );
+  });
+
   it("leaves objects of other types, without an http(s) URL, or hidden alone", () => {
     const body =
       `<object type="application/pdf" data="/paper.pdf"></object><object data="/figure.svg"></object><object type="image/tiff" data="/scan.tiff"></object>` +
