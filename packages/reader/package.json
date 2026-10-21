@@ -26,7 +26,7 @@
     "@shikijs/engine-javascript": "4.4.3",
     "@shikijs/langs": "4.4.3",
     "@shikijs/themes": "4.4.3",
-    "approx-string-match": "2.0.1",
+    "approx-string-match": "2.0.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
