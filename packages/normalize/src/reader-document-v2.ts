@@ -472,7 +472,14 @@ function displayEnvironmentRanges(value: string) {
     const end = endStart + terminator.length;
     ranges.push({ ...withDelimiterWrapper(value, start, end), source: value.slice(start, end) });
   }
-  return ranges;
+  // ruder.io also writes <p>\(<br>v_t = …<br>\)</p>: inline delimiters on lines of their own around a formula display it.
+  for (const match of value.matchAll(/\\\([ \t]*\n([\s\S]*?)\n[ \t]*\\\)/gu)) {
+    const start = match.index;
+    const end = start + match[0].length;
+    if (isEscaped(value, start) || ranges.some((range) => start < range.end && range.start < end)) continue;
+    ranges.push({ end, source: match[1] ?? "", start });
+  }
+  return ranges.sort((a, b) => a.start - b.start);
 }
 
 const DISPLAY_ENVIRONMENT_WRAPPERS = [["\\(", "\\)"], ["$$", "$$"], ["$", "$"]] as const;

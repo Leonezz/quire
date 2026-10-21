@@ -356,6 +356,21 @@ describe("ContentNormalizationModule", () => {
     ]);
   });
 
+  it("reads \\( \\) standing on lines of their own around a formula as display math, and leaves inline \\( \\) inline (ruder-optim)", () => {
+    const result = readerDocumentV2FromHtml({
+      html: `<p>\\(<br>\nv_t = \\beta_2 v_{t-1} + (1 - \\beta_2) g_t^2<br>\n\\)</p><p>Instead of using \\(v_t\\) directly, we employ \\(v_{t-1}\\):</p>`,
+      maxDepth: 40,
+      maxNodes: 10_000,
+      maxOutputBytes: 2 * 1024 * 1024,
+      outputBudgetErrorCode: "SOURCE_ARTICLE_OUTPUT_BUDGET_EXCEEDED",
+    });
+
+    expect(result.document.children[0]).toEqual(expect.objectContaining({ display: true, type: "math", value: "v_t = \\beta_2 v_{t-1} + (1 - \\beta_2) g_t^2" }));
+    expect(result.document.children[1]).toEqual(expect.objectContaining({ type: "paragraph" }));
+    expect(JSON.stringify(result.document.children[1])).toContain('"display":false');
+    expect(result.document.children).toHaveLength(2);
+  });
+
   it("does not mistake currency, malformed delimiters, or escaped TeX environments for math", () => {
     const result = readerDocumentV2FromHtml({
       html: `<p>Math $x^2$ and $x + \\$5$. Currency $20 and $30, $20$, $20/$year, shell $PATH/$HOME, $ x$, $x $, $x$2, and inline $$x$$ stay prose.</p>
