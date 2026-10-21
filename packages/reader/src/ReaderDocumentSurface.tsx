@@ -109,8 +109,9 @@ function ownedImageSource(source: string | undefined) {
   if (!source) return undefined;
   if (source.startsWith("blob:")) return source;
   if (source.length > MAX_OWNED_IMAGE_SOURCE_CHARACTERS) return undefined;
+  // The host caches SVG figures too; an SVG shown through <img> runs no script and loads nothing.
   if (
-    /^data:image\/(?:avif|gif|jpeg|png|webp);base64,[a-z\d+/=\s]+$/i.test(
+    /^data:image\/(?:avif|gif|jpeg|png|svg\+xml|webp);base64,[a-z\d+/=\s]+$/i.test(
       source,
     )
   ) {

@@ -1224,6 +1224,43 @@ describe("ReaderDocumentSurface", () => {
     ).toHaveLength(1);
   });
 
+  it("shows a cached SVG figure and still refuses other data URLs", () => {
+    const sources: Record<string, string> = {
+      "https://media.example.test/diagram.svg": "data:image/svg+xml;base64,PHN2Zy8+",
+      "https://media.example.test/page.html": "data:text/html;base64,PHNjcmlwdC8+",
+      "https://media.example.test/encoded.svg": "data:image/svg+xml,%3Csvg%2F%3E",
+    };
+    const surface = renderSurface({
+      fallback: { content: "fallback", format: "plain" },
+      imageSourceFor: (sourceUrl) => sources[sourceUrl],
+      payload: {
+        type: "root",
+        children: [
+          {
+            type: "paragraph",
+            children: Object.keys(sources).map((url) => ({
+              type: "image" as const,
+              url,
+              alt: url,
+              title: null,
+            })),
+          },
+        ],
+      },
+      schema: "reader.document.v1",
+    });
+
+    const resolved = surface.querySelectorAll(
+      'img[data-reader-image="resolved"]',
+    );
+    expect(Array.from(resolved, (image) => image.getAttribute("src"))).toEqual([
+      "data:image/svg+xml;base64,PHN2Zy8+",
+    ]);
+    expect(
+      surface.querySelectorAll('[data-reader-image="unresolved"]'),
+    ).toHaveLength(2);
+  });
+
   it("lazily enhances bounded code and TeX while preserving source fallbacks", async () => {
     const container = document.createElement("div");
     document.body.replaceChildren(container);
