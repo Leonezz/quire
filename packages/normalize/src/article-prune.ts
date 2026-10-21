@@ -41,7 +41,7 @@ const DATE_LINE = /^(?:\S+,\s*)?(?:(?:19|20)\d{2}[-/.年]\s*\d{1,2}[-/.月]\s*\d
 const CHROME_CLASS = /\b(tags?|categories|post-tags|post-meta|entry-meta|share|social|author-box|author-card|bio|related|promo|newsletter|subscribe|cta|breadcrumbs?|kicker|eyebrow)\b|aside|recirc|teaser|sidebar|widget|read-next|more-stories|recommend/iu;
 const META_LINE = /(\b\d+ min(ute)? read\b|\bcomments?\b|\bshare\b|\bposted (on|in|by)\b|\bpublished\b|\bupdated\b|\bestimated reading time\b|\btweet\b)/iu;
 const PERMALINK_CLASS = /anchor|permalink|headerlink|heading-link|hash-link|zola-anchor|header-link|section-link/iu;
-const PERMALINK_TEXT = /^[\s#¶§🔗∞︎⚓]*$/u;
+const PERMALINK_TEXT = /^(?:[\s#¶§🔗∞︎⚓]*|link to this (?:heading|section))$/iu;
 const MAX_TAIL_TRIM_RATIO = 0.4;
 /** A heading with no more text than a byline and a date above it is at the top of the article. */
 const MAX_TEXT_BEFORE_TITLE_HEADING = 200;
@@ -279,14 +279,28 @@ function removeNavigationLists(document: Document, page: string | undefined, rul
   if (changed) rules.push("article.prune.navigation-lists@1");
 }
 
-/** Permalink anchors ("#", "¶", icon-only links) are removed; a heading that is itself a link is unwrapped. */
+/** Permalink anchors ("#", "¶", icon-only links, links to the heading itself) are removed; a heading that is itself a link is unwrapped. */
 function cleanHeadings(document: Document, rules: string[]) {
   let changed = false;
+  const letters = (value: string) => value.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+  const fragmentOf = (href: string) => {
+    const raw = href.includes("#") ? href.slice(href.indexOf("#") + 1) : "";
+    try { return decodeURIComponent(raw); } catch { return raw; } // a malformed escape is compared as written
+  };
+  // A link to its own heading is a permalink whatever its label (joshwcomeau.com: "Link to this heading"), unless its words are what the id was made from.
+  // Extractors absolutize hrefs and the page URL is not known here: "#id" surely means this page, and so does a link that names itself.
+  const linksToOwnHeading = (link: Element, heading: Element, text: string) => {
+    const href = link.getAttribute("href") ?? "";
+    const fragment = fragmentOf(href);
+    if (!fragment) return false;
+    const target = fragment === link.getAttribute("id") || fragment === link.getAttribute("name") || (href.startsWith("#") && fragment === heading.id);
+    return target && !(letters(text) && letters(fragment).includes(letters(text)));
+  };
   for (const heading of Array.from(document.querySelectorAll("h1, h2, h3, h4, h5, h6"))) {
     const headingText = (heading.textContent ?? "").trim();
     for (const link of Array.from(heading.querySelectorAll("a"))) {
       const text = (link.textContent ?? "").trim();
-      const isPermalink = PERMALINK_TEXT.test(text) || PERMALINK_CLASS.test(link.getAttribute("class") ?? "") || link.getAttribute("aria-hidden") === "true";
+      const isPermalink = PERMALINK_TEXT.test(text) || PERMALINK_CLASS.test(link.getAttribute("class") ?? "") || link.getAttribute("aria-hidden") === "true" || linksToOwnHeading(link, heading, text);
       const id = link.getAttribute("id") ?? link.getAttribute("name");
       if (id && !heading.id) heading.setAttribute("id", id);
       if (isPermalink && text !== headingText) { link.remove(); changed = true; continue; }

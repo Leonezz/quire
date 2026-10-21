@@ -222,6 +222,15 @@ function textContent(node: Nodes): string {
   return "";
 }
 
+/** Code text where <br> is a line end: Medium writes <pre><span>line<br/>line</span></pre>. */
+function codeText(node: Nodes): string {
+  if (isText(node)) return node.value;
+  if (isElement(node) && node.tagName === "br") return "\n";
+  if ("children" in node)
+    return node.children.map((child) => codeText(child)).join("");
+  return "";
+}
+
 function elementPath(parentPath: string, element: Element, childIndex: number) {
   return `${parentPath}/${element.tagName}[${childIndex}]`;
 }
@@ -373,25 +382,32 @@ function inlineMathRanges(value: string) {
   return ranges;
 }
 
+/** Text that is only \[…\] / $$…$$ formulas, one display formula per pair: eugeneyan.com writes two in one text run. */
 function displayMathFromDelimitedText(
   value: string,
   context: Context,
-): ReaderV2Math | undefined {
-  const match = /^(?:\\\[([\s\S]*?)\\\]|\$\$([\s\S]*?)\$\$)$/u.exec(
-    value.trim(),
-  );
-  const source = match
-    ?.slice(1)
-    .find((candidate) => candidate !== undefined)
-    ?.trim();
-  return source
-    ? {
+): ReaderV2Math[] | undefined {
+  const sources: string[] = [];
+  let cursor = value.length - value.trimStart().length;
+  while (cursor < value.length) {
+    const opening = value.startsWith("\\[", cursor) ? "\\[" : value.startsWith("$$", cursor) ? "$$" : undefined;
+    if (!opening) return undefined;
+    const end = findNextUnescaped(value, opening === "\\[" ? "\\]" : "$$", cursor + 2);
+    if (end < 0) return undefined;
+    const source = value.slice(cursor + 2, end).trim();
+    if (!source) return undefined;
+    sources.push(source);
+    cursor = end + 2;
+    while (cursor < value.length && /\s/u.test(value[cursor] ?? "")) cursor += 1;
+  }
+  return sources.length
+    ? sources.map((source) => ({
         display: true,
         format: "tex",
         label: null,
         type: "math",
         value: bounded(context, source),
-      }
+      }))
     : undefined;
 }
 
@@ -454,9 +470,28 @@ function displayEnvironmentRanges(value: string) {
     );
     if (endStart < 0) continue;
     const end = endStart + terminator.length;
-    ranges.push({ end, source: value.slice(start, end), start });
+    ranges.push({ ...withDelimiterWrapper(value, start, end), source: value.slice(start, end) });
   }
   return ranges;
+}
+
+const DISPLAY_ENVIRONMENT_WRAPPERS = [["\\(", "\\)"], ["$$", "$$"], ["$", "$"]] as const;
+
+/** ruder.io writes <p>\(<br>\begin{align}…\end{align}<br>\)</p>: the delimiters around an environment belong to the formula, not the prose. */
+function withDelimiterWrapper(value: string, start: number, end: number) {
+  const before = value.slice(0, start).trimEnd();
+  const after = value.slice(end);
+  const afterStart = end + after.length - after.trimStart().length;
+  for (const [opening, closing] of DISPLAY_ENVIRONMENT_WRAPPERS) {
+    const openingStart = before.length - opening.length;
+    if (
+      before.endsWith(opening) &&
+      !isEscaped(value, openingStart) &&
+      value.startsWith(closing, afterStart)
+    )
+      return { end: afterStart + closing.length, start: openingStart };
+  }
+  return { end, start };
 }
 
 function textRunSlice(pieces: TextRunPiece[], start: number, end: number) {
@@ -907,29 +942,64 @@ function phrasingFromElement(
   return phrasingFromChildren(element.children, path, context, insideLink);
 }
 
+function phrasingFromChild(
+  child: RootContent,
+  index: number,
+  parentPath: string,
+  context: Context,
+  insideLink: boolean,
+): ReaderV2PhrasingNode[] {
+  if (isText(child)) return phrasingFromText(child.value, context);
+  if (!isElement(child)) return [];
+  return phrasingFromElement(
+    child,
+    elementPath(parentPath, child, index),
+    context,
+    insideLink,
+  );
+}
+
 function phrasingFromChildren(
   children: RootContent[],
   parentPath: string,
   context: Context,
   insideLink = false,
 ) {
-  const result: ReaderV2PhrasingNode[] = [];
-  children.forEach((child, index) => {
-    if (isText(child)) {
-      result.push(...phrasingFromText(child.value, context));
+  return compactPhrasing(
+    children.flatMap((child, index) =>
+      phrasingFromChild(child, index, parentPath, context, insideLink),
+    ),
+    false,
+  );
+}
+
+/** KaTeX and Pandoc mark display math with a class: <span class="katex-display">, <span class="math display">. */
+function isDisplayMathElement(element: Element) {
+  return (hasClass(element, "math") && hasClass(element, "display")) || hasClass(element, "katex-display");
+}
+
+/** Pandoc writes display math as <p><span class="math display">TeX</span></p>: the formula is a block, and the paragraph splits around it. */
+function flowFromParagraph(element: Element, path: string, context: Context): ReaderV2FlowNode[] {
+  if (!element.children.some((child) => isElement(child) && isDisplayMathElement(child)))
+    return flowFromParagraphPhrasing(phrasingFromChildren(element.children, path, context), context);
+  const result: ReaderV2FlowNode[] = [];
+  let pending: ReaderV2PhrasingNode[] = [];
+  const flush = () => {
+    const phrasing = compactPhrasing(pending, true);
+    if (phrasing.length) result.push(...flowFromParagraphPhrasing(phrasing, context));
+    pending = [];
+  };
+  element.children.forEach((child, index) => {
+    const math = isElement(child) && isDisplayMathElement(child) ? mathFromElement(child, true, context) : undefined;
+    if (math) {
+      flush();
+      result.push(math);
       return;
     }
-    if (!isElement(child)) return;
-    result.push(
-      ...phrasingFromElement(
-        child,
-        elementPath(parentPath, child, index),
-        context,
-        insideLink,
-      ),
-    );
+    pending.push(...phrasingFromChild(child, index, path, context, false));
   });
-  return compactPhrasing(result, false);
+  flush();
+  return result;
 }
 
 function imageFromElement(
@@ -1350,11 +1420,7 @@ function flowFromElement(
       ? displayMathFromDelimitedText(textContent(element), context)
       : undefined;
   if (delimitedDisplayMath) return delimitedDisplayMath;
-  if (element.tagName === "p")
-    return flowFromParagraphPhrasing(
-      phrasingFromChildren(element.children, path, context),
-      context,
-    );
+  if (element.tagName === "p") return flowFromParagraph(element, path, context);
   if (element.tagName === "blockquote")
     return {
       children: flowFromChildren(element.children, path, context),
@@ -1402,7 +1468,7 @@ function flowFromElement(
       lang: boundedNullable(context, languageFromCode(element)),
       meta: null,
       type: "code",
-      value: bounded(context, textContent(element).replace(/\n$/u, "")),
+      value: bounded(context, codeText(element).replace(/\n$/u, "")),
     };
   }
   // Readability leaves <p> inside <font>/<span> on hand-written pages; an inline
@@ -1421,7 +1487,7 @@ function flowFromElement(
       lang: boundedNullable(context, (code && languageFromCode(code)) ?? languageFromCode(element)),
       meta: null,
       type: "code",
-      value: bounded(context, textContent(code ?? element).replace(/\n$/u, "")),
+      value: bounded(context, codeText(code ?? element).replace(/\n$/u, "")),
     };
   }
   if (element.tagName === "figure")
@@ -1429,11 +1495,7 @@ function flowFromElement(
   if (element.tagName === "table")
     return tableFromElement(element, path, context);
   if (element.tagName === "hr") return { type: "thematicBreak" };
-  if (
-    element.tagName === "math" ||
-    ((hasClass(element, "math") || hasClass(element, "katex-display")) &&
-      (hasClass(element, "display") || hasClass(element, "katex-display")))
-  ) {
+  if (element.tagName === "math" || isDisplayMathElement(element)) {
     return mathFromElement(element, true, context);
   }
   if (BLOCK_TAGS.has(element.tagName)) {
@@ -1475,7 +1537,7 @@ function flowFromChildren(
       );
       if (delimitedDisplayMath) {
         flush();
-        result.push(delimitedDisplayMath);
+        result.push(...delimitedDisplayMath);
         return;
       }
       pending.push(...phrasingFromText(child.value, context));

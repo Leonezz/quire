@@ -297,6 +297,65 @@ describe("ContentNormalizationModule", () => {
     ]);
   });
 
+  it("reads back-to-back \\[ \\] formulas as one display formula each (eugeneyan)", () => {
+    const result = readerDocumentV2FromHtml({
+      html: `<div><p>Intro</p>\n\\[R = \\frac{1}{|r|}\\]\n\n\\[F = \\frac{2PR}{P + R}\\]\n<p>\\[a = 1\\] $$b = 2$$</p></div>`,
+      maxDepth: 40,
+      maxNodes: 10_000,
+      maxOutputBytes: 2 * 1024 * 1024,
+      outputBudgetErrorCode: "SOURCE_ARTICLE_OUTPUT_BUDGET_EXCEEDED",
+    });
+
+    expect(result.document.children).toEqual([
+      { children: [{ type: "text", value: "Intro" }], type: "paragraph" },
+      expect.objectContaining({ display: true, type: "math", value: "R = \\frac{1}{|r|}" }),
+      expect.objectContaining({ display: true, type: "math", value: "F = \\frac{2PR}{P + R}" }),
+      expect.objectContaining({ display: true, type: "math", value: "a = 1" }),
+      expect.objectContaining({ display: true, type: "math", value: "b = 2" }),
+    ]);
+  });
+
+  it("reads Pandoc display math inside a paragraph as a display formula (harvard-annotated-transformer)", () => {
+    const result = readerDocumentV2FromHtml({
+      html: `<p><span class="math display">\\mathrm{FFN}(x)=\\max(0, xW_1 + b_1) W_2 + b_2</span></p><p>where <span class="math inline">\\(pos\\)</span> is <span class="math display">\\[PE_{pos}\\]</span> the position.</p>`,
+      maxDepth: 40,
+      maxNodes: 10_000,
+      maxOutputBytes: 2 * 1024 * 1024,
+      outputBudgetErrorCode: "SOURCE_ARTICLE_OUTPUT_BUDGET_EXCEEDED",
+    });
+
+    expect(result.document.children).toEqual([
+      expect.objectContaining({ display: true, format: "tex", type: "math", value: "\\mathrm{FFN}(x)=\\max(0, xW_1 + b_1) W_2 + b_2" }),
+      {
+        children: [
+          { type: "text", value: "where " },
+          expect.objectContaining({ display: false, type: "math", value: "pos" }),
+          { type: "text", value: " is" },
+        ],
+        type: "paragraph",
+      },
+      expect.objectContaining({ display: true, type: "math", value: "PE_{pos}" }),
+      { children: [{ type: "text", value: "the position." }], type: "paragraph" },
+    ]);
+  });
+
+  it("absorbs the \\( \\) or $$ wrapper around a TeX environment instead of printing it (ruder-optim)", () => {
+    const result = readerDocumentV2FromHtml({
+      html: `<p>\\(<br>\n\\begin{align}<br>\nv_t &amp;= \\gamma v_{t-1}<br>\n\\end{align}<br>\n\\)</p><p>Before $$<br>\\begin{equation}y = 1\\end{equation}<br>$$ after</p>`,
+      maxDepth: 40,
+      maxNodes: 10_000,
+      maxOutputBytes: 2 * 1024 * 1024,
+      outputBudgetErrorCode: "SOURCE_ARTICLE_OUTPUT_BUDGET_EXCEEDED",
+    });
+
+    expect(result.document.children).toEqual([
+      expect.objectContaining({ display: true, type: "math", value: "\\begin{align}\n v_t &= \\gamma v_{t-1}\n \\end{align}" }),
+      { children: [{ type: "text", value: "Before" }], type: "paragraph" },
+      expect.objectContaining({ display: true, type: "math", value: "\\begin{equation}y = 1\\end{equation}" }),
+      { children: [{ type: "text", value: "after" }], type: "paragraph" },
+    ]);
+  });
+
   it("does not mistake currency, malformed delimiters, or escaped TeX environments for math", () => {
     const result = readerDocumentV2FromHtml({
       html: `<p>Math $x^2$ and $x + \\$5$. Currency $20 and $30, $20$, $20/$year, shell $PATH/$HOME, $ x$, $x $, $x$2, and inline $$x$$ stay prose.</p>
@@ -651,6 +710,47 @@ describe("ContentNormalizationModule", () => {
     expect(result.article.materialization.provenance.rulesApplied).toContain(
       "generic.syntax-highlight-table-to-code@1",
     );
+  });
+
+  it("keeps the lines of a code block whose lines are separated by <br> (Medium)", () => {
+    const substantialBody =
+      "The article explains why the backward pass matters and walks through each gradient by hand. ".repeat(
+        8,
+      );
+    const html = `<!doctype html><html lang="en"><body><main><article>
+      <h1>Yes you should understand backprop</h1>
+      <p>${substantialBody}</p>
+      <pre class="pp pq"><span id="a9c1" class="qe qf">def clipped_error(x): <br/>  return tf.select(tf.abs(x) &lt; 1.0, <br/>                   0.5 * tf.square(x), <br/>                   tf.abs(x) - 0.5)</span></pre>
+      <p>${substantialBody}</p>
+      <pre><code class="language-python">z = np.maximum(0, x)<br>dW = np.outer(z &gt; 0, x)</code></pre>
+    </article></main></body></html>`;
+
+    const result = normalizeArticleCapture(
+      articleCapture(html, "https://medium.example.test/yes-you-should-understand-backprop"),
+    );
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    const representations = result.article.materialization.representations;
+    const document = JSON.parse(
+      representations.find((value) => value.schema === "reader.document.v2")?.content ?? "{}",
+    );
+    const agent = representations.find((value) => value.schema === "agent.gfm.v1");
+    const expectedCode = [
+      "def clipped_error(x): ",
+      "  return tf.select(tf.abs(x) < 1.0, ",
+      "                   0.5 * tf.square(x), ",
+      "                   tf.abs(x) - 0.5)",
+    ].join("\n");
+
+    expect(document.children).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "code", value: expectedCode }),
+        expect.objectContaining({ lang: "python", type: "code", value: "z = np.maximum(0, x)\ndW = np.outer(z > 0, x)" }),
+      ]),
+    );
+    expect(agent?.content).toContain(`\`\`\`\n${expectedCode}\n\`\`\``);
+    expect(agent?.content).toContain("```python\nz = np.maximum(0, x)\ndW = np.outer(z > 0, x)\n```");
   });
 
   it("keeps Typecho article content and math while excluding page chrome from every representation", () => {

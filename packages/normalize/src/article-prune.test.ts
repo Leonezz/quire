@@ -58,6 +58,27 @@ describe("pruneArticleChrome", () => {
     expect(result.content).toContain("<h2>GPS basics</h2>");
   });
 
+  it("strips a permalink whose text is a label, found by its href pointing at the heading itself (joshwcomeau)", () => {
+    const icon = `<svg viewBox="0 0 24 24"><line x1="2" y1="8" x2="22" y2="8"></line></svg>`;
+    const html = [
+      `<h2 id="the-core-react-loop"><a id="the-core-react-loop-1" href="#the-core-react-loop-1" class="aax5dne"><span>${icon}<span>Link to this heading</span></span></a>The core React loop</h2>`,
+      `<h3 id="pure"><a href="#pure" class="q1">Jump here</a>Pure components</h3>`,
+      `<h3 id="memo"><a id="memo-2" href="https://x.test/post/#memo-2">Lien vers cette section</a>Memo</h3>`,
+      `<h3 id="context"><a class="x9" href="/other">Link to this section</a>Context</h3>`,
+      // Not permalinks: another page's section, and the heading's own words linked to it.
+      `<h3 id="props"><a href="https://x.test/docs#props">Props</a> and state</h3>`,
+      `<h3 id="installation-optional"><a href="#installation-optional">Installation</a> (optional)</h3>`,
+    ].join("") + body(5);
+    const result = pruneArticleChrome(html);
+    expect(result.rulesApplied).toEqual(["article.prune.heading-anchors@1"]);
+    expect(result.content).toContain('<h2 id="the-core-react-loop">The core React loop</h2>');
+    expect(result.content).toContain('<h3 id="pure">Pure components</h3>');
+    expect(result.content).toContain('<h3 id="memo">Memo</h3>');
+    expect(result.content).toContain('<h3 id="context">Context</h3>');
+    expect(result.content).toContain('<h3 id="props"><a href="https://x.test/docs#props">Props</a> and state</h3>');
+    expect(result.content).toContain('<h3 id="installation-optional"><a href="#installation-optional">Installation</a> (optional)</h3>');
+  });
+
   it("unwraps a single-column layout table around an essay but leaves a small data table alone", () => {
     const essay = `<table><tr><td><font size="2">July 2023<br><br>${"Great work needs curiosity. ".repeat(20)}<br><br>${"Second paragraph. ".repeat(20)}</font></td></tr></table>`;
     const data = `<table><tr><td>A</td></tr></table>`;
