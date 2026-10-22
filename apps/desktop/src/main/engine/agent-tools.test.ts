@@ -50,6 +50,15 @@ describe("agentTools", () => {
     expect(artifact).not.toContain("tell the reader the id");
     expect(agentTools.find((t) => t.name === "library_import")?.description).toContain("cite the new material as [id]");
   });
+
+  it("tells the model the reader titles the artifact and sets html in its column, wide only on request", () => {
+    for (const name of ["artifact_write", "artifact_rewrite"]) {
+      const description = agentTools.find((t) => t.name === name)?.description ?? "";
+      expect(description).toContain("do not open an html or react artifact with an <h1> or heading that restates the title");
+      expect(description).toContain("leave the body's width and margins to Quire");
+      expect(description).toContain("<body data-wide> only for a wide table or chart");
+    }
+  });
 });
 
 describe("createToolHandler", () => {
