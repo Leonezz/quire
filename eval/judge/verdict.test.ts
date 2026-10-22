@@ -2,7 +2,7 @@
 // invalid, the cases where an image or embed claim stands, and the per-layer and overall verdicts.
 import { describe, expect, it } from "vitest";
 import type { Embed, ReferenceImage, RenderedCode, RenderedImage, RenderedTable } from "../render/types";
-import { BOUNDARY_SERVICES, boundaryService, plainText, embedId, evidenceOccurs, inArticle, isBoundaryExternalDrop, extractedKeepsLineBreaks, hasEmptyCells, layerByFacts, layerVerdicts, LARGE_IMAGE_PX, normalizeIssue, overallVerdict, validateIssue, type FactInventory, type Invalidity, type JudgeIssue } from "./verdict";
+import { BOUNDARY_SERVICES, boundaryService, plainText, embedId, evidenceOccurs, inArticle, isBoundaryExternalDrop, extractedKeepsLineBreaks, hasEmptyCells, layerByFacts, layerVerdicts, LARGE_IMAGE_PX, MOJIBAKE, normalizeIssue, overallVerdict, readerShowsSection, validateIssue, type FactInventory, type Invalidity, type JudgeIssue } from "./verdict";
 
 const TEXTS = ["SOURCE: Figure 3 shows the loss. By Ada.", "EXTRACTED: # Title", "RENDERED: Figure 1: the setup"];
 const reader = (id: string, broken = false): RenderedImage => ({ id, tile: 1, src: `https://x.test/${id}.png`, alt: "", caption: "", broken });
@@ -17,6 +17,8 @@ const facts = (overrides: Partial<FactInventory> = {}): FactInventory => ({
   tables: [table("t1", 20, 13), table("t2", 8, 0), table("t3", 3, 3)],
   code: [code("c1", true, "z = np.maximum(0, np.dot(W, x)) # forward passdW = np.outer(z > 0, x)"), code("c2", false, "import os")],
   extracted: "# Title\n\nTraining setup\n\n```python\nz = np.maximum(0, np.dot(W, x)) # forward pass\ndW = np.outer(z > 0, x) # backward\n```\n",
+  source: TEXTS[0],
+  fullRenderedText: TEXTS[2],
   sent: { rendered: 3, reference: 2 },
   ...overrides,
 });
@@ -80,6 +82,19 @@ describe("validateIssue", () => {
     expect(validateIssue(issue({ kind: "missing_content", refs: ["r1"] }), TEXTS, facts())).toBeUndefined();
   });
 
+  it("(b) a major missing-content claim citing only original images is an image claim: matched ones are in the reader, wherever they sit (#24)", () => {
+    // karpathy-rnn: "omits the sections that follow", citing o5–o12, all in the reader as r5–r12 below the tiles sent.
+    const below = facts({ rendered: [reader("r5"), { ...reader("r6"), tile: null }], reference: [original("o5", "r5"), { ...original("o6", "r6"), tile: null }] });
+    const sections = issue({ kind: "missing_content", refs: ["o5", "o6"], note: "the sections after this point are missing" });
+    expect(validateIssue(sections, TEXTS, below)).toEqual({ reason: "contradicts-image-facts", detail: "o5 is in the reader as r5, not broken; o6 is in the reader as r6, not broken" });
+    // An unmatched original, or one matched by a broken reader image, backs it.
+    expect(validateIssue(issue({ kind: "missing_content", refs: ["o1", "o3"] }), TEXTS, facts())).toBeUndefined();
+    expect(validateIssue(issue({ kind: "missing_content", refs: ["o2"] }), TEXTS, facts())).toBeUndefined();
+    // Not only images: an unshown embed it cites is its own fact; minor (a caption) is never decided by images.
+    expect(validateIssue(issue({ kind: "missing_content", refs: ["o1", "e1"] }), TEXTS, facts())).toBeUndefined();
+    expect(validateIssue(issue({ kind: "missing_content", severity: "minor", refs: ["o1"] }), TEXTS, facts())).toBeUndefined();
+  });
+
   it("(b) an embed claim citing only embeds the reader shows contradicts the facts; one unshown embed is enough to stand", () => {
     expect(embedId(0)).toBe("e1");
     const embedIssue = (refs: string[]) => issue({ kind: "missing_content", refs, note: "the video is gone" });
@@ -93,6 +108,77 @@ describe("validateIssue", () => {
     expect(reasonOf(validateIssue(issue({ evidence: "nope", where: { image: "rendered", tile: 9 }, refs: ["r1"] }), TEXTS, facts()))).toBe("evidence-not-verbatim");
     expect(reasonOf(validateIssue(issue({ where: { image: "rendered", tile: 9 }, refs: ["r9"] }), TEXTS, facts()))).toBe("tile-not-sent");
     expect(reasonOf(validateIssue(issue({ refs: ["r9", "r1"] }), TEXTS, facts()))).toBe("unknown-ref");
+  });
+});
+
+describe("missing text the reader shows (#24)", () => {
+  // ruder-optim, shortened: SOURCE as captureTextOf writes it, and the reader's text without the challenge bullets.
+  const SOURCE = [
+    "# An overview of gradient descent optimization algorithms", "",
+    "## Challenges", "",
+    "Vanilla mini-batch gradient descent, however, does not guarantee good convergence, but offers a few challenges that need to be addressed:", "",
+    "- Choosing a proper learning rate can be difficult.",
+    "- Learning rate schedules try to adjust the learning rate during training.", "",
+    "## Conclusion", "",
+    "In this blog post, we have initially looked at the three variants of gradient descent.", "",
+    "**Let me know in the comments below.**", "",
+    "# Acknowledgements", "",
+    "Thanks to [Denny Britz](https://twitter.com/dennybritz?ref=ruder.io) and [Cesar Salgado](https://twitter.com/cesarsvs?ref=ruder.io) for reading drafts of this post and providing suggestions.", "",
+    "# Printable version and citation", "",
+    "This blog post is also available as an article on arXiv.",
+  ].join("\n");
+  const READER = ["An overview of gradient descent optimization algorithms", "Challenges", "Vanilla mini-batch gradient descent, however, does not guarantee good convergence, but offers a few challenges that need to be addressed:", "Conclusion", "In this blog post, we have initially looked at the three variants of gradient descent.", "Let me know in the comments below.", "Acknowledgements", "Thanks to Denny Britz and Cesar Salgado for reading drafts of this post and providing suggestions.", "Printable version and citation", "This blog post is also available as an article on arXiv."].join("\n");
+  const shown = facts({ source: SOURCE, fullRenderedText: READER });
+  const missing = (evidence: string, overrides: Partial<JudgeIssue> = {}) => issue({ kind: "missing_content", evidence, refs: [], note: "the extractor omits it", ...overrides });
+  const ACKS = "Thanks to [Denny Britz](https://twitter.com/dennybritz?ref=ruder.io) and [Cesar Salgado](https://twitter.com/cesarsvs?ref=ruder.io) for reading drafts of this post and providing suggestions.";
+
+  it("refutes a claim whose quoted passage the reader shows with the rest of its section", () => {
+    expect(validateIssue(missing(ACKS), [SOURCE, READER], shown)).toEqual({ reason: "contradicts-reader-text", detail: "the reader shows the quoted passage and the rest of its section in the original (RENDERED TEXT, whole)" });
+    expect(readerShowsSection("In this blog post, we have initially looked at the three variants", SOURCE, READER)).toBe(true);
+  });
+
+  it("keeps a claim quoting the text next to what is missing: the paragraph before a dropped list, the last line before a cut", () => {
+    expect(validateIssue(missing("offers a few challenges that need to be addressed:"), [SOURCE, READER], shown)).toBeUndefined();
+    const cut = READER.split("\n").slice(0, 8).join("\n");
+    expect(validateIssue(missing(ACKS, { note: "the article is cut after this" }), [SOURCE, cut], facts({ source: SOURCE, fullRenderedText: cut }))).toBeUndefined();
+    // The next heading belongs to the section: a cut right before it is still a cut.
+    expect(readerShowsSection("In this blog post, we have initially looked at the three variants", SOURCE, READER.replace("Acknowledgements\n", ""))).toBe(false);
+  });
+
+  it("never refutes with a quote of one or two words, one the reader lacks, or one SOURCE does not have", () => {
+    expect(readerShowsSection("Acknowledgements", SOURCE, READER)).toBe(false);
+    expect(readerShowsSection("Choosing a proper learning rate can be difficult.", SOURCE, READER)).toBe(false);
+    expect(readerShowsSection("a sentence only the reader has", SOURCE, `${READER}\na sentence only the reader has`)).toBe(false);
+  });
+
+  it("is for missing-content claims about text only: images and embeds keep their own facts, other kinds are not checked", () => {
+    expect(validateIssue(missing(ACKS, { refs: ["e1"] }), [SOURCE, READER], shown)).toBeUndefined();
+    expect(validateIssue(missing(ACKS, { refs: ["o3"] }), [SOURCE, READER], shown)).toBeUndefined();
+    expect(validateIssue(missing(ACKS, { kind: "layout", severity: "minor" }), [SOURCE, READER], shown)).toBeUndefined();
+  });
+});
+
+describe("a defect the original page has itself (#24)", () => {
+  const LINE = "Behavior of / operator is defined â†’ Compiler is obligated to emit code computing a / b";
+  const garbled = (evidence: string, overrides: Partial<JudgeIssue> = {}) => issue({ layer: "rendering", kind: "code_or_math", severity: "minor", evidence, refs: [], note: "the arrow is mojibake", ...overrides });
+
+  it("knows UTF-8 read as CP1252 or Latin-1 by its byte pattern, not accented words", () => {
+    for (const text of ["defined â†’ Compiler", "Itâ€™s", "cafÃ©", "Â©", "ðŸ˜€"]) expect(MOJIBAKE.test(text), text).toBe(true);
+    for (const text of ["café”, he said", "ação", "groß", "naïve", "→ fine", "日本語"]) expect(MOJIBAKE.test(text), text).toBe(false);
+  });
+
+  it("drops a display claim quoting mojibake that SOURCE has as it is (regehr-ub, double-encoded by WordPress)", () => {
+    const page = facts({ source: `- Case 1: (b != 0)\n${LINE}` });
+    expect(validateIssue(garbled(LINE), [page.source, LINE], page)).toMatchObject({ reason: "same-as-original" });
+    expect(validateIssue(garbled(LINE, { kind: "layout" }), [page.source, LINE], page)).toMatchObject({ reason: "same-as-original" });
+  });
+
+  it("keeps mojibake only the reader shows, and claims that something is missing or kept", () => {
+    const clean = facts({ source: "Behavior of / operator is defined → Compiler is obligated to emit code computing a / b" });
+    expect(validateIssue(garbled(LINE), [clean.source, LINE], clean)).toBeUndefined();
+    const page = facts({ source: LINE });
+    expect(validateIssue(garbled(LINE, { layer: "content", kind: "missing_content", severity: "major" }), [LINE], page)).toBeUndefined();
+    expect(validateIssue(garbled("operator is defined → Compiler"), [page.source, "operator is defined → Compiler"], page)).toBeUndefined();
   });
 });
 

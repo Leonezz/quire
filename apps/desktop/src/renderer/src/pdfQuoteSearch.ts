@@ -24,8 +24,9 @@ export async function findPdfQuote(url: string, quote: string, isCancelled: () =
   const needle = normalize(quote);
   if (!needle) return undefined;
   const task = getDocument({ url });
-  const pdf = await task.promise;
+  // A PDF that fails to open still holds a worker until its task is destroyed.
   try {
+    const pdf = await task.promise;
     for (let page = 1; page <= pdf.numPages; page += 1) {
       if (isCancelled()) return undefined;
       const content = await (await pdf.getPage(page)).getTextContent();

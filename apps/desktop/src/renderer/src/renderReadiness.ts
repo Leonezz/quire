@@ -32,7 +32,7 @@ export function parseRenderQuery(search: string): RenderQuery | { error: string 
  * Images for the browser harness. The preview has no engine to fetch and cache remote images (and the page CSP
  * blocks remote hosts), so the harness asks its own origin: `GET /__render/image?src=<url>`, which the capture
  * script answers with `page.route` (fetching the image from Node). The answer becomes a blob: URL, which the
- * surface accepts like the engine's data: URLs. A non-image answer means the image failed (shown as unavailable,
+ * surface accepts like the engine's quire-image: URLs. A non-image answer means the image failed (shown as unavailable,
  * counted by the capture); an HTML answer is the dev server's SPA fallback, i.e. no route is installed at all.
  */
 export const RENDER_IMAGE_ENDPOINT = "/__render/image";

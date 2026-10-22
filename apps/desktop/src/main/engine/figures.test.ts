@@ -23,16 +23,20 @@ describe("figure URLs", () => {
 });
 
 describe("FigureStore", () => {
-  it("writes crops under figures/<id>, serves them as data URLs and removes them with the material", async () => {
+  it("writes crops under figures/<id>, hands their bytes to the protocol and removes them with the material", async () => {
     const store = new FigureStore(root);
     const url = await store.write("8667175ac66aac06", 1, PNG);
     expect(url).toBe("quire-figure://8667175ac66aac06/1.png");
     expect((await stat(join(root, "figures", "8667175ac66aac06", "1.png"))).size).toBe(4);
-    expect(await store.read(url)).toBe("data:image/png;base64,iVBORw==");
-    expect(await store.read("quire-figure://8667175ac66aac06/2.png")).toBeUndefined();
-    expect(await store.read("https://example.test/x.png")).toBeUndefined();
+    const first = { materialId: "8667175ac66aac06", index: 1 };
+    const second = { materialId: "8667175ac66aac06", index: 2 };
+    expect(await store.has(first)).toBe(true);
+    expect(Buffer.from((await store.bytes(first))!)).toEqual(PNG);
+    expect(await store.has(second)).toBe(false);
+    expect(await store.bytes(second)).toBeUndefined();
     await store.remove("8667175ac66aac06");
-    expect(await store.read(url)).toBeUndefined();
+    expect(await store.has(first)).toBe(false);
+    expect(await store.bytes(first)).toBeUndefined();
     await expect(readFile(join(root, "figures", "8667175ac66aac06", "1.png"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

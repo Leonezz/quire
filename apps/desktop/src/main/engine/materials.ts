@@ -9,6 +9,9 @@ import { applyArtifactEdit, artifactContent, artifactInfoOf, artifactSourceOf, a
 import { captureTextOf } from "./capture-text";
 import { FetchError, assertPublicHttpUrl, fetchPage, type Fetcher } from "./fetch";
 import { NORMALIZE_BUDGET, degradedQuality, imageReferencesOf, isHtml, isPdf, markdownParts, mediaTypeForName, pdfContent, pickRepresentations, titleFromHtml, type ContentFields } from "./material-content";
+import { arxivRenderingVersion } from "./arxiv";
+import { arxivIdOfUrl, idFor, materialIdOf, storedIdsOf } from "./material-identity";
+import { IdentityIndex, identityKeysOf, pageKeysOf, requestKeysOf, withAliases, withNamesOf } from "./material-index";
 import { effectiveOf, searchFieldsOf, summaryOf, withExtracted, withItemMeta, type StoredRecord } from "./material-record";
 import { MATERIAL_VIEW_IDS, failedView, mediaTypeFitsView, mergeViews, primaryContentOf, primaryPdfPath, primaryViewOf, readViewContent, readyView, swapPrimaryFiles, upsertView, viewFilePaths, viewPdfPath, viewsOf, withContent, withPrimaryView, writeViewContent } from "./material-views";
 import { PdfError, inspectPdf } from "./pdf";
@@ -25,15 +28,16 @@ function sha256(bytes: Uint8Array): `sha256:${string}` {
   return `sha256:${createHash("sha256").update(bytes).digest("hex")}`;
 }
 
-function idFor(url: string): string {
-  return createHash("sha256").update(url).digest("hex").slice(0, 16);
-}
-
-/** The URL a fetch would end at when nothing redirects: the fragment never reaches the server. */
-function withoutHash(url: URL): string {
-  const page = new URL(url);
-  page.hash = "";
-  return page.toString();
+/**
+ * A paper read from arXiv with the version it is (#27); any other record as it is. The unversioned links
+ * the inbox fetches name none, so the page's bytes, or a PDF's text layer, are read for its stamp.
+ */
+function withArxivVersion(record: StoredRecord, bytes: Uint8Array): StoredRecord {
+  const id = record.extracted?.arxivId;
+  if (!id || !URL.canParse(record.finalUrl) || arxivIdOfUrl(new URL(record.finalUrl)) !== id) return record;
+  const text = record.mediaType === "application/pdf" ? record.plain ?? "" : new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+  const version = arxivRenderingVersion(id, [record.finalUrl, record.url], text);
+  return version === undefined ? record : { ...record, arxivVersion: version };
 }
 
 /** A page the extractor could not read (a bot challenge, an error page), kept as its plain text. */
@@ -89,6 +93,9 @@ export class MaterialStore {
   private readonly keepCapture: () => boolean;
   private readonly judge: (() => BlockJudge) | undefined;
   private readonly figures: FigureStore;
+  /** Every other name of every material (material-index.ts); filled on the first lookup. */
+  private readonly identities = new IdentityIndex();
+  private indexed: Promise<void> | undefined;
 
   constructor(private readonly root: string, private readonly fetch: Fetcher = fetchPage, options: MaterialStoreOptions = {}) {
     this.meta = options.meta;
@@ -101,40 +108,47 @@ export class MaterialStore {
 
   /**
    * Fetches and materializes a public page. `origin` marks material that arrived through a subscription;
-   * `item` is what that item declared. A page already in the library (found by the URL as given, then by
-   * where the fetch ended) comes back as stored, `existing`, with the item merged in; only a fallback copy
-   * is materialized again, keeping its other views and its item's metadata. A page the extractor cannot
-   * read never replaces the feed's copy of it.
+   * `item` is what that item declared. A page already in the library comes back as stored, `existing`,
+   * with the item merged in and the links it was opened by among its aliases. It is found before the fetch
+   * by the link without tracking parameters or another name a material answers to (an alias, a canonical
+   * link, an arXiv id), and after it by where the fetch ended and what the page declares (its canonical
+   * link, DOI, arXiv id). Only a fallback copy is materialized again, keeping its id, its names, its other
+   * views and its item's metadata. A page the extractor cannot read never replaces the feed's copy of it.
    */
   async openUrl(raw: string, origin: "web" | "feed" = "web", item?: MaterialMeta): Promise<OpenUrlResult> {
     try {
       const url = assertPublicHttpUrl(raw);
-      const known = await this.read(idFor(withoutHash(url)));
-      if (known && !isFallbackCopy(known)) return this.existing(known, item);
+      const known = await this.findByUrl(url);
+      if (known && !isFallbackCopy(known)) return this.existing(known, item, [raw]);
       const page = await this.fetch(url);
-      const id = idFor(page.finalUrl);
-      // Looked up before materializing, which already writes the capture (or the PDF) under this id.
-      const previous = await this.read(id);
-      if (previous && !isFallbackCopy(previous)) return this.existing(previous, item);
+      const finalUrl = new URL(page.finalUrl);
+      // Looked up before materializing, which already writes the capture (or the PDF) under the id.
+      const previous = (await this.readByUrl(finalUrl)) ?? (await this.lookup(pageKeysOf(page, origin, item))) ?? known;
+      if (previous && !isFallbackCopy(previous)) return this.existing(previous, item, [raw, page.finalUrl]);
+      const id = previous?.id ?? materialIdOf(finalUrl);
       const itemMeta = previous?.itemMeta ? { ...previous.itemMeta, ...item } : item;
       const record = await this.materializeAny(page.bytes, page.mediaType, page.finalUrl, raw, origin, id, itemMeta);
       if (previous && isFeedCopy(previous) && isUnreadablePage(record)) {
         // The feed's copy has the text; the capture just written is the unreadable page's.
         await rm(this.htmlPath(id), { force: true });
-        return this.existing(previous, item);
+        return this.existing(previous, item, [raw, page.finalUrl]);
       }
-      return { ok: true, material: this.decorate(await this.save(previous ? mergeViews(previous, record) : record)) };
+      return { ok: true, material: this.decorate(await this.save(previous ? withNamesOf(previous, mergeViews(previous, record)) : record)) };
     } catch (error) {
       return failureOf(error, "Could not read this page.");
     }
   }
 
-  /** A material already in the library, as stored; what an item declared is merged in, and written only when it adds something. */
-  private async existing(record: StoredRecord, item: MaterialMeta | undefined): Promise<OpenUrlResult> {
-    if (!item) return { ok: true, material: this.decorate(record), existing: true };
-    const itemMeta = { ...record.itemMeta, ...item };
-    const unchanged = JSON.stringify(itemMeta) === JSON.stringify(record.itemMeta);
-    const stored = unchanged ? record : await this.save(withItemMeta(record, itemMeta, await this.pageOf(record)));
+  /**
+   * A material already in the library, as stored; the URLs it was just opened by join its aliases and
+   * what an item declared is merged in, written only when either adds something.
+   */
+  private async existing(record: StoredRecord, item: MaterialMeta | undefined, urls: readonly string[]): Promise<OpenUrlResult> {
+    const named = withAliases(record, urls);
+    const itemMeta = item ? { ...record.itemMeta, ...item } : undefined;
+    const added = itemMeta !== undefined && JSON.stringify(itemMeta) !== JSON.stringify(record.itemMeta);
+    const next = added ? withItemMeta(named, itemMeta, await this.pageOf(record)) : named;
+    const stored = next === record ? record : await this.save(next);
     return { ok: true, material: this.decorate(stored), existing: true };
   }
 
@@ -155,15 +169,21 @@ export class MaterialStore {
     }
   }
 
-  /** PDFs keep their bytes on disk next to the record; pages keep their capture when the setting says so; everything else is materialized synchronously. */
-  private async materializeAny(bytes: Uint8Array, mediaType: string, finalUrl: string, requestedUrl: string, origin: StoredRecord["origin"] = "web", id = idFor(finalUrl), item?: MaterialMeta): Promise<StoredRecord> {
+  /** Materializes fetched or dropped bytes; a paper read from arXiv records which version it is. */
+  private async materializeAny(bytes: Uint8Array, mediaType: string, finalUrl: string, requestedUrl: string, origin: StoredRecord["origin"] = "web", id = materialIdOf(new URL(finalUrl)), item?: MaterialMeta): Promise<StoredRecord> {
+    return withArxivVersion(await this.materializeBytes(bytes, mediaType, finalUrl, requestedUrl, origin, id, item), bytes);
+  }
+
+  /** PDFs keep their bytes on disk next to the record; pages keep their capture, with its hash and fetch time, when the setting says so; everything else is materialized synchronously. */
+  private async materializeBytes(bytes: Uint8Array, mediaType: string, finalUrl: string, requestedUrl: string, origin: StoredRecord["origin"], id: string, item: MaterialMeta | undefined): Promise<StoredRecord> {
     if (!isPdf(bytes, mediaType)) {
-      const record = withExtracted({ ...this.materialize(bytes, mediaType, finalUrl, requestedUrl, origin, id), ...(item ? { itemMeta: item } : {}) }, bytes);
+      const contentIdentity = sha256(bytes);
+      const record = withExtracted({ ...this.materialize(bytes, mediaType, finalUrl, requestedUrl, origin, id, contentIdentity), ...(item ? { itemMeta: item } : {}) }, bytes);
       if (!isHtml(mediaType)) return record;
       if (!this.keepCapture()) { await rm(this.htmlPath(id), { force: true }); return record; }
       await mkdir(this.dir, { recursive: true });
       await writeFile(this.htmlPath(id), bytes);
-      return { ...record, capture: { byteLength: bytes.byteLength, mediaType } };
+      return { ...record, capture: { byteLength: bytes.byteLength, mediaType, sha256: contentIdentity, fetchedAt: record.fetchedAt } };
     }
     const inspection = await inspectPdf(bytes);
     await mkdir(this.dir, { recursive: true });
@@ -178,11 +198,11 @@ export class MaterialStore {
     });
   }
 
-  private materialize(bytes: Uint8Array, mediaType: string, finalUrl: string, requestedUrl: string, origin: StoredRecord["origin"] = "web", id = idFor(finalUrl)): StoredRecord {
+  private materialize(bytes: Uint8Array, mediaType: string, finalUrl: string, requestedUrl: string, origin: StoredRecord["origin"] = "web", id = materialIdOf(new URL(finalUrl)), contentIdentity = sha256(bytes)): StoredRecord {
     const fetchedAt = new Date().toISOString();
     const base = { id, url: requestedUrl, finalUrl, mediaType, fetchedAt, origin };
     if (isHtml(mediaType)) {
-      const outcome = normalizeArticleCapture({ budget: NORMALIZE_BUDGET, capture: { baseLocator: finalUrl, bytes, contentIdentity: sha256(bytes), mediaType } });
+      const outcome = normalizeArticleCapture({ budget: NORMALIZE_BUDGET, capture: { baseLocator: finalUrl, bytes, contentIdentity, mediaType } });
       if (!outcome.ok) {
         const plain = outcome.fallbackText ?? "";
         return { ...base, title: new URL(finalUrl).hostname, plain, readingMinutes: readingMinutes(plain), quality: degradedQuality(outcome.problems), problems: outcome.problems };
@@ -424,11 +444,12 @@ export class MaterialStore {
     return this.decorate(await this.save(withContent(record, incoming)));
   }
 
-  /** Writes the record with its views made explicit, and returns what was written. */
+  /** Writes the record with its views made explicit, indexes its names, and returns what was written. */
   private async save(record: StoredRecord): Promise<StoredRecord> {
     const stored = withPrimaryView(record);
     await mkdir(this.dir, { recursive: true });
     await writeFile(join(this.dir, `${stored.id}.json`), JSON.stringify(stored), "utf8");
+    this.identities.add(stored);
     return stored;
   }
 
@@ -440,13 +461,18 @@ export class MaterialStore {
    * A material built from the copy a feed carried, used when the page itself could not be
    * fetched. The FEED_CONTENT_FALLBACK problem marks it so the reader can say so. A material
    * already stored under the link (the page, or another item's copy) is returned, never replaced,
-   * unless it is a page the extractor could not read: the copy takes its place, keeping its other
-   * views and its item's metadata, and its capture goes.
+   * unless it is a page the extractor could not read: the copy takes its place, keeping its id, its
+   * other views and its item's metadata, and its capture goes.
    */
   async saveFromFeed(input: FeedMaterialInput): Promise<MaterialRecord> {
-    const id = idFor(input.url);
-    const known = await this.read(id);
-    if (known && !isUnreadablePage(known)) return this.decorate(known);
+    // A feed entry without a usable link has no parameters to drop: the link is hashed as written.
+    const link = URL.canParse(input.url) ? new URL(input.url) : undefined;
+    const known = link ? await this.findByUrl(link) : await this.read(idFor(input.url));
+    if (known && !isUnreadablePage(known)) {
+      const named = withAliases(known, [input.url]);
+      return this.decorate(named === known ? known : await this.save(named));
+    }
+    const id = known?.id ?? (link ? materialIdOf(link) : idFor(input.url));
     const itemMeta = known?.itemMeta ? { ...known.itemMeta, ...input.meta } : input.meta;
     const plain = input.content.plain ?? input.content.markdown ?? "";
     const record = withExtracted({
@@ -464,7 +490,7 @@ export class MaterialStore {
     });
     if (!known) return this.decorate(await this.save(record));
     await rm(this.htmlPath(id), { force: true });
-    return this.decorate(await this.save(mergeViews(known, record)));
+    return this.decorate(await this.save(withNamesOf(known, mergeViews(known, record))));
   }
 
   /** Materializes every eval snapshot (corpus/<slug>/page.html.gz + meta.json) that is not in the library yet. */
@@ -476,10 +502,10 @@ export class MaterialStore {
     for (const slug of slugs.sort()) {
       try {
         const meta = JSON.parse(await readFile(join(corpusDir, slug, "meta.json"), "utf8")) as { url: string; finalUrl: string; fetchedAt: string };
-        if (await this.read(idFor(meta.finalUrl))) { result.skipped += 1; continue; }
+        if (await this.findByUrl(new URL(meta.finalUrl))) { result.skipped += 1; continue; }
         const bytes = new Uint8Array(gunzipSync(await readFile(join(corpusDir, slug, "page.html.gz"))));
         const record = await this.materializeAny(bytes, "text/html", meta.finalUrl, meta.url);
-        await this.save({ ...record, fetchedAt: meta.fetchedAt });
+        await this.save({ ...record, fetchedAt: meta.fetchedAt, ...(record.capture ? { capture: { ...record.capture, fetchedAt: meta.fetchedAt } } : {}) });
         result.imported += 1;
       } catch (error) {
         result.failed.push({ slug, message: error instanceof Error ? error.message : String(error) });
@@ -529,6 +555,7 @@ export class MaterialStore {
       const paths = [this.pdfPath(id), this.htmlPath(id), join(this.dir, `${id}.json`), ...viewFilePaths(this.dir, id), ...revisions];
       await Promise.all([...paths.map((path) => rm(path, { force: true })), this.figures.remove(id)]);
       this.meta?.remove(id);
+      this.identities.remove(id);
     }
     return deleted;
   }
@@ -576,6 +603,50 @@ export class MaterialStore {
     if (!ID.test(id)) return undefined;
     const bytes = await this.readOptional(join(this.dir, `${id}.json`));
     return bytes ? (JSON.parse(new TextDecoder().decode(bytes)) as StoredRecord) : undefined;
+  }
+
+  /** The record a URL names by id: the canonical one, else the one stored before tracking parameters were dropped. */
+  private async readByUrl(url: URL): Promise<StoredRecord | undefined> {
+    for (const id of storedIdsOf(url)) {
+      const record = await this.read(id);
+      if (record) return record;
+    }
+    return undefined;
+  }
+
+  /** The material a link names: by id, then by any other name a material answers to (an alias, a canonical link, an arXiv id). */
+  private async findByUrl(url: URL): Promise<StoredRecord | undefined> {
+    return (await this.readByUrl(url)) ?? this.lookup(requestKeysOf(url));
+  }
+
+  /** The material the first of these keys that names one names; among copies made before #28, the one read first. */
+  private async lookup(keys: readonly string[]): Promise<StoredRecord | undefined> {
+    await this.indexAll();
+    for (const key of keys) {
+      const candidates = await Promise.all(this.identities.candidates(key).map((id) => this.read(id)));
+      const named = candidates.filter((record): record is StoredRecord => record !== undefined && identityKeysOf(record).includes(key));
+      if (named.length > 0) return named.reduce((first, record) => (record.fetchedAt < first.fetchedAt ? record : first));
+    }
+    return undefined;
+  }
+
+  /** Indexes every record once; a record that cannot be read fails the lookup, and the next one tries again. */
+  private indexAll(): Promise<void> {
+    this.indexed ??= this.indexRecords().catch((error: unknown) => { this.indexed = undefined; throw error; });
+    return this.indexed;
+  }
+
+  private async indexRecords(): Promise<void> {
+    await mkdir(this.dir, { recursive: true });
+    const ids = (await readdir(this.dir)).filter((name) => RECORD_FILE.test(name)).map((name) => name.slice(0, -".json".length));
+    await Promise.all(ids.map(async (id) => {
+      try {
+        const record = await this.read(id);
+        if (record) this.identities.add(record);
+      } catch (error) {
+        throw new Error(`Material ${id} could not be read to look the link up in the library: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+      }
+    }));
   }
 
   private async require(id: string): Promise<StoredRecord> {

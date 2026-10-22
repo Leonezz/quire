@@ -297,6 +297,113 @@ describe("ContentNormalizationModule", () => {
     ]);
   });
 
+  it("reads back-to-back \\[ \\] formulas as one display formula each (eugeneyan)", () => {
+    const result = readerDocumentV2FromHtml({
+      html: `<div><p>Intro</p>\n\\[R = \\frac{1}{|r|}\\]\n\n\\[F = \\frac{2PR}{P + R}\\]\n<p>\\[a = 1\\] $$b = 2$$</p></div>`,
+      maxDepth: 40,
+      maxNodes: 10_000,
+      maxOutputBytes: 2 * 1024 * 1024,
+      outputBudgetErrorCode: "SOURCE_ARTICLE_OUTPUT_BUDGET_EXCEEDED",
+    });
+
+    expect(result.document.children).toEqual([
+      { children: [{ type: "text", value: "Intro" }], type: "paragraph" },
+      expect.objectContaining({ display: true, type: "math", value: "R = \\frac{1}{|r|}" }),
+      expect.objectContaining({ display: true, type: "math", value: "F = \\frac{2PR}{P + R}" }),
+      expect.objectContaining({ display: true, type: "math", value: "a = 1" }),
+      expect.objectContaining({ display: true, type: "math", value: "b = 2" }),
+    ]);
+  });
+
+  it("reads Pandoc display math inside a paragraph as a display formula (harvard-annotated-transformer)", () => {
+    const result = readerDocumentV2FromHtml({
+      html: `<p><span class="math display">\\mathrm{FFN}(x)=\\max(0, xW_1 + b_1) W_2 + b_2</span></p><p>where <span class="math inline">\\(pos\\)</span> is <span class="math display">\\[PE_{pos}\\]</span> the position.</p>`,
+      maxDepth: 40,
+      maxNodes: 10_000,
+      maxOutputBytes: 2 * 1024 * 1024,
+      outputBudgetErrorCode: "SOURCE_ARTICLE_OUTPUT_BUDGET_EXCEEDED",
+    });
+
+    expect(result.document.children).toEqual([
+      expect.objectContaining({ display: true, format: "tex", type: "math", value: "\\mathrm{FFN}(x)=\\max(0, xW_1 + b_1) W_2 + b_2" }),
+      {
+        children: [
+          { type: "text", value: "where " },
+          expect.objectContaining({ display: false, type: "math", value: "pos" }),
+          { type: "text", value: " is" },
+        ],
+        type: "paragraph",
+      },
+      expect.objectContaining({ display: true, type: "math", value: "PE_{pos}" }),
+      { children: [{ type: "text", value: "the position." }], type: "paragraph" },
+    ]);
+  });
+
+  it("absorbs the \\( \\) or $$ wrapper around a TeX environment instead of printing it (ruder-optim)", () => {
+    const result = readerDocumentV2FromHtml({
+      html: `<p>\\(<br>\n\\begin{align}<br>\nv_t &amp;= \\gamma v_{t-1}<br>\n\\end{align}<br>\n\\)</p><p>Before $$<br>\\begin{equation}y = 1\\end{equation}<br>$$ after</p>`,
+      maxDepth: 40,
+      maxNodes: 10_000,
+      maxOutputBytes: 2 * 1024 * 1024,
+      outputBudgetErrorCode: "SOURCE_ARTICLE_OUTPUT_BUDGET_EXCEEDED",
+    });
+
+    expect(result.document.children).toEqual([
+      expect.objectContaining({ display: true, type: "math", value: "\\begin{align}\n v_t &= \\gamma v_{t-1}\n \\end{align}" }),
+      { children: [{ type: "text", value: "Before" }], type: "paragraph" },
+      expect.objectContaining({ display: true, type: "math", value: "\\begin{equation}y = 1\\end{equation}" }),
+      { children: [{ type: "text", value: "after" }], type: "paragraph" },
+    ]);
+  });
+
+  it("keeps the base64 raster figures a page embeds, and drops SVG, mislabelled and oversized ones as losses (harvard-annotated-transformer)", () => {
+    const png = `data:image/png;base64,${Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(2048, 7)]).toString("base64")}`;
+    const placeholder = "data:image/gif;base64,R0lGODlhAQABAAAAACw=";
+    const wrapped = `${png.slice(0, 30)}\n${png.slice(30)}`;
+    const svg = `data:image/svg+xml;base64,${Buffer.from("<svg xmlns='http://www.w3.org/2000/svg'/>").toString("base64")}`;
+    const huge = `data:image/png;base64,${"A".repeat(3 * 1024 * 1024)}`;
+    const result = readerDocumentV2FromHtml({
+      html: `<p><img src="${wrapped}" alt="Model architecture"></p><p><img src="${svg}" alt="Vector"></p><p><img src="${huge}" alt="Too big"></p><p><img src="data:text/html;base64,PGI+eDwvYj4=" alt="Not an image"></p><p><img src="${placeholder}" alt="Loading"></p>`,
+      maxDepth: 40,
+      maxNodes: 10_000,
+      maxOutputBytes: 16 * 1024 * 1024,
+      outputBudgetErrorCode: "SOURCE_ARTICLE_OUTPUT_BUDGET_EXCEEDED",
+    });
+
+    const images = JSON.stringify(result.document).match(/"type":"image","url":"[^"]+"/gu) ?? [];
+    expect(images).toEqual([`"type":"image","url":"${png}"`]);
+    expect(readerDocumentV2Schema.safeParse(result.document).success).toBe(true);
+    expect(result.document.losses.filter((entry) => entry.code === "UNSAFE_IMAGE_DROPPED")).toHaveLength(4);
+  });
+
+  it("drops paragraphs with nothing to read, which would only print as blank gaps (anthropic-mapping, jalammar-transformer)", () => {
+    const result = readerDocumentV2FromHtml({
+      html: `<p>First.</p><p></p><p><br></p><p>&nbsp;</p><p> <br> <br> </p><p><img src="https://x.test/a.png" alt="A"></p><p>Last.</p>`,
+      maxDepth: 40,
+      maxNodes: 10_000,
+      maxOutputBytes: 2 * 1024 * 1024,
+      outputBudgetErrorCode: "SOURCE_ARTICLE_OUTPUT_BUDGET_EXCEEDED",
+    });
+
+    expect(result.document.children.map((node) => node.type)).toEqual(["paragraph", "paragraph", "paragraph"]);
+    expect(JSON.stringify(result.document.children[1])).toContain('"type":"image"');
+  });
+
+  it("reads \\( \\) standing on lines of their own around a formula as display math, and leaves inline \\( \\) inline (ruder-optim)", () => {
+    const result = readerDocumentV2FromHtml({
+      html: `<p>\\(<br>\nv_t = \\beta_2 v_{t-1} + (1 - \\beta_2) g_t^2<br>\n\\)</p><p>Instead of using \\(v_t\\) directly, we employ \\(v_{t-1}\\):</p>`,
+      maxDepth: 40,
+      maxNodes: 10_000,
+      maxOutputBytes: 2 * 1024 * 1024,
+      outputBudgetErrorCode: "SOURCE_ARTICLE_OUTPUT_BUDGET_EXCEEDED",
+    });
+
+    expect(result.document.children[0]).toEqual(expect.objectContaining({ display: true, type: "math", value: "v_t = \\beta_2 v_{t-1} + (1 - \\beta_2) g_t^2" }));
+    expect(result.document.children[1]).toEqual(expect.objectContaining({ type: "paragraph" }));
+    expect(JSON.stringify(result.document.children[1])).toContain('"display":false');
+    expect(result.document.children).toHaveLength(2);
+  });
+
   it("does not mistake currency, malformed delimiters, or escaped TeX environments for math", () => {
     const result = readerDocumentV2FromHtml({
       html: `<p>Math $x^2$ and $x + \\$5$. Currency $20 and $30, $20$, $20/$year, shell $PATH/$HOME, $ x$, $x $, $x$2, and inline $$x$$ stay prose.</p>
@@ -462,6 +569,64 @@ describe("ContentNormalizationModule", () => {
         type: "footnoteDefinition",
       },
     ]);
+  });
+
+  it("pairs #fn1, #footnote-N and same-page URL footnote references with their notes", () => {
+    const result = readerDocumentV2FromHtml({
+      baseUri: "https://example.test/post",
+      html:
+        `<p>A<sup class="footnote-ref"><a href="#fn1" id="fnref1">[1]</a></sup> B<sup><a href="https://example.test/post#fn2">2</a></sup> C<sup><a data-footnote-ref href="#footnote-3">3</a></sup>` +
+        ` D<a role="doc-noteref" href="https://example.test/post#fn4">4</a> E<sup><a href="https://other.test/post#fn5">5</a></sup></p>` +
+        `<section class="footnotes"><ol><li id="fn1"><p>One.</p></li><li id="fn2"><p>Two.</p></li><li id="footnote-3"><p>Three.</p></li><li id="fn4"><p>Four.</p></li></ol></section>`,
+      maxDepth: 40,
+      maxNodes: 10_000,
+      maxOutputBytes: 2 * 1024 * 1024,
+      outputBudgetErrorCode: "SOURCE_ARTICLE_OUTPUT_BUDGET_EXCEEDED",
+    });
+
+    const [paragraph, ...definitions] = result.document.children;
+    expect(paragraph).toEqual({
+      children: [
+        { type: "text", value: "A" },
+        { identifier: "1", label: "[1]", type: "footnoteReference" },
+        { type: "text", value: " B" },
+        { identifier: "2", label: "2", type: "footnoteReference" },
+        { type: "text", value: " C" },
+        { identifier: "3", label: "3", type: "footnoteReference" },
+        { type: "text", value: " D" },
+        { identifier: "4", label: "4", type: "footnoteReference" },
+        { type: "text", value: " E" },
+        // A note on another page is a link, not a footnote of this one.
+        { children: [{ children: [{ type: "text", value: "5" }], title: null, type: "link", url: "https://other.test/post#fn5" }], type: "superscript" },
+      ],
+      type: "paragraph",
+    });
+    expect(definitions.map((node) => node.type === "footnoteDefinition" && node.identifier)).toEqual(["1", "2", "3", "4"]);
+  });
+
+  it("carries a callout's kind on its blockquote and keeps plain quotes plain", () => {
+    const result = readerDocumentV2FromHtml({
+      html: `<blockquote data-callout="key-point"><b>Key point:</b> Stable metrics are not permanent.</blockquote><blockquote data-callout="sidebar"><p>A side note.</p></blockquote><blockquote><p>A quotation.</p></blockquote>`,
+      maxDepth: 40,
+      maxNodes: 10_000,
+      maxOutputBytes: 2 * 1024 * 1024,
+      outputBudgetErrorCode: "SOURCE_ARTICLE_OUTPUT_BUDGET_EXCEEDED",
+    });
+
+    expect(result.document.children).toEqual([
+      {
+        callout: "key-point",
+        children: [{ children: [{ children: [{ type: "text", value: "Key point:" }], type: "strong" }, { type: "text", value: " Stable metrics are not permanent." }], type: "paragraph" }],
+        type: "blockquote",
+      },
+      { callout: "note", children: [{ children: [{ type: "text", value: "A side note." }], type: "paragraph" }], type: "blockquote" },
+      { children: [{ children: [{ type: "text", value: "A quotation." }], type: "paragraph" }], type: "blockquote" },
+    ]);
+    // Stored documents from before the field still validate; a kind outside the vocabulary does not.
+    const quote = (extra: object) => ({ children: [{ children: [], type: "blockquote", ...extra }], losses: [], type: "root" });
+    expect(readerDocumentV2Schema.safeParse(quote({})).success).toBe(true);
+    expect(readerDocumentV2Schema.safeParse(quote({ callout: "warning" })).success).toBe(true);
+    expect(readerDocumentV2Schema.safeParse(quote({ callout: "sidebar" })).success).toBe(false);
   });
 
   it("accepts a bounded article when a malformed TOC leaves a stray list item", () => {
@@ -651,6 +816,47 @@ describe("ContentNormalizationModule", () => {
     expect(result.article.materialization.provenance.rulesApplied).toContain(
       "generic.syntax-highlight-table-to-code@1",
     );
+  });
+
+  it("keeps the lines of a code block whose lines are separated by <br> (Medium)", () => {
+    const substantialBody =
+      "The article explains why the backward pass matters and walks through each gradient by hand. ".repeat(
+        8,
+      );
+    const html = `<!doctype html><html lang="en"><body><main><article>
+      <h1>Yes you should understand backprop</h1>
+      <p>${substantialBody}</p>
+      <pre class="pp pq"><span id="a9c1" class="qe qf">def clipped_error(x): <br/>  return tf.select(tf.abs(x) &lt; 1.0, <br/>                   0.5 * tf.square(x), <br/>                   tf.abs(x) - 0.5)</span></pre>
+      <p>${substantialBody}</p>
+      <pre><code class="language-python">z = np.maximum(0, x)<br>dW = np.outer(z &gt; 0, x)</code></pre>
+    </article></main></body></html>`;
+
+    const result = normalizeArticleCapture(
+      articleCapture(html, "https://medium.example.test/yes-you-should-understand-backprop"),
+    );
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    const representations = result.article.materialization.representations;
+    const document = JSON.parse(
+      representations.find((value) => value.schema === "reader.document.v2")?.content ?? "{}",
+    );
+    const agent = representations.find((value) => value.schema === "agent.gfm.v1");
+    const expectedCode = [
+      "def clipped_error(x): ",
+      "  return tf.select(tf.abs(x) < 1.0, ",
+      "                   0.5 * tf.square(x), ",
+      "                   tf.abs(x) - 0.5)",
+    ].join("\n");
+
+    expect(document.children).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "code", value: expectedCode }),
+        expect.objectContaining({ lang: "python", type: "code", value: "z = np.maximum(0, x)\ndW = np.outer(z > 0, x)" }),
+      ]),
+    );
+    expect(agent?.content).toContain(`\`\`\`\n${expectedCode}\n\`\`\``);
+    expect(agent?.content).toContain("```python\nz = np.maximum(0, x)\ndW = np.outer(z > 0, x)\n```");
   });
 
   it("keeps Typecho article content and math while excluding page chrome from every representation", () => {
@@ -1071,6 +1277,65 @@ describe("ContentNormalizationModule", () => {
     expect(serialized).toContain(
       "Hidden protocol details remain part of the article.",
     );
+  });
+
+  it("keeps an article's callouts as callouts through extraction and still drops its pull quotes", () => {
+    const pullQuote = "Every measurement in this study was repeated by a second team before it was reported.";
+    const html = `<!doctype html><html><body><article>
+      <h1>Structural evidence</h1>
+      <p>${"The experiment records a bounded result for later review and independent reproduction. ".repeat(12)}</p>
+      <aside class="note"><b>Note:</b> Lab tools cannot measure input delay, as there is no user input.</aside>
+      <p>${pullQuote} ${"Each result was checked against the original protocol and archived. ".repeat(10)}</p>
+      <aside class="post__aside"><p>${pullQuote}</p></aside>
+      <p>${"The discussion closes with the limits of the method and the open questions. ".repeat(10)}</p>
+    </article></body></html>`;
+
+    const result = normalizeArticleCapture(articleCapture(html));
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    const readerV2 = result.article.materialization.representations.find((value) => value.schema === "reader.document.v2");
+    const children = JSON.parse(readerV2?.content ?? "{}").children as { type: string; callout?: string }[];
+    const quotes = children.filter((node) => node.type === "blockquote");
+    expect(quotes).toHaveLength(1);
+    expect(quotes[0]?.callout).toBe("note");
+    expect(JSON.stringify(quotes[0])).toContain("Lab tools cannot measure input delay");
+    expect(result.article.materialization.provenance.rulesApplied).toContain("article.preextract.callouts@1");
+  });
+
+  it("keeps permalink-wrapped headings and Substack footnotes through extraction", () => {
+    const prose = (topic: string) => `<p>${`The ${topic} section records a bounded result for later review and independent reproduction. `.repeat(6)}</p>`;
+    const footnote = (n: number, text: string) =>
+      `<div data-component-name="FootnoteToDOM" class="footnote"><a id="footnote-${n}" href="#footnote-anchor-${n}" class="footnote-number">${n}</a><div class="footnote-content"><p>${text}</p></div></div>`;
+    const marker = (n: number) => `<span><a data-component-name="FootnoteAnchorToDOM" id="footnote-anchor-${n}" href="#footnote-${n}" class="footnote-anchor">${n}</a></span>`;
+    const html = `<!doctype html><html><body><article>
+      <h1>Structural evidence</h1>
+      ${prose("opening")}
+      <a id="simple-is-a-lie" href="#simple-is-a-lie" class="anchor"><h2>Simple is a lie</h2></a>
+      <p>The title is the least cringe one.${marker(1)} ${"Each result was checked against the original protocol. ".repeat(6)}</p>
+      <a id="parting-words" href="#parting-words" class="anchor"><h2>Parting words</h2></a>
+      <p>The method has limits.${marker(2)} ${"The discussion closes with the open questions of the method. ".repeat(6)}</p>
+      ${footnote(1, "Alternatives considered: Foundation Model Engineer.")}
+      ${footnote(2, "And probably could not explain transformers on a whiteboard.")}
+    </article></body></html>`;
+
+    const result = normalizeArticleCapture(articleCapture(html));
+
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    const readerV2 = result.article.materialization.representations.find((value) => value.schema === "reader.document.v2");
+    const nodes: { type: string; identifier?: string; children?: unknown[] }[] = [];
+    const walk = (node: { type: string; identifier?: string; children?: unknown[] }) => {
+      nodes.push(node);
+      for (const child of node.children ?? []) walk(child as typeof node);
+    };
+    walk(JSON.parse(readerV2?.content ?? "{}"));
+    expect(nodes.filter((node) => node.type === "heading").map((node) => JSON.stringify(node.children))).toEqual([
+      JSON.stringify([{ type: "text", value: "Simple is a lie" }]),
+      JSON.stringify([{ type: "text", value: "Parting words" }]),
+    ]);
+    expect(nodes.filter((node) => node.type === "footnoteReference").map((node) => node.identifier)).toEqual(["1", "2"]);
+    expect(nodes.filter((node) => node.type === "footnoteDefinition").map((node) => node.identifier)).toEqual(["1", "2"]);
   });
 
   it("removes a duplicate page title even when Readability demotes the source h1", () => {

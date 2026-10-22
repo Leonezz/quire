@@ -13,7 +13,7 @@ import type { RenderingProblemKind } from "../../apps/desktop/src/shared/contrac
  * run rescores cached results with an older one, and `judge --rescore` rescores every stored result,
  * without calling a model (docs/design/eval-rubric.md §7).
  */
-export const SCORING_VERSION = "2026-10-10.6";
+export const SCORING_VERSION = "2026-10-22.1";
 
 export const VERDICTS = ["PASS", "MINOR", "MAJOR"] as const;
 export type Verdict = (typeof VERDICTS)[number];
@@ -57,7 +57,7 @@ export interface JudgeIssue {
   originalLayer?: Layer;
 }
 
-export const INVALID_REASONS = ["evidence-not-verbatim", "outside-boundary", "metadata-without-subject", "tile-not-sent", "unknown-ref", "contradicts-image-facts", "contradicts-embed-facts", "contradicts-table-facts"] as const;
+export const INVALID_REASONS = ["evidence-not-verbatim", "outside-boundary", "metadata-without-subject", "tile-not-sent", "unknown-ref", "same-as-original", "contradicts-image-facts", "contradicts-reader-text", "contradicts-embed-facts", "contradicts-table-facts"] as const;
 export type InvalidReason = (typeof INVALID_REASONS)[number];
 export interface Invalidity { reason: InvalidReason; detail: string }
 
@@ -74,6 +74,10 @@ export interface FactInventory {
   code: readonly RenderedCode[];
   /** EXTRACTED as the prompt carries it: where a collapsed code block is looked up to decide its layer. */
   extracted: string;
+  /** SOURCE as the prompt carries it: where a defect the original page shows too, and the section of a passage claimed missing, are looked up. */
+  source: string;
+  /** The reader page's whole visible text (rendered.txt, not the prompt's cut copy): what a passage claimed missing is checked against. */
+  fullRenderedText: string;
   sent: SentTiles;
 }
 /** What the layer rule (layerByFacts) reads. */
@@ -186,7 +190,7 @@ function tableContradiction(refs: readonly string[], facts: FactInventory): stri
 }
 
 /**
- * A major image issue claims an image is missing or broken. It holds when one of its cited images
+ * A major image claim (claimsImages) says an image is missing or broken. It holds when one of its cited images
  * backs it: a broken reader image, an original image no reader image matches, or one matched by a
  * broken reader image. Citing no image holds only when the facts leave room for the claim: an
  * unmatched original image of LARGE_IMAGE_PX or more on a side, or a broken reader image.
@@ -213,6 +217,73 @@ function imageContradiction(refs: readonly string[], facts: FactInventory): stri
     return original ? `${ref} is in the reader as ${original.matchedBy}, not broken` : `${ref} is in the reader, not broken`;
   };
   return cited.map(why).join("; ");
+}
+
+/**
+ * Whether the image facts decide an issue: a major image issue, or a major missing-content claim that cites
+ * only original images (karpathy-rnn "o5–o12 missing": its images are in the reader, below the tiles sent).
+ * A missing-content claim citing a reader image (r…) uses it to say where, so it is not one.
+ */
+function claimsImages(issue: JudgeIssue, facts: FactInventory): boolean {
+  if (issue.severity !== "major") return false;
+  if (issue.kind === "images") return true;
+  const refs = issue.refs ?? [];
+  return issue.kind === "missing_content" && refs.length > 0 && refs.every((ref) => facts.reference.some((image) => image.id === ref));
+}
+
+/** Words only (letters and digits, lowercased, images dropped), so markup, list markers and punctuation never decide whether the reader shows a line. */
+const wordsOf = (text: string) => plainText(text.replace(/!\[[^\]]*\]\([^)]*\)/g, " ")).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim();
+/** A quote of fewer words could be any heading or phrase; it never refutes a claim. */
+const MIN_REFUTING_WORDS = 3;
+const HEADING_LINE = /^#{1,6}\s/;
+
+/**
+ * Whether the reader shows a passage with all of its section: the quote, and every line of SOURCE from the
+ * heading before it through the next heading, are in the reader's text (by words). A claim that quotes the
+ * missing text itself is refuted when the reader shows it; one that quotes text next to what is missing (the
+ * paragraph before a dropped list, the last kept line before a cut) is not, since the missing part is in that
+ * section. A quote SOURCE has more than once is shown when one of its sections is.
+ */
+export function readerShowsSection(evidence: string, source: string, rendered: string): boolean {
+  const quote = wordsOf(withoutTrailingEllipsis(evidence));
+  if (quote.split(" ").length < MIN_REFUTING_WORDS) return false;
+  const shown = ` ${wordsOf(rendered)} `;
+  if (!shown.includes(` ${quote} `)) return false;
+  const lines = source.split("\n").map((line) => ({ heading: HEADING_LINE.test(line), words: wordsOf(line) })).filter((line) => line.words);
+  const starts: number[] = [];
+  let joined = "";
+  for (const line of lines) { starts.push(joined.length); joined += ` ${line.words}`; }
+  joined += " ";
+  const lineAt = (offset: number) => starts.findLastIndex((start) => start <= offset);
+  for (let at = joined.indexOf(` ${quote} `); at >= 0; at = joined.indexOf(` ${quote} `, at + 1)) {
+    let from = lineAt(at);
+    while (from > 0 && !lines[from]!.heading) from -= 1;
+    let to = lineAt(at + quote.length) + 1;
+    while (to < lines.length && !lines[to]!.heading) to += 1;
+    if (lines.slice(from, to + 1).every((line) => shown.includes(` ${line.words} `))) return true;
+  }
+  return false;
+}
+
+/** A missing-content claim about text (citing no original image or embed: their own facts decide those) whose passage the reader shows, section and all. */
+function readerTextContradiction(issue: JudgeIssue, facts: FactInventory): string | undefined {
+  if (issue.kind !== "missing_content") return undefined;
+  const refs = issue.refs ?? [];
+  if (refs.some((ref) => facts.reference.some((image) => image.id === ref) || facts.embeds.some((_, index) => embedId(index) === ref))) return undefined;
+  return readerShowsSection(issue.evidence, facts.source, facts.fullRenderedText) ? "the reader shows the quoted passage and the rest of its section in the original (RENDERED TEXT, whole)" : undefined;
+}
+
+/** One character of CP1252 or Latin-1 standing for a UTF-8 continuation byte (0x80–0xBF). */
+const CONTINUATION = "[\\u0080-\\u00BF\\u20AC\\u201A\\u0192\\u201E\\u2026\\u2020\\u2021\\u02C6\\u2030\\u0160\\u2039\\u0152\\u017D\\u2018\\u2019\\u201C\\u201D\\u2022\\u2013\\u2014\\u02DC\\u2122\\u0161\\u203A\\u0153\\u017E\\u0178]";
+/** UTF-8 read as CP1252 or Latin-1 ("â†’" for "→", "Ã©" for "é"): a lead byte's character followed by as many continuation characters as it announces. */
+export const MOJIBAKE = new RegExp(`[\\u00C2-\\u00DF]${CONTINUATION}|[\\u00E0-\\u00EF]${CONTINUATION}{2}|[\\u00F0-\\u00F4]${CONTINUATION}{3}`);
+/** Kinds that claim something displays wrong; a claim that something is missing, kept or misnamed quotes SOURCE by nature. */
+const DISPLAY_CLAIM_KINDS: readonly string[] = ["code_or_math", "layout", "other"];
+
+/** A display claim quoting mojibake that SOURCE has verbatim: the original page shows the same bytes (regehr-ub, double-encoded by WordPress), so it is not a defect (§4). */
+function sameAsOriginal(issue: JudgeIssue, facts: FactInventory): string | undefined {
+  if (!DISPLAY_CLAIM_KINDS.includes(issue.kind) || !MOJIBAKE.test(issue.evidence) || !evidenceOccurs(issue.evidence, facts.source)) return undefined;
+  return "the quoted mis-encoded text is in SOURCE as it is: the original page shows the same characters (docs/design/eval-rubric.md §4)";
 }
 
 function embedContradiction(refs: readonly string[], facts: FactInventory): string | undefined {
@@ -407,8 +478,9 @@ function outsideArticle(issue: JudgeIssue, facts: FactInventory): string | undef
 /**
  * Why an issue does not count, or undefined when it does: (a) its evidence is not verbatim in the
  * texts; a metadata issue names no subject (visual mode); (c) its tile was not attached or it cites an id no inventory has; (b) it contradicts the
- * measured facts (an image claim the image inventories refute, an embed claim citing embeds the
- * reader shows). Text mode (no facts) checks the evidence only.
+ * measured facts (an image claim the image inventories refute, a missing-text claim the reader's text
+ * refutes, an embed claim citing embeds the reader shows), or the defect it quotes is the original's own.
+ * Text mode (no facts) checks the evidence only.
  */
 export function validateIssue(issue: JudgeIssue, texts: readonly string[], facts?: FactInventory): Invalidity | undefined {
   if (!evidenceOccurs(issue.evidence, ...texts)) return { reason: "evidence-not-verbatim", detail: "the evidence quote is not in SOURCE, EXTRACTED or RENDERED TEXT" };
@@ -423,10 +495,14 @@ export function validateIssue(issue: JudgeIssue, texts: readonly string[], facts
   if (unknown.length) return { reason: "unknown-ref", detail: `${unknown.join(", ")} ${unknown.length === 1 ? "is" : "are"} in no inventory` };
   const chrome = outsideArticle(issue, facts);
   if (chrome) return { reason: "outside-boundary", detail: chrome };
-  if (issue.kind === "images" && issue.severity === "major") {
+  const original = sameAsOriginal(issue, facts);
+  if (original) return { reason: "same-as-original", detail: original };
+  if (claimsImages(issue, facts)) {
     const image = imageContradiction(refs, facts);
     if (image) return { reason: "contradicts-image-facts", detail: image };
   }
+  const text = readerTextContradiction(issue, facts);
+  if (text) return { reason: "contradicts-reader-text", detail: text };
   const embed = embedContradiction(refs, facts);
   if (embed) return { reason: "contradicts-embed-facts", detail: embed };
   if (issue.kind === "tables" && issue.severity === "major") {

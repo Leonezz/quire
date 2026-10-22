@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { TextAnnotation as AnnotationView } from "./types";
-import { installTextAnnotationHighlights } from "./text-annotation-highlights";
+import { installTextAnnotationHighlights, textAnnotationHighlightStyles } from "./text-annotation-highlights";
 import { encodeTextQuoteV2Locator } from "./text-quote-selection";
 
 function textAnnotation(
@@ -63,7 +63,7 @@ describe("text annotation highlights", () => {
     expect(remove).toHaveBeenCalledWith("reader-one-underline-blue");
   });
 
-  it("does not render stale, non-text, or unresolved annotations", () => {
+  it("does not render non-text or unresolved annotations, and marks ones the host calls stale", () => {
     const root = document.createElement("article");
     root.textContent = "Only current exact text should be visible.";
     const set = vi.fn();
@@ -86,9 +86,88 @@ describe("text annotation highlights", () => {
       root,
     });
 
+    expect(layer).toMatchObject({ resolved: 1, unresolved: 1 });
+    expect(set.mock.calls.map(([name]) => name)).toEqual(["reader-two-highlight-yellow-stale"]);
+    expect(makeHighlight.mock.calls[0]?.[0]?.toString()).toBe("current exact text");
+    expect([...layer.placements.keys()]).toEqual(["stale", "missing"]);
+    expect(layer.placements.get("stale")?.status).toBe("stale");
+    expect(layer.placements.get("missing")).toEqual({ status: "unplaced" });
+  });
+
+  it("draws a highlight whose sentence had a word changed as stale, in its own layer", () => {
+    const root = document.createElement("article");
+    root.innerHTML =
+      "<p>Intro.</p><p>The cache keeps every response for a day before it asks again.</p><p>Outro.</p>";
+    const set = vi.fn();
+    const makeHighlight = vi.fn((...ranges: Range[]) => ({ ranges }));
+
+    const layer = installTextAnnotationHighlights({
+      annotations: [
+        textAnnotation("edited", "The cache keeps every response for an hour before it asks again.", 0, {
+          locator: encodeTextQuoteV2Locator({ occurrence: 0, prefix: "Intro.", suffix: "Outro." }),
+        }),
+        textAnnotation("exact", "Outro.", 0),
+      ],
+      environment: { makeHighlight, registry: { delete: vi.fn(), set } },
+      namePrefix: "reader-edit",
+      root,
+    });
+
+    expect(layer).toMatchObject({ resolved: 2, unresolved: 0 });
+    expect(set.mock.calls.map(([name]) => name)).toEqual([
+      "reader-edit-highlight-yellow-stale",
+      "reader-edit-highlight-yellow",
+    ]);
+    const stale = layer.placements.get("edited");
+    expect(stale?.status).toBe("stale");
+    expect(stale && "range" in stale ? stale.range.toString() : undefined).toBe(
+      "The cache keeps every response for a day before it asks again.",
+    );
+    expect(layer.placements.get("exact")?.status).toBe("current");
+  });
+
+  it("lists a highlight whose text was removed as unplaced, without drawing it", () => {
+    const root = document.createElement("article");
+    root.innerHTML = "<p>Intro.</p><p>Outro.</p>";
+    const set = vi.fn();
+
+    const layer = installTextAnnotationHighlights({
+      annotations: [
+        textAnnotation("removed", "The cache keeps every response for an hour before it asks again.", 0, {
+          locator: encodeTextQuoteV2Locator({ occurrence: 0, prefix: "Intro.", suffix: "Outro." }),
+        }),
+      ],
+      environment: { makeHighlight: vi.fn(), registry: { delete: vi.fn(), set } },
+      namePrefix: "reader-removed",
+      root,
+    });
+
     expect(layer).toMatchObject({ resolved: 0, unresolved: 1 });
-    expect(makeHighlight).not.toHaveBeenCalled();
+    expect(layer.placements.get("removed")).toEqual({ status: "unplaced" });
     expect(set).not.toHaveBeenCalled();
+  });
+
+  it("still reports placements where the Highlight API is missing", () => {
+    const root = document.createElement("article");
+    root.innerHTML = "<p>Only this text.</p>";
+
+    const layer = installTextAnnotationHighlights({
+      annotations: [textAnnotation("here", "this text", 0), textAnnotation("gone", "a passage that went away", 0)],
+      namePrefix: "reader-bare",
+      root,
+    });
+
+    expect(layer).toMatchObject({ resolved: 1, unresolved: 1 });
+    expect(layer.placements.get("here")?.status).toBe("current");
+    expect(layer.placements.get("gone")).toEqual({ status: "unplaced" });
+    expect(() => layer.dispose()).not.toThrow();
+  });
+
+  it("styles stale layers with a fainter wash and a dashed underline", () => {
+    const styles = textAnnotationHighlightStyles("reader-css");
+    expect(styles).toContain("::highlight(reader-css-highlight-yellow) { background-color: rgb(255 212 0 / 0.28); }");
+    expect(styles).toMatch(/::highlight\(reader-css-highlight-yellow-stale\) \{[^}]*dashed[^}]*var\(--label-3\)/);
+    expect(styles).toMatch(/::highlight\(reader-css-underline-blue-stale\) \{[^}]*underline dashed/);
   });
 
   it("installs an independent focus layer for an exact note-to-source reveal", () => {

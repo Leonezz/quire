@@ -146,7 +146,8 @@ function contentStats(html: string): ContentStats {
       mathUnits,
     ),
     document.querySelectorAll(
-      "[role='doc-noteref'], a.footnote-ref, sup[id^='fnref'] > a[href^='#fn']",
+      // a[data-footnote-ref]: the extractors' copy marks the references whose footnote-ref class it removed.
+      "[role='doc-noteref'], a.footnote-ref, a[data-footnote-ref], sup[id^='fnref'] > a[href^='#fn']",
     ).length,
     document.querySelectorAll("[role='doc-endnotes'], .footnotes, #footnotes")
       .length,

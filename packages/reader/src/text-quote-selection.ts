@@ -1,3 +1,5 @@
+import { approximateQuoteMatch } from "./approximate-quote";
+
 export type TextQuoteCapture = Readonly<{
   locator: string;
   quote: string;
@@ -87,17 +89,16 @@ function isReaderTextNode(node: Text, root: HTMLElement) {
   return true;
 }
 
-/** Resolves a quote locator against the currently rendered reader DOM. */
-export function resolveTextQuoteRange(
-  root: HTMLElement,
-  locator: string,
-  quote: string,
-) {
-  const hint = decodeTextQuoteLocator(locator);
-  const target = canonicalText(quote);
-  if (!hint || !target) return undefined;
+/** The reader DOM's text without whitespace, with where each character sits. */
+type RenderedText = Readonly<{
+  root: HTMLElement;
+  text: string;
+  positions: readonly TextPosition[];
+}>;
+
+function renderedTextOf(root: HTMLElement): RenderedText {
   const positions: TextPosition[] = [];
-  let rendered = "";
+  let text = "";
   const walker = root.ownerDocument.createTreeWalker(root, 4);
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
     if (!(node instanceof Text) || !isReaderTextNode(node, root)) continue;
@@ -105,10 +106,15 @@ export function resolveTextQuoteRange(
     for (let offset = 0; offset < value.length; offset += 1) {
       const character = value[offset] ?? "";
       if (/\s/.test(character)) continue;
-      rendered += character;
+      text += character;
       positions.push({ node, offset });
     }
   }
+  return { root, text, positions };
+}
+
+/** The stored occurrence of the exact quote, else the one occurrence whose prefix and suffix still match. */
+function exactQuoteStart(rendered: string, target: string, hint: TextQuoteLocatorHint) {
   const matches: number[] = [];
   let cursor = 0;
   while ((cursor = rendered.indexOf(target, cursor)) >= 0) {
@@ -123,17 +129,66 @@ export function resolveTextQuoteRange(
     const after = rendered.slice(start + target.length, start + target.length + suffix.length);
     return (!prefix || before === prefix) && (!suffix || after === suffix);
   });
-  const start = matches[hint.occurrence] ??
+  return matches[hint.occurrence] ??
     (contextMatches.length === 1 ? contextMatches[0] : undefined);
-  if (start === undefined) return undefined;
-  const end = start + target.length - 1;
-  const startPosition = positions[start];
-  const endPosition = positions[end];
+}
+
+function renderedRange(rendered: RenderedText, start: number, end: number) {
+  const startPosition = rendered.positions[start];
+  const endPosition = rendered.positions[end - 1];
   if (!startPosition || !endPosition) return undefined;
-  const range = root.ownerDocument.createRange();
+  const range = rendered.root.ownerDocument.createRange();
   range.setStart(startPosition.node, startPosition.offset);
   range.setEnd(endPosition.node, endPosition.offset + 1);
   return range;
+}
+
+/** Resolves a quote locator against the currently rendered reader DOM: the exact quote only. */
+export function resolveTextQuoteRange(
+  root: HTMLElement,
+  locator: string,
+  quote: string,
+) {
+  const hint = decodeTextQuoteLocator(locator);
+  const target = canonicalText(quote);
+  if (!hint || !target) return undefined;
+  const rendered = renderedTextOf(root);
+  const start = exactQuoteStart(rendered.text, target, hint);
+  return start === undefined ? undefined : renderedRange(rendered, start, start + target.length);
+}
+
+/** "approximate": the quote's text changed since it was captured, and this is the closest place left. */
+export type TextQuoteAnchor = Readonly<{ range: Range; match: "exact" | "approximate" }>;
+
+/**
+ * Resolves quote locators against `root` as it is rendered now, reading its text once for all of them:
+ * the exact quote first, as resolveTextQuoteRange does, then an approximate match (see approximate-quote.ts).
+ */
+export function textQuoteAnchorResolver(root: HTMLElement) {
+  let rendered: RenderedText | undefined;
+  return (locator: string, quote: string): TextQuoteAnchor | undefined => {
+    const hint = decodeTextQuoteLocator(locator);
+    const target = canonicalText(quote);
+    if (!hint || !target) return undefined;
+    rendered ??= renderedTextOf(root);
+    const exact = exactQuoteStart(rendered.text, target, hint);
+    if (exact !== undefined) {
+      const range = renderedRange(rendered, exact, exact + target.length);
+      return range ? { range, match: "exact" } : undefined;
+    }
+    const approximate = approximateQuoteMatch(rendered.text, target, {
+      prefix: canonicalText(hint.prefix),
+      suffix: canonicalText(hint.suffix),
+      position: hint.position,
+    });
+    const range = approximate && renderedRange(rendered, approximate.start, approximate.end);
+    return range ? { range, match: "approximate" } : undefined;
+  };
+}
+
+/** One locator through textQuoteAnchorResolver: exact, else approximate. */
+export function resolveTextQuoteAnchor(root: HTMLElement, locator: string, quote: string) {
+  return textQuoteAnchorResolver(root)(locator, quote);
 }
 
 export function encodeTextQuoteV2Locator(hint: TextQuoteLocatorHint) {

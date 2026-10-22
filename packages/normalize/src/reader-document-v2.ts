@@ -14,8 +14,11 @@ import rehypeSanitize, {
 import { unified } from "unified";
 
 import {
+  isInlineImageUrl,
+  READER_V2_CALLOUT_KINDS,
   readerDocumentV2Schema,
   type ReaderDocumentV2,
+  type ReaderV2CalloutKind,
   type ReaderV2FlowNode,
   type ReaderV2FootnoteDefinition,
   type ReaderV2Figure,
@@ -155,6 +158,7 @@ const sanitizerSchema: SanitizeOptions = {
     ]),
     abbr: appendAttributes("abbr", ["title"]),
     annotation: ["encoding"],
+    blockquote: appendAttributes("blockquote", ["dataCallout"]),
     code: appendAttributes("code", ["className"]),
     div: appendAttributes("div", ["className", "role"]),
     img: appendAttributes("img", ["alt", "height", "src", "title", "width"]),
@@ -168,7 +172,8 @@ const sanitizerSchema: SanitizeOptions = {
   protocols: {
     ...defaultSchema.protocols,
     href: ["http", "https", "mailto"],
-    src: ["http", "https"],
+    // data: only survives as an image's inline raster source (inlineImageUrl).
+    src: ["http", "https", "data"],
   },
   strip: [...ACTIVE_TAGS],
   tagNames: Array.from(SANITIZER_TAG_NAMES),
@@ -176,6 +181,8 @@ const sanitizerSchema: SanitizeOptions = {
 
 type Context = {
   baseUri?: string;
+  /** Characters of base64 inline images kept so far, against MAX_INLINE_IMAGES_CHARACTERS. */
+  inlineImageCharacters: number;
   losses: ReaderV2Loss[];
   outputBudget: Utf8Budget;
   producerEntryId?: string;
@@ -219,6 +226,15 @@ function textContent(node: Nodes): string {
   if (isText(node)) return node.value;
   if ("children" in node)
     return node.children.map((child) => textContent(child)).join("");
+  return "";
+}
+
+/** Code text where <br> is a line end: Medium writes <pre><span>line<br/>line</span></pre>. */
+function codeText(node: Nodes): string {
+  if (isText(node)) return node.value;
+  if (isElement(node) && node.tagName === "br") return "\n";
+  if ("children" in node)
+    return node.children.map((child) => codeText(child)).join("");
   return "";
 }
 
@@ -373,25 +389,32 @@ function inlineMathRanges(value: string) {
   return ranges;
 }
 
+/** Text that is only \[…\] / $$…$$ formulas, one display formula per pair: eugeneyan.com writes two in one text run. */
 function displayMathFromDelimitedText(
   value: string,
   context: Context,
-): ReaderV2Math | undefined {
-  const match = /^(?:\\\[([\s\S]*?)\\\]|\$\$([\s\S]*?)\$\$)$/u.exec(
-    value.trim(),
-  );
-  const source = match
-    ?.slice(1)
-    .find((candidate) => candidate !== undefined)
-    ?.trim();
-  return source
-    ? {
+): ReaderV2Math[] | undefined {
+  const sources: string[] = [];
+  let cursor = value.length - value.trimStart().length;
+  while (cursor < value.length) {
+    const opening = value.startsWith("\\[", cursor) ? "\\[" : value.startsWith("$$", cursor) ? "$$" : undefined;
+    if (!opening) return undefined;
+    const end = findNextUnescaped(value, opening === "\\[" ? "\\]" : "$$", cursor + 2);
+    if (end < 0) return undefined;
+    const source = value.slice(cursor + 2, end).trim();
+    if (!source) return undefined;
+    sources.push(source);
+    cursor = end + 2;
+    while (cursor < value.length && /\s/u.test(value[cursor] ?? "")) cursor += 1;
+  }
+  return sources.length
+    ? sources.map((source) => ({
         display: true,
         format: "tex",
         label: null,
         type: "math",
         value: bounded(context, source),
-      }
+      }))
     : undefined;
 }
 
@@ -454,9 +477,35 @@ function displayEnvironmentRanges(value: string) {
     );
     if (endStart < 0) continue;
     const end = endStart + terminator.length;
-    ranges.push({ end, source: value.slice(start, end), start });
+    ranges.push({ ...withDelimiterWrapper(value, start, end), source: value.slice(start, end) });
   }
-  return ranges;
+  // ruder.io also writes <p>\(<br>v_t = …<br>\)</p>: inline delimiters on lines of their own around a formula display it.
+  for (const match of value.matchAll(/\\\([ \t]*\n([\s\S]*?)\n[ \t]*\\\)/gu)) {
+    const start = match.index;
+    const end = start + match[0].length;
+    if (isEscaped(value, start) || ranges.some((range) => start < range.end && range.start < end)) continue;
+    ranges.push({ end, source: match[1] ?? "", start });
+  }
+  return ranges.sort((a, b) => a.start - b.start);
+}
+
+const DISPLAY_ENVIRONMENT_WRAPPERS = [["\\(", "\\)"], ["$$", "$$"], ["$", "$"]] as const;
+
+/** ruder.io writes <p>\(<br>\begin{align}…\end{align}<br>\)</p>: the delimiters around an environment belong to the formula, not the prose. */
+function withDelimiterWrapper(value: string, start: number, end: number) {
+  const before = value.slice(0, start).trimEnd();
+  const after = value.slice(end);
+  const afterStart = end + after.length - after.trimStart().length;
+  for (const [opening, closing] of DISPLAY_ENVIRONMENT_WRAPPERS) {
+    const openingStart = before.length - opening.length;
+    if (
+      before.endsWith(opening) &&
+      !isEscaped(value, openingStart) &&
+      value.startsWith(closing, afterStart)
+    )
+      return { end: afterStart + closing.length, start: openingStart };
+  }
+  return { end, start };
 }
 
 function textRunSlice(pieces: TextRunPiece[], start: number, end: number) {
@@ -570,7 +619,8 @@ function paragraphsSplitOnDoubleBreaks(children: ReaderV2PhrasingNode[]): Reader
     })
     .filter((group) => group.some((node) => node.type !== "text" || node.value.trim().length > 0))
     .map((group): ReaderV2FlowNode => ({ children: group, type: "paragraph" }));
-  return paragraphs.length ? paragraphs : [{ children, type: "paragraph" }];
+  // A paragraph of nothing but spaces and breaks ("<p>&nbsp;</p>", "<p><br></p>") would only print as a blank gap.
+  return paragraphs;
 }
 
 function normalizedHeadingIdentity(value: string) {
@@ -749,6 +799,9 @@ function serializeMathMl(root: Nodes, context: Context): string {
   return chunks.join("");
 }
 
+// A note's address: #fn1, #fn-1 or #fn:1 (Pandoc, markdown-it, kramdown), #footnote-1 (Substack), #footnote2-1 (WordPress).
+const FOOTNOTE_HREF = /#(?:reader-)?(?:user-content-)?(?:fn|footnote)(?:[-_:\d]|$)/iu;
+
 function footnoteReference(
   element: Element,
   context: Context,
@@ -766,13 +819,12 @@ function footnoteReference(
           candidate.tagName === "a" &&
           (propertyString(candidate, "role") === "doc-noteref" ||
             hasProperty(candidate, "dataFootnoteRef") ||
-            /#(?:reader-)?(?:user-content-)?fn(?:[-_:]|$)/iu.test(
-              propertyString(candidate, "href") ?? "",
-            )),
+            FOOTNOTE_HREF.test(propertyString(candidate, "href") ?? "")),
       )[0];
-  const identifier = normalizedIdentifier(
-    propertyString(anchor ?? element, anchor ? "href" : "id"),
-  );
+  // Readability writes the reference as an absolute URL of this page; a note on another page is a plain link.
+  const identifier = anchor
+    ? sameDocumentTargetAnchor(propertyString(anchor, "href") ?? "", context.baseUri)
+    : normalizedIdentifier(propertyString(element, "id"));
   if (!identifier) return undefined;
   const label = textContent(anchor ?? element).trim() || identifier;
   return {
@@ -907,29 +959,83 @@ function phrasingFromElement(
   return phrasingFromChildren(element.children, path, context, insideLink);
 }
 
+function phrasingFromChild(
+  child: RootContent,
+  index: number,
+  parentPath: string,
+  context: Context,
+  insideLink: boolean,
+): ReaderV2PhrasingNode[] {
+  if (isText(child)) return phrasingFromText(child.value, context);
+  if (!isElement(child)) return [];
+  return phrasingFromElement(
+    child,
+    elementPath(parentPath, child, index),
+    context,
+    insideLink,
+  );
+}
+
 function phrasingFromChildren(
   children: RootContent[],
   parentPath: string,
   context: Context,
   insideLink = false,
 ) {
-  const result: ReaderV2PhrasingNode[] = [];
-  children.forEach((child, index) => {
-    if (isText(child)) {
-      result.push(...phrasingFromText(child.value, context));
+  return compactPhrasing(
+    children.flatMap((child, index) =>
+      phrasingFromChild(child, index, parentPath, context, insideLink),
+    ),
+    false,
+  );
+}
+
+/** KaTeX and Pandoc mark display math with a class: <span class="katex-display">, <span class="math display">. */
+function isDisplayMathElement(element: Element) {
+  return (hasClass(element, "math") && hasClass(element, "display")) || hasClass(element, "katex-display");
+}
+
+/** Pandoc writes display math as <p><span class="math display">TeX</span></p>: the formula is a block, and the paragraph splits around it. */
+function flowFromParagraph(element: Element, path: string, context: Context): ReaderV2FlowNode[] {
+  if (!element.children.some((child) => isElement(child) && isDisplayMathElement(child)))
+    return flowFromParagraphPhrasing(phrasingFromChildren(element.children, path, context), context);
+  const result: ReaderV2FlowNode[] = [];
+  let pending: ReaderV2PhrasingNode[] = [];
+  const flush = () => {
+    const phrasing = compactPhrasing(pending, true);
+    if (phrasing.length) result.push(...flowFromParagraphPhrasing(phrasing, context));
+    pending = [];
+  };
+  element.children.forEach((child, index) => {
+    const math = isElement(child) && isDisplayMathElement(child) ? mathFromElement(child, true, context) : undefined;
+    if (math) {
+      flush();
+      result.push(math);
       return;
     }
-    if (!isElement(child)) return;
-    result.push(
-      ...phrasingFromElement(
-        child,
-        elementPath(parentPath, child, index),
-        context,
-        insideLink,
-      ),
-    );
+    pending.push(...phrasingFromChild(child, index, path, context, false));
   });
-  return compactPhrasing(result, false);
+  flush();
+  return result;
+}
+
+/** All of a document's inline images together stay under this, so a page of embedded figures cannot crowd out its text. */
+const MAX_INLINE_IMAGES_CHARACTERS = 6 * 1024 * 1024;
+/** Lazy loaders park a 1×1 GIF of a few dozen bytes in src; an embedded figure is kilobytes. */
+const MIN_INLINE_IMAGE_BYTES = 512;
+
+/**
+ * A figure the page embeds as base64 (harvard-annotated-transformer's PNGs), without the line breaks
+ * pages wrap it in: a raster type within the per-image and per-document caps and larger than a
+ * lazy loader's placeholder, else undefined.
+ */
+function inlineImageUrl(raw: string, context: Context) {
+  const value = raw.replace(/\s+/gu, "");
+  const decodedBytes = Math.floor(((value.length - value.indexOf(",") - 1) * 3) / 4);
+  if (!isInlineImageUrl(value) || decodedBytes < MIN_INLINE_IMAGE_BYTES || context.inlineImageCharacters + value.length > MAX_INLINE_IMAGES_CHARACTERS) return undefined;
+  context.inlineImageCharacters += value.length;
+  context.rulesApplied.add("reader.inline-image");
+  return value;
 }
 
 function imageFromElement(
@@ -937,11 +1043,10 @@ function imageFromElement(
   path: string,
   context: Context,
 ): ReaderV2Image | undefined {
-  const url = safeUrl(
-    propertyString(element, "src") ?? "",
-    context.baseUri,
-    "image",
-  );
+  const source = propertyString(element, "src") ?? "";
+  const url = /^\s*data:/iu.test(source)
+    ? inlineImageUrl(source, context)
+    : safeUrl(source, context.baseUri, "image");
   if (!url) {
     loss(context, {
       code: "UNSAFE_IMAGE_DROPPED",
@@ -1314,6 +1419,13 @@ function footnoteDefinitionsFromSection(
   });
 }
 
+/** A blockquote marked data-callout (the extractors' copy of a page's asides and admonitions) is a callout; a kind outside the vocabulary is a plain note. */
+function calloutKind(element: Element): ReaderV2CalloutKind | undefined {
+  if (!hasProperty(element, "dataCallout")) return undefined;
+  const value = propertyString(element, "dataCallout")?.trim().toLowerCase();
+  return READER_V2_CALLOUT_KINDS.find((kind) => kind === value) ?? "note";
+}
+
 function isFootnoteSection(element: Element) {
   const id = propertyString(element, "id")
     ?.replace(/^reader-/u, "")
@@ -1350,16 +1462,15 @@ function flowFromElement(
       ? displayMathFromDelimitedText(textContent(element), context)
       : undefined;
   if (delimitedDisplayMath) return delimitedDisplayMath;
-  if (element.tagName === "p")
-    return flowFromParagraphPhrasing(
-      phrasingFromChildren(element.children, path, context),
-      context,
-    );
-  if (element.tagName === "blockquote")
+  if (element.tagName === "p") return flowFromParagraph(element, path, context);
+  if (element.tagName === "blockquote") {
+    const callout = calloutKind(element);
     return {
+      ...(callout ? { callout } : {}),
       children: flowFromChildren(element.children, path, context),
       type: "blockquote",
     };
+  }
   if (element.tagName === "section") {
     const anchor = sourceAnchor(element, context);
     return {
@@ -1402,7 +1513,7 @@ function flowFromElement(
       lang: boundedNullable(context, languageFromCode(element)),
       meta: null,
       type: "code",
-      value: bounded(context, textContent(element).replace(/\n$/u, "")),
+      value: bounded(context, codeText(element).replace(/\n$/u, "")),
     };
   }
   // Readability leaves <p> inside <font>/<span> on hand-written pages; an inline
@@ -1421,7 +1532,7 @@ function flowFromElement(
       lang: boundedNullable(context, (code && languageFromCode(code)) ?? languageFromCode(element)),
       meta: null,
       type: "code",
-      value: bounded(context, textContent(code ?? element).replace(/\n$/u, "")),
+      value: bounded(context, codeText(code ?? element).replace(/\n$/u, "")),
     };
   }
   if (element.tagName === "figure")
@@ -1429,11 +1540,7 @@ function flowFromElement(
   if (element.tagName === "table")
     return tableFromElement(element, path, context);
   if (element.tagName === "hr") return { type: "thematicBreak" };
-  if (
-    element.tagName === "math" ||
-    ((hasClass(element, "math") || hasClass(element, "katex-display")) &&
-      (hasClass(element, "display") || hasClass(element, "katex-display")))
-  ) {
+  if (element.tagName === "math" || isDisplayMathElement(element)) {
     return mathFromElement(element, true, context);
   }
   if (BLOCK_TAGS.has(element.tagName)) {
@@ -1475,7 +1582,7 @@ function flowFromChildren(
       );
       if (delimitedDisplayMath) {
         flush();
-        result.push(delimitedDisplayMath);
+        result.push(...delimitedDisplayMath);
         return;
       }
       pending.push(...phrasingFromText(child.value, context));
@@ -1565,6 +1672,7 @@ export function readerDocumentV2FromHtml(input: {
   const parsed = processor.parse(input.html) as Root;
   const context: Context = {
     baseUri: input.baseUri,
+    inlineImageCharacters: 0,
     losses: [],
     outputBudget: new Utf8Budget(
       input.maxOutputBytes,

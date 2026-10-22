@@ -84,21 +84,28 @@ export function imageKeys(raw: string): ImageKeys {
   return { path: imagePathKey(url), ...(stem && !GENERIC_STEMS.has(stem) ? { stem } : {}) };
 }
 
+/** What matchImages compares: the URL itself (as the URL parser writes it), then the keys. */
+const matchKeys = (raw: string): ImageKeys & { url?: string } => {
+  const keys = imageKeys(raw);
+  return keys.path ? { url: parse(raw)?.href, ...keys } : keys;
+};
+
 export interface MatchCandidate { id: string; candidates: readonly string[] }
 export interface MatchTarget { id: string; src: string }
 
 /**
  * Reference image id → rendered image id. A reference image matches a rendered image when one of its
- * candidate URLs has the rendered src's key: first by full path, then (for what is left) by file-name stem.
- * Reference images claim in document order, each the first unclaimed rendered image with that key, so
- * every rendered image matches at most one reference image.
+ * candidate URLs has the rendered src's key: first the very same URL, then the full path, then (for what is
+ * left) the file-name stem. The same URL goes first because a page header (og) image and the article figure
+ * can share a path and differ only in their resize query. Reference images claim in document order, each the
+ * first unclaimed rendered image with that key, so every rendered image matches at most one reference image.
  */
 export function matchImages(reference: readonly MatchCandidate[], rendered: readonly MatchTarget[]): Map<string, string> {
-  const renderedKeys = rendered.map((image) => ({ id: image.id, keys: imageKeys(image.src) }));
-  const referenceKeys = reference.map((image) => ({ id: image.id, keys: image.candidates.map(imageKeys) }));
+  const renderedKeys = rendered.map((image) => ({ id: image.id, keys: matchKeys(image.src) }));
+  const referenceKeys = reference.map((image) => ({ id: image.id, keys: image.candidates.map(matchKeys) }));
   const matches = new Map<string, string>();
   const claimed = new Set<string>();
-  for (const kind of ["path", "stem"] as const) {
+  for (const kind of ["url", "path", "stem"] as const) {
     for (const ref of referenceKeys) {
       if (matches.has(ref.id)) continue;
       const wanted = new Set(ref.keys.map((keys) => keys[kind]).filter((key): key is string => Boolean(key)));
@@ -226,6 +233,11 @@ export interface ReferenceImageFact {
   height: number;
   declaredWidth: number;
   declaredHeight: number;
+  /** The decoded size (naturalWidth/naturalHeight; 0 when nothing decoded). Chromium gives an SVG without width and height a default size, so svgDataSize reads those from the markup. */
+  naturalWidth: number;
+  naturalHeight: number;
+  /** The image or an ancestor is aria-hidden="true": the page says it is decoration. */
+  ariaHidden: boolean;
   /** The nearest preceding heading or paragraph text (reference-facts precedingContext), clipped in the page to a few hundred characters. */
   context: string;
   /** Page y of the image's top, and the 1-based reference tile holding it (tiles.ts tileAt) or null. */
@@ -257,17 +269,48 @@ const keySet = (candidates: readonly string[]) => new Set(candidates.flatMap((ur
 const SAME_BOX_PX = 2;
 const sameBox = (a: ReferenceImageFact, b: ReferenceImageFact) => Math.abs(a.top - b.top) <= SAME_BOX_PX && Math.abs(a.width - b.width) <= SAME_BOX_PX && Math.abs(a.height - b.height) <= SAME_BOX_PX;
 
+const SVG_DATA_URI = /^data:image\/svg\+xml(;[^,]*)?,/i;
+
+/** The size an SVG data: URI gives itself: its root's width and height in px, else its viewBox; undefined when it gives neither or is not one. */
+export function svgDataSize(src: string): { width: number; height: number } | undefined {
+  const head = SVG_DATA_URI.exec(src);
+  if (!head) return undefined;
+  const body = src.slice(head[0].length);
+  let markup: string;
+  try { markup = /;base64/i.test(head[1] ?? "") ? atob(body) : safeDecode(body); } catch { return undefined; }
+  const root = /<svg\b[^>]*>/i.exec(markup)?.[0] ?? "";
+  const length = (name: string) => Number(new RegExp(`\\s${name}\\s*=\\s*["']?\\s*(\\d+(?:\\.\\d+)?)(?:px)?\\s*["'\\s/>]`, "i").exec(root)?.[1] ?? Number.NaN);
+  const [width, height] = [length("width"), length("height")];
+  if (Number.isFinite(width) && Number.isFinite(height)) return { width, height };
+  const box = (/\sviewBox\s*=\s*["']([^"']*)["']/i.exec(root)?.[1] ?? "").trim().split(/[\s,]+/).map(Number);
+  return box.length === 4 && box.every(Number.isFinite) ? { width: box[2], height: box[3] } : undefined;
+}
+
+/**
+ * A placeholder with no URL of its own that is never the picture: one the page marks aria-hidden, or a data:
+ * image of 1×1 or less (a placeholder colour stretched over the picture's box, or nothing that decoded).
+ */
+function isBarePlaceholder(fact: ReferenceImageFact, candidates: readonly string[]): boolean {
+  if (candidates.length > 0) return false;
+  if (fact.ariaHidden) return true;
+  if (!fact.src.startsWith("data:")) return false;
+  const own = svgDataSize(fact.src) ?? { width: fact.naturalWidth, height: fact.naturalHeight };
+  return own.width <= 1 && own.height <= 1;
+}
+
 /**
  * The sizeable images of the original page, in document order: laid out at 48 px or more on one side, or
  * left unsized (lazy) with a declared size of 48 px or more. Listed once: an image that is the same picture
  * as the one listed just before it (a lazy <img> followed by its <noscript> copy), and dropped: an image
- * with no URL of its own (a data: blur-up or lazy placeholder) laid over a neighbouring listed image's box.
+ * with no URL of its own (a data: blur-up or lazy placeholder) that is aria-hidden, 1×1, or laid over a
+ * neighbouring listed image's box.
  */
 export function buildReferenceImages(facts: readonly ReferenceImageFact[], base: string): Omit<ReferenceImage, "id" | "matchedBy">[] {
   const listed: { fact: ReferenceImageFact; candidates: string[]; keys: Set<string> }[] = [];
   for (const fact of facts) {
     if (!isListed(fact)) continue;
     const candidates = referenceCandidates(fact, base);
+    if (isBarePlaceholder(fact, candidates)) continue;
     const keys = keySet(candidates);
     const previous = listed.at(-1);
     if (previous && [...keys].some((key) => previous.keys.has(key))) continue;

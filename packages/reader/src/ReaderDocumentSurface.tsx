@@ -18,6 +18,7 @@ import type {
   ReaderDocumentV1,
   ReaderDocumentV2,
   ReaderNode,
+  ReaderV2CalloutKind,
   ReaderV2FlowNode,
   ReaderV2FootnoteDefinition,
   ReaderV2FootnoteReference,
@@ -38,6 +39,13 @@ export type ReaderFallback = {
 export type ReaderDocumentSurfaceProps = {
   fallbackLabel?: string;
   fallback: ReaderFallback;
+  /**
+   * Schemes the host serves its own copies of images on (a custom protocol such as `quire-image:`),
+   * accepted from `imageSourceFor` and the resolvers beside base64 data: and blob: URLs. A URL is
+   * far lighter to hold than the image's bytes as a data: string. Never a network scheme. Must be
+   * stable (module-level), as it is part of the surface's host policy.
+   */
+  hostImageSchemes?: readonly string[];
   imageSourceFor?: (sourceUrl: string) => string | undefined;
   onOpenLink?: (url: string) => void;
   payload: unknown;
@@ -67,6 +75,7 @@ type ReaderImageBudget = {
 
 type ReaderHostPolicy = Pick<
   ReaderDocumentSurfaceProps,
+  | "hostImageSchemes"
   | "imageSourceFor"
   | "onOpenLink"
   | "renderText"
@@ -79,8 +88,12 @@ const ReaderHostPolicyContext = createContext<ReaderHostPolicy>({});
 const MAX_IMAGE_CACHE_ENTRIES = 64;
 const MAX_IMAGE_CACHE_CHARACTERS = 32_000_000;
 const MAX_OWNED_IMAGE_SOURCE_CHARACTERS = 12_000_000;
-// Images come from the host's local cache (data URLs), so a long, picture-heavy article may ask for all of them.
-// Hosts (and tests) may lower these.
+const MAX_HOST_IMAGE_URL_CHARACTERS = 2_048;
+const HOST_IMAGE_SCHEME = /^[a-z][a-z\d+.-]*:$/;
+/** Schemes that would reach the network or the file system, or that the data:/blob: rules already cover. */
+const NON_HOST_SCHEMES = new Set(["http:", "https:", "ws:", "wss:", "ftp:", "file:", "data:", "blob:", "javascript:"]);
+// Images come from the host's local cache (its own image URLs, or data URLs), so a long, picture-heavy article may
+// ask for all of them. Hosts (and tests) may lower these.
 export const readerImageLimits = { maxRequestsPerSurface: 400, maxPendingRequests: 400 };
 const MAX_RETAINED_IMAGE_CHARACTERS_PER_SURFACE = 24_000_000;
 const MAX_CONCURRENT_IMAGE_REQUESTS = 6;
@@ -105,9 +118,30 @@ const queuedImageRequests: QueuedImageRequest[] = [];
 let activeImageRequests = 0;
 let imageRequestPumpScheduled = false;
 
-function ownedImageSource(source: string | undefined) {
+/** A misconfigured scheme list is an error, not a policy that quietly lets the network in. */
+function assertHostImageSchemes(schemes: readonly string[] | undefined) {
+  for (const scheme of schemes ?? []) {
+    if (!HOST_IMAGE_SCHEME.test(scheme) || NON_HOST_SCHEMES.has(scheme)) {
+      throw new Error(
+        `${scheme} is not a host image scheme: name the host's own protocol with its colon, like "quire-image:".`,
+      );
+    }
+  }
+}
+
+function isHostImageSource(source: string, schemes: readonly string[] | undefined) {
+  if (!schemes?.length || source.length > MAX_HOST_IMAGE_URL_CHARACTERS) return false;
+  const colon = source.indexOf(":");
+  return colon > 0 && schemes.includes(source.slice(0, colon + 1).toLowerCase());
+}
+
+function ownedImageSource(
+  source: string | undefined,
+  hostSchemes: readonly string[] | undefined,
+) {
   if (!source) return undefined;
   if (source.startsWith("blob:")) return source;
+  if (isHostImageSource(source, hostSchemes)) return source;
   if (source.length > MAX_OWNED_IMAGE_SOURCE_CHARACTERS) return undefined;
   // The host caches SVG figures too; an SVG shown through <img> runs no script and loads nothing.
   if (
@@ -283,7 +317,11 @@ function enqueueImageRequest(
   });
 }
 
-function acquireImageResolution(resolver: ImageResolver, sourceUrl: string) {
+function acquireImageResolution(
+  resolver: ImageResolver,
+  sourceUrl: string,
+  hostSchemes: readonly string[] | undefined,
+) {
   let resolutions = inFlightImageResolutions.get(resolver);
   if (!resolutions) {
     resolutions = new Map();
@@ -303,7 +341,7 @@ function acquireImageResolution(resolver: ImageResolver, sourceUrl: string) {
       () => controller.abort(),
     )
       .then((result) => {
-        return ownedImageSource(result);
+        return ownedImageSource(result, hostSchemes);
       })
       .finally(() => {
         if (resolutions?.get(sourceUrl) === nextResolution) {
@@ -405,6 +443,7 @@ function HostImage({
   height?: number;
 }) {
   const {
+    hostImageSchemes,
     imageBudget,
     imageSourceFor,
     resolveImageSource,
@@ -427,7 +466,10 @@ function HostImage({
       : resolveImageSource;
   let synchronousCandidate: string | undefined;
   try {
-    synchronousCandidate = ownedImageSource(imageSourceFor?.(sourceUrl));
+    synchronousCandidate = ownedImageSource(
+      imageSourceFor?.(sourceUrl),
+      hostImageSchemes,
+    );
   } catch {
     synchronousCandidate = undefined;
   }
@@ -476,7 +518,11 @@ function HostImage({
       });
       return;
     }
-    const request = acquireImageResolution(activeResolver, sourceUrl);
+    const request = acquireImageResolution(
+      activeResolver,
+      sourceUrl,
+      hostImageSchemes,
+    );
     let subscribed = true;
     setResolution({ resolver: activeResolver, sourceUrl, status: "loading" });
     void request.promise
@@ -517,6 +563,7 @@ function HostImage({
   }, [
     activeResolver,
     cachedSource,
+    hostImageSchemes,
     imageBudget,
     remoteAttempt,
     sourceUrl,
@@ -794,24 +841,53 @@ function StructuredReaderV1({ document }: { document: ReaderDocumentV1 }) {
 
 type ReaderV2RenderableNode = ReaderV2FlowNode | ReaderV2PhrasingNode;
 
-const CALLOUT_KINDS = ["note", "tip", "important", "warning", "caution"] as const;
-type CalloutKind = (typeof CALLOUT_KINDS)[number];
-const CALLOUT_LABELS: Record<CalloutKind, string> = { note: "Note", tip: "Tip", important: "Important", warning: "Warning", caution: "Caution" };
+const CALLOUT_LABELS: Record<ReaderV2CalloutKind, string> = { note: "Note", tip: "Tip", important: "Important", "key-point": "Key point", warning: "Warning", caution: "Caution" };
 const CALLOUT_MARKER = /^\[!(note|tip|important|warning|caution)\][ \t]*/i;
+const LABEL_COLON = /^\s*[:：]\s*/u;
+
+/** The phrasing after a lead-in that only repeats the callout's label ("Warning: …", web.dev's bold "Key point:"); undefined when there is none. */
+function phrasingAfterLabel(phrasing: readonly ReaderV2PhrasingNode[], label: string): ReaderV2PhrasingNode[] | undefined {
+  const [lead, ...rest] = phrasing;
+  const name = label.toLowerCase();
+  if (lead?.type === "text") {
+    const value = lead.value.trimStart();
+    const after = value.slice(label.length);
+    return value.toLowerCase().startsWith(name) && LABEL_COLON.test(after) ? [{ ...lead, value: after.replace(LABEL_COLON, "") }, ...rest] : undefined;
+  }
+  if (lead?.type !== "strong" && lead?.type !== "emphasis") return undefined;
+  const leadText = readerV2PhrasingText(lead.children).trim().toLowerCase();
+  const [next, ...following] = rest;
+  // The colon is inside the bold label ("Key point:") or just after it ("Note: …").
+  if (leadText.replace(/\s*[:：]$/u, "") === name && leadText !== name) return next?.type === "text" ? [{ ...next, value: next.value.trimStart() }, ...following] : rest;
+  if (leadText === name && next?.type === "text" && LABEL_COLON.test(next.value)) return [{ ...next, value: next.value.replace(LABEL_COLON, "") }, ...following];
+  return undefined;
+}
+
+/** A callout the source drew as one (an aside, an admonition): titled by its kind, without a lead-in that repeats it. */
+function declaredCallout(node: Extract<ReaderV2FlowNode, { type: "blockquote" }>, kind: ReaderV2CalloutKind) {
+  const title = CALLOUT_LABELS[kind];
+  const [first, ...rest] = node.children;
+  if (first?.type !== "paragraph") return { kind, title, children: node.children };
+  const phrasing = phrasingAfterLabel(first.children, title)?.filter((child) => child.type !== "text" || child.value !== "");
+  if (!phrasing) return { kind, title, children: node.children };
+  return { kind, title, children: phrasing.length > 0 ? [{ ...first, children: phrasing }, ...rest] : rest };
+}
 
 /**
- * A GitHub alert (`> [!NOTE]`, `[!TIP]`, `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]`) as a callout:
- * its kind, its title (the rest of the marker's line when more follows, else the kind's label) and
- * its body. Undefined for an ordinary blockquote.
+ * A callout: a blockquote the source marked as one, or a GitHub alert (`> [!NOTE]`, `[!TIP]`,
+ * `[!IMPORTANT]`, `[!WARNING]`, `[!CAUTION]`). Gives its kind, its title (for an alert, the rest
+ * of the marker's line when more follows, else the kind's label) and its body. Undefined for an
+ * ordinary blockquote.
  */
-export function readerV2Callout(node: Extract<ReaderV2FlowNode, { type: "blockquote" }>): { kind: CalloutKind; title: string; children: ReaderV2FlowNode[] } | undefined {
+export function readerV2Callout(node: Extract<ReaderV2FlowNode, { type: "blockquote" }>): { kind: ReaderV2CalloutKind; title: string; children: ReaderV2FlowNode[] } | undefined {
+  if (node.callout) return declaredCallout(node, node.callout);
   const [first, ...rest] = node.children;
   if (first?.type !== "paragraph") return undefined;
   const [lead, ...phrasing] = first.children;
   if (lead?.type !== "text") return undefined;
   const marker = CALLOUT_MARKER.exec(lead.value);
   if (!marker) return undefined;
-  const kind = marker[1]!.toLowerCase() as CalloutKind;
+  const kind = marker[1]!.toLowerCase() as ReaderV2CalloutKind;
   const after = lead.value.slice(marker[0].length);
   const newline = after.indexOf("\n");
   // The marker's own line is the title when the body goes on below it; a one-line callout is all body.
@@ -1422,6 +1498,7 @@ function fallbackTextComponents(renderText: (value: string) => ReactNode) {
 export function ReaderDocumentSurface({
   fallback,
   fallbackLabel = "Reader fallback",
+  hostImageSchemes,
   imageSourceFor,
   onOpenLink,
   payload,
@@ -1432,8 +1509,10 @@ export function ReaderDocumentSurface({
   showFallbackNotice = true,
 }: ReaderDocumentSurfaceProps) {
   const resolution = resolveReaderDocument(schema, payload);
-  const hostPolicy = useMemo<ReaderHostPolicy>(
-    () => ({
+  const hostPolicy = useMemo<ReaderHostPolicy>(() => {
+    assertHostImageSchemes(hostImageSchemes);
+    return {
+      hostImageSchemes,
       imageBudget: {
         acceptedSources: new Map(),
         requestedUrls: new Set(),
@@ -1444,17 +1523,17 @@ export function ReaderDocumentSurface({
       renderText,
       resolveImageSource,
       resolveRemoteImageSource,
-    }),
-    [
-      imageSourceFor,
-      onOpenLink,
-      payload,
-      renderText,
-      resolveImageSource,
-      resolveRemoteImageSource,
-      schema,
-    ],
-  );
+    };
+  }, [
+    hostImageSchemes,
+    imageSourceFor,
+    onOpenLink,
+    payload,
+    renderText,
+    resolveImageSource,
+    resolveRemoteImageSource,
+    schema,
+  ]);
 
   if (resolution.status === "ready") {
     return (

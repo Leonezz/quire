@@ -1,7 +1,8 @@
 // The capture's answer to the render harness's `GET /__render/image?src=<url>` (renderReadiness.ts in the
 // renderer): the browser preview has no engine to fetch remote images, so Node fetches them with the same
 // rules as the app's ImageCache (apps/desktop/src/main/engine/images.ts): browser-ish headers with the
-// image origin as referer, 15 s, 8 MiB, and the bytes decide the type when the server mislabels it.
+// image origin as referer, 15 s, 8 MiB (32 MiB for a GIF), and the bytes decide the type when the server
+// mislabels it.
 // A failure is an answer too (404 + reason): the reader then shows its "Image unavailable" placeholder.
 // Like the app (which prefetches a page's images on import and keeps them on disk), the capture prefetches
 // a case's images before opening the page and keeps successful downloads under out/.images, so the
@@ -12,6 +13,7 @@ import { join } from "node:path";
 
 export const IMAGE_ENDPOINT = "/__render/image";
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;
+const MAX_GIF_BYTES = 32 * 1024 * 1024;
 const TIMEOUT_MS = 15_000;
 const IMAGE_TYPES = /^image\/(avif|gif|jpeg|png|webp|svg\+xml)$/;
 
@@ -28,6 +30,11 @@ export function sniffImageType(bytes: Uint8Array): string | undefined {
   const text = new TextDecoder("utf-8", { fatal: false }).decode(bytes.subarray(0, 512)).trimStart().toLowerCase();
   if (text.startsWith("<svg") || (text.startsWith("<?xml") && text.includes("<svg"))) return "image/svg+xml";
   return undefined;
+}
+
+/** The largest image of this type the app's cache keeps: animated GIFs run far past a still's size. */
+export function maxImageBytes(mediaType: string): number {
+  return mediaType === "image/gif" ? MAX_GIF_BYTES : MAX_IMAGE_BYTES;
 }
 
 /** The `src` of a proxy request URL, or undefined when it is not one. */
@@ -47,12 +54,15 @@ async function download(raw: string): Promise<ImageOutcome> {
     });
     if (!response.ok) return { ok: false, error: `HTTP ${response.status}` };
     const declaredType = (response.headers.get("content-type") ?? "").split(";")[0]?.trim().toLowerCase() ?? "";
-    if (Number(response.headers.get("content-length") ?? 0) > MAX_IMAGE_BYTES) return { ok: false, error: `larger than ${MAX_IMAGE_BYTES} bytes` };
+    // A mislabelled body may still be a GIF, so only a declared image type narrows the cap before the bytes are in.
+    const declaredCap = IMAGE_TYPES.test(declaredType) ? maxImageBytes(declaredType) : MAX_GIF_BYTES;
+    if (Number(response.headers.get("content-length") ?? 0) > declaredCap) return { ok: false, error: `larger than ${declaredCap} bytes` };
     const bytes = new Uint8Array(await response.arrayBuffer());
     if (bytes.byteLength === 0) return { ok: false, error: "empty body" };
-    if (bytes.byteLength > MAX_IMAGE_BYTES) return { ok: false, error: `larger than ${MAX_IMAGE_BYTES} bytes` };
     const mediaType = IMAGE_TYPES.test(declaredType) ? declaredType : sniffImageType(bytes);
     if (!mediaType) return { ok: false, error: `not an image (${declaredType || "no content-type"})` };
+    const cap = maxImageBytes(mediaType);
+    if (bytes.byteLength > cap) return { ok: false, error: `larger than ${cap} bytes` };
     return { ok: true, mediaType, bytes };
   } catch (error) {
     const name = (error as Error).name;
