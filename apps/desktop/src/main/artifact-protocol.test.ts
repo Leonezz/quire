@@ -1,3 +1,4 @@
+import { parseHTML } from "linkedom";
 import { describe, expect, it } from "vitest";
 import { ARTIFACT_CSP, artifactPage, artifactResponse, parseArtifactUrl, parseRuntimeUrl, type ArtifactSources } from "./artifact-protocol";
 
@@ -26,6 +27,20 @@ describe("artifact protocol", () => {
     expect(page).toContain("@layer theme, base, quire, components, utilities");
     const fragment = artifactPage("<p>Only a paragraph</p>", { dark: true });
     expect(fragment).toMatch(/^<!doctype html><html><head>.*dataset\.scheme="dark".*<\/head><body><p>Only a paragraph<\/p><\/body><\/html>$/s);
+  });
+
+  it("sets a plain HTML page's body in the reader's column, and leaves React and Mermaid pages their own width", async () => {
+    const PAGE = ":root:not([data-kind])";
+    const served = async (artifact: { type: "html" | "react" | "mermaid"; source: string }) => (await artifactResponse(`quire-artifact://artifact/${ID}`, sources(artifact))).text();
+    const inColumn = (page: string) => parseHTML(page).document.documentElement.matches(PAGE);
+    const html = await served({ type: "html", source: "<!doctype html><html lang=\"zh\"><head><style>body{margin:0}</style></head><body><p>正文</p></body></html>" });
+    expect(html).toContain(`${PAGE}{display:grid;justify-items:safe center}`);
+    expect(html).toContain(`${PAGE}>body{width:stretch;min-width:0;max-width:var(--quire-measure,720px)}`);
+    expect(html).toContain(`${PAGE}>body[data-wide]{max-width:min(100%,1080px)}`);
+    expect(inColumn(html)).toBe(true);
+    expect(inColumn(await served({ type: "html", source: "<p>Only a paragraph</p>" }))).toBe(true);
+    expect(inColumn(await served({ type: "react", source: "export default () => <p>Hi</p>;" }))).toBe(false);
+    expect(inColumn(await served({ type: "mermaid", source: "graph TD; A-->B" }))).toBe(false);
   });
 
   it("serves an HTML artifact with a policy that loads and connects nowhere, and 404s anything else", async () => {

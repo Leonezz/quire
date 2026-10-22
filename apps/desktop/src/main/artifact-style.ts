@@ -29,11 +29,25 @@ function declarations(values: Record<string, string>, chart: readonly string[]):
 /** Plain HTML is typeset like the reader; a React artifact opts in with .q-prose (its Tailwind reset otherwise stands). */
 const PROSE = ":where(:root:not([data-kind=react]), .q-prose)";
 
+/**
+ * A plain HTML page (React and Mermaid documents carry a data-kind). The frame spans the pane, so its
+ * body is held to the reader's measure (--quire-measure, ArtifactFrame.tsx) and centred, lining up
+ * with the title above it; <body data-wide> widens it for a wide table or chart, as .q-page[data-wide]
+ * does. The root centres the body, not body's own auto margins: agent HTML often resets those
+ * (body{margin:0}, *{margin:0}), and an artifact's CSS always outranks this layer. min-width:0 stops a
+ * wide table or <pre> from widening the whole column, and padding the artifact gives its body stays
+ * outside the measure, so its text still lines up.
+ */
+const PAGE = ":root:not([data-kind])";
+
 const RULES = `
 :root{${declarations(LIGHT, CHART_COLORS.light)};--quire-font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",sans-serif;--quire-mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;--quire-radius:12px;color-scheme:light}
 :root[data-scheme=dark]{${declarations(DARK, CHART_COLORS.dark)};color-scheme:dark}
 html,body{margin:0;background:var(--quire-bg);color:var(--quire-fg);font:400 16px/1.6 var(--quire-font);-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility;font-feature-settings:"kern"}
 html{overflow-y:hidden}
+${PAGE}{display:grid;justify-items:safe center}
+${PAGE}>body{width:stretch;min-width:0;max-width:var(--quire-measure,720px)}
+${PAGE}>body[data-wide]{max-width:min(100%,1080px)}
 ${PROSE} :where(h1){margin:0 0 12px;font:700 30px/1.15 var(--quire-font);letter-spacing:-.022em;text-wrap:balance}
 ${PROSE} :where(h2){margin:32px 0 10px;font:700 21px/1.3 var(--quire-font);letter-spacing:-.016em;text-wrap:balance}
 ${PROSE} :where(h3){margin:24px 0 8px;font:600 17px/1.35 var(--quire-font);letter-spacing:-.01em}
