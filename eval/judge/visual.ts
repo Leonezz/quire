@@ -29,6 +29,8 @@ export interface VisualInput {
   failedReferenceRequests: number;
   renderedText: string;
   renderedTextTruncated: boolean;
+  /** All of rendered.txt, uncut: what a passage claimed missing is checked against (renderedText is the prompt's copy). */
+  fullRenderedText: string;
   /** The capture viewport: one tile is this wide and (at most) this tall, in CSS px. */
   viewport: { width: number; height: number };
   /** The image inventories: what the reader shows (r1…) and the sizeable images of the original (o1…) with their reader match. */
@@ -99,7 +101,8 @@ export function loadCapture(renderOut: string, slug: string): VisualInput {
   });
   const textPath = join(dir, manifest.rendered.textPath);
   if (!existsSync(textPath)) throw new MissingCaptureError(slug, `${manifest.rendered.textPath} is missing`);
-  const text = truncateInput(readFileSync(textPath, "utf8"), RENDERED_TEXT_CAP);
+  const fullText = readFileSync(textPath, "utf8");
+  const text = truncateInput(fullText, RENDERED_TEXT_CAP);
   return {
     manifestKey: manifest.key,
     renderedTiles: resolveTiles(manifest.rendered.tiles),
@@ -110,6 +113,7 @@ export function loadCapture(renderOut: string, slug: string): VisualInput {
     failedReferenceRequests: typeof manifest.reference.failedRequests === "number" ? manifest.reference.failedRequests : 0,
     renderedText: text.text,
     renderedTextTruncated: text.truncated,
+    fullRenderedText: fullText,
     viewport: { width: manifest.viewport.width, height: manifest.viewport.height },
     images: { rendered: manifest.rendered.images, reference: manifest.reference.images },
     embeds: manifest.embeds,

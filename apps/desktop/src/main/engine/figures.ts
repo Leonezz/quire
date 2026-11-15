@@ -1,8 +1,9 @@
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-// Figure crops of the text view live under userData/figures/<materialId>/<n>.png and reach the
-// renderer through `quire-figure://<materialId>/<n>.png`, resolved like any other image.
+// Figure crops of the text view live under userData/figures/<materialId>/<n>.png and are named
+// `quire-figure://<materialId>/<n>.png` in the text view, resolved like any other image (to the
+// quire-image:// URL main serves the crop on; see images.ts).
 
 export const FIGURE_PROTOCOL = "quire-figure:";
 const FIGURE_URL = /^quire-figure:\/\/([a-f0-9]{16})\/([1-9]\d{0,3})\.png$/;
@@ -30,17 +31,18 @@ export class FigureStore {
     return figureUrl(materialId, index);
   }
 
-  /** The crop as a data: URL; undefined when the URL is not a figure URL or the file is not there. */
-  async read(url: string): Promise<string | undefined> {
-    const ref = parseFigureUrl(url);
-    if (!ref) return undefined;
-    try {
-      const bytes = await readFile(join(this.dirOf(ref.materialId), `${ref.index}.png`));
-      return `data:image/png;base64,${Buffer.from(bytes).toString("base64")}`;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
-      throw error;
-    }
+  private pathOf(ref: FigureRef) { return join(this.dirOf(ref.materialId), `${ref.index}.png`); }
+
+  /** Whether the crop is on disk. */
+  async has(ref: FigureRef): Promise<boolean> {
+    try { await access(this.pathOf(ref)); return true; }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; }
+  }
+
+  /** The crop's PNG bytes for the protocol; undefined when the file is not there. */
+  async bytes(ref: FigureRef): Promise<Uint8Array<ArrayBuffer> | undefined> {
+    try { return await readFile(this.pathOf(ref)); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
   }
 
   /** Removes every crop of a material (with the material, or before a rebuild). */

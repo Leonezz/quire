@@ -19,6 +19,7 @@ export type {
   ReaderDocumentV2,
   ReaderV2Abbreviation,
   ReaderV2Blockquote,
+  ReaderV2CalloutKind,
   ReaderV2Code,
   ReaderV2Figure,
   ReaderV2FlowNode,

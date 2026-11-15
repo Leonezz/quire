@@ -3,6 +3,7 @@ import {
   useCallback,
   useEffect,
   useImperativeHandle,
+  useInsertionEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -11,7 +12,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { Document, Page, pdfjs, type DocumentProps } from "react-pdf";
+import { Document, Page, pdfjs, type DocumentProps, type PageProps } from "react-pdf";
 import pdfWorkerUrl from "pdfjs-dist/build/pdf.worker.min.mjs?url";
 import {
   ArrowLeft,
@@ -183,6 +184,29 @@ type PdfNavigationHistoryEntry = Readonly<{
 type PdfDocumentLike = Parameters<
   NonNullable<DocumentProps["onLoadSuccess"]>
 >[0];
+
+type PdfPageLike = Parameters<NonNullable<PageProps["onLoadSuccess"]>>[0];
+
+/**
+ * Viewers holding each loaded document, on react-pdf's own terms for its
+ * loading task: a release lands a microtask later, so a Strict Mode re-run
+ * takes the document back first, and destroying it twice is harmless.
+ */
+const documentHolders = new WeakMap<PdfDocumentLike, number>();
+
+function holdDocument(pdf: PdfDocumentLike) {
+  documentHolders.set(pdf, (documentHolders.get(pdf) ?? 0) + 1);
+}
+
+function releaseDocument(pdf: PdfDocumentLike) {
+  documentHolders.set(pdf, (documentHolders.get(pdf) ?? 1) - 1);
+  queueMicrotask(() => {
+    if ((documentHolders.get(pdf) ?? 0) > 0) return;
+    documentHolders.delete(pdf);
+    // Ends the worker and frees every page; a failure surfaces as an unhandled rejection.
+    void pdf.loadingTask.destroy();
+  });
+}
 
 type SearchStatus = "error" | "idle" | "ready" | "searching" | "unavailable";
 
@@ -374,6 +398,8 @@ export const PdfCanvasViewer = forwardRef<
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const pageRefs = useRef(new Map<number, HTMLElement>());
+  // Pages a <Page> has loaded, each cleaned up once it leaves the render window.
+  const loadedPagesRef = useRef(new Map<number, PdfPageLike>());
   const pendingNavigationRef = useRef<PendingNavigation | undefined>(undefined);
   const lastReportedPageRef = useRef(currentPage);
   const sourceUrlRef = useRef(url);
@@ -715,6 +741,8 @@ export const PdfCanvasViewer = forwardRef<
     setPageNativeRotations({});
     setZoomSnapshots(NO_ZOOM_SNAPSHOTS);
     pageRefs.current.clear();
+    // The previous document's pages go with it when it is destroyed.
+    loadedPagesRef.current.clear();
     pendingNavigationRef.current = {
       page: nextState.page,
       pageOffset: nextState.pageOffset,
@@ -1043,6 +1071,27 @@ export const PdfCanvasViewer = forwardRef<
   useEffect(() => {
     setZoomSnapshots((current) => snapshotsWithinWindow(current, pageIsRendered));
   }, [pageIsRendered]);
+
+  // Its PDF.js page also keeps the parsed drawing and decoded images until it
+  // is cleaned up (deferred by PDF.js while a cancelled render winds down);
+  // scrolled back to, it loads them again.
+  useEffect(() => {
+    const pages = loadedPagesRef.current;
+    for (const [page, proxy] of pages) {
+      if (pageIsRendered(page)) continue;
+      proxy.cleanup();
+      pages.delete(page);
+    }
+  }, [pageIsRendered]);
+
+  // The document (its worker, pages and caches) is destroyed once the viewer
+  // lets go of it: on unmount, or when a new source replaces it. An insertion
+  // effect stays connected while Suspense or Activity hides the viewer.
+  useInsertionEffect(() => {
+    if (!pdf) return;
+    holdDocument(pdf);
+    return () => releaseDocument(pdf);
+  }, [pdf]);
 
   // Bitmaps that left the map are released as soon as they are off screen;
   // the ref lets the next commit reuse a snapshot for a page still rendering.
@@ -1776,6 +1825,7 @@ export const PdfCanvasViewer = forwardRef<
                       {shouldRenderPage ? (
                         <Page
                           onLoadSuccess={(loadedPage) => {
+                            loadedPagesRef.current.set(page, loadedPage);
                             const nativeRotation = normalizedRotation(
                               loadedPage.rotate ?? 0,
                             );

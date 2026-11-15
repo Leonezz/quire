@@ -44,7 +44,7 @@ const codeBlocks = (): RenderedCode[] => [{ id: "c1", tile: 2, lines: 6, chars: 
 const visual = (overrides: Partial<VisualInput> = {}): VisualInput => ({
   manifestKey: "mk-1", renderedTiles: tiles("rendered", 8), referenceTiles: tiles("reference", 6), metrics: metrics(), warnings: [],
   truncated: { rendered: false, reference: false }, failedReferenceRequests: 0, renderedText: "Intro paragraph.\n\nThe figure caption reads Figure 2.", renderedTextTruncated: false,
-  viewport: { width: 1280, height: 1600 }, images: { rendered: readerImages(), reference: originalImages() }, embeds: embeds(), tables: tables(), code: codeBlocks(), ...overrides,
+  fullRenderedText: "Intro paragraph.\n\nThe figure caption reads Figure 2.", viewport: { width: 1280, height: 1600 }, images: { rendered: readerImages(), reference: originalImages() }, embeds: embeds(), tables: tables(), code: codeBlocks(), ...overrides,
 });
 const input = (overrides: Partial<PromptInput> = {}): PromptInput => ({ slug: "s", url: "https://x.test/p", source: "# Title\n\nBy Ada\n\nBody text.", extracted: "# Title\n\nBody text.", truncated: { source: false, extracted: false }, visual: visual(), ...overrides });
 const SINGLE: EffectivePolicy = { policy: "single", judge: { backend: "codex", model: "default" } };
@@ -96,6 +96,9 @@ describe("loadCapture", () => {
     expect(loaded.renderedTiles).toEqual([join(root, "s", "rendered-01.png"), join(root, "s", "rendered-02.png")]);
     expect(loaded.referenceTiles).toEqual([join(root, "s", "reference-01.png")]);
     expect(loaded).toMatchObject({ manifestKey: "mk-real", truncated: { rendered: false, reference: true }, failedReferenceRequests: 2, warnings: ["images timed out"], renderedTextTruncated: true, viewport: { width: 1280, height: 1600 } });
+    // The prompt carries a cut copy; the facts keep all of it.
+    expect(loaded.fullRenderedText).toBe("x".repeat(25_000));
+    expect(loaded.renderedText.length).toBeLessThan(loaded.fullRenderedText.length);
     expect(loaded.metrics.images.brokenSrc).toEqual(["https://x.test/a.png"]);
     expect(loaded.images).toEqual({ rendered: readerImages(), reference: originalImages() });
     expect(loaded.embeds).toEqual(embeds());

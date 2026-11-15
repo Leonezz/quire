@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import type { ReactNode, Ref } from "react";
 import { ReaderDocumentSurface } from "@read/reader";
-import type { ArtifactInfo, ArtifactType, MaterialRecord, MaterialViewContent } from "../../shared/contracts";
+import { IMAGE_SCHEME, type ArtifactInfo, type ArtifactType, type MaterialRecord, type MaterialViewContent } from "../../shared/contracts";
 import { ArtifactSurface } from "./ArtifactCitations";
 import { ArtifactCanvas } from "./ArtifactFrame";
 import { hostLabel } from "./ArtifactLineage";
@@ -9,6 +9,8 @@ import { headerParts } from "./materialMeta";
 import { prefsStyle, type ReadingPrefs } from "./readingPrefs";
 
 const ignoreMaterial = () => undefined;
+/** What resolveImage answers with in the app: main serves it from disk (image-protocol.ts). */
+const HOST_IMAGE_SCHEMES = [`${IMAGE_SCHEME}:`] as const;
 
 const ARTIFACT_TYPE_LABELS: Record<ArtifactType, string> = { markdown: "", code: "Code", html: "HTML", svg: "SVG", react: "Interactive", mermaid: "Diagram" };
 
@@ -55,7 +57,7 @@ export interface ReaderArticleProps {
  */
 export function ReaderArticle({ material, content, prefs, resolveImage, onOpenLink, onOpenMaterial, scrolls = true, viewportRef, bodyRef, onShowSources, bylineExtra, banner, onFixArtifact }: ReaderArticleProps) {
   const fallback = useMemo(() => (content.markdown ? { content: content.markdown, format: "gfm" as const } : { content: content.plain ?? "", format: "plain" as const }), [content]);
-  const surface = { schema: content.reader?.schema ?? "none", payload: content.reader?.payload ?? "", fallback, onOpenLink, resolveImageSource: resolveImage, resolveRemoteImageSource: resolveImage, showFallbackNotice: false };
+  const surface = { schema: content.reader?.schema ?? "none", payload: content.reader?.payload ?? "", fallback, onOpenLink, hostImageSchemes: HOST_IMAGE_SCHEMES, resolveImageSource: resolveImage, resolveRemoteImageSource: resolveImage, showFallbackNotice: false };
   const host = hostLabel(material);
   const lineageCount = material.origin === "agent" ? (material.lineage?.length ?? 0) : 0;
   return (

@@ -19,7 +19,7 @@ const originals = (contextOfO2: string): ReferenceImage[] => [
 const visual = (contextOfO2 = "The loss curve below shows training."): VisualInput => ({
   manifestKey: "mk", renderedTiles: ["/cap/rendered-01.png", "/cap/rendered-02.png"], referenceTiles: ["/cap/reference-01.png"],
   metrics: { images: { total: 1, broken: 0, brokenSrc: [] }, overflow: { count: 0, samples: [] }, rawMarkup: { count: 0, samples: [] }, mathErrors: 0, unmarkedLists: 0, collapsedCode: 0, emptyCellTables: { count: 0, samples: [] }, emptyHeadings: 0, duplicateTitleHeadings: 0, counts: { codeBlocks: 0, tables: 0, figures: 1, lists: 0, footnotes: 0, headings: 1, words: 10 }, height: 3000 },
-  warnings: [], truncated: { rendered: false, reference: false }, failedReferenceRequests: 0, renderedText: "Title\nBody text.", renderedTextTruncated: false, viewport: { width: 1280, height: 1600 },
+  warnings: [], truncated: { rendered: false, reference: false }, failedReferenceRequests: 0, renderedText: "Title\nBody text.", renderedTextTruncated: false, fullRenderedText: "Title\nBody text.", viewport: { width: 1280, height: 1600 },
   images: { rendered: [{ id: "r1", tile: 1, src: "https://x.test/a.png", alt: "", caption: "", broken: false }], reference: originals(contextOfO2) }, embeds: [], tables: [], code: [],
 });
 const input = (contextOfO2?: string): PromptInput => ({ slug: "s", url: "https://x.test/p", source: "# Title\n\nBy Ada\n\nThe loss curve below shows training.\n\nBody text.", extracted: EXTRACTED, truncated: { source: false, extracted: false }, visual: visual(contextOfO2) });

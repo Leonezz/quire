@@ -18,18 +18,33 @@ export interface PruneOptions {
   siteNames?: ReadonlySet<string> | undefined;
   /** The byline already extracted; a leading line that only repeats it is dropped. */
   byline?: string | undefined;
+  /** The page's URL: extractors resolve "#section" against it, so only links to it are in-page navigation. */
+  source?: string | undefined;
 }
 
 const TOC_HEADING = /^(table of )?contents?$|^(目录|目次)$|^in this (article|post)$|^on this page$/iu;
+// "Further reading" and "Discussion and Review" head papers, references and reviews the author wrote (hf-rlhf, karpathy-rnn, distill).
 const TRAILING_CHROME_HEADING =
-  /^(related( (posts?|articles?|content|reading|stories))?:?|share( this)?( (post|article))?:?|newsletter|subscribe( to .*)?|comments?|comment on this (article|post)|discussion( and review)?|leave a (comment|reply)|(read|you might) (next|also like)|you may also like|more (from|like this|by) .*|more (from|like this)|recommended.*|further reading|sponsored.*|tags?|footer|about the author|written by.*|explore more.*|also in .*|next (article|post|up)|year in review|all (articles|content|posts)|discuss( on| this)?.*|read my book|my book|buy (my|the) book|support (me|this|my work).*|sponsors?)$/iu;
+  /^(related( (posts?|articles?|content|reading|stories))?:?|share( this)?( (post|article))?:?|newsletter|subscribe( to .*)?|comments?|comment on this (article|post)|leave a (comment|reply)|(read|you might) (next|also like)|you may also like|more (from|like this|by) .*|more (from|like this)|recommended.*|sponsored.*|tags?|footer|about the author|written by.*|explore more.*|also in .*|next (article|post|up)|year in review|all (articles|content|posts)|discuss|discuss (on|this)\b.*|read my book|my book|buy (my|the) book|support (me|this|my work).*|sponsors?)$/iu;
+const COMMENTS_HEADING = /^(comments?|comment on this (article|post)|leave a (comment|reply))$/iu;
+/** A chrome-worded section longer than this in prose is the author's writing (comment threads excepted). */
+const MAX_TRAILING_CHROME_PROSE = 800;
+const REFERENCE_CONTAINER = ".references, .bibliography, .footnotes, #references, #bibliography, [role='doc-bibliography'], [role='doc-endnotes'], d-citation-list, d-footnote-list";
+/** Footnote markers and back-references link into the page too, but they cite; they never make a list navigation. */
+const FOOTNOTE_HREF = /#(?:fn|fnref|footnote|footnote-anchor|note|endnote|ref|cite[_-](?:note|ref))[-_:]?\d[\w-]*$/iu;
+const FOOTNOTE_TEXT = /^[\s[\]()\d↩↵⤴^↑*†‡︎]+$/u;
+/** "[20] AutoGPT. https://github.com/…": a numbered reference line, whatever its link density. */
+const CITATION_LINE = /^\[\d{1,3}\]\s/u;
+const REFERENCES_HEADING = /references|bibliography|notes|footnotes|sources|citations|acknowledg|links|resources|参考|链接|引用|注释|脚注|文献/iu;
 const PROMO_TEXT = /^(written by|about the author|share( this)?|subscribe|related|explore more|more from|more by|next article|also in|read next|you may also like|sign up|get (the newsletter|highlights|the latest)|join \d|view all|here'?s another|if you (liked|enjoyed)|thanks for reading|enjoyed this|liked this|follow (me|us))|delivered to your inbox|newsletter|^©|^copyright\b|all rights reserved/iu;
 const DATE_LINE = /^(?:\S+,\s*)?(?:(?:19|20)\d{2}[-/.年]\s*\d{1,2}[-/.月]\s*\d{1,2}\s*日?|\d{1,2}(?:st|nd|rd|th)?\s+[A-Z][a-z]+\.?,?\s+(?:19|20)\d{2}|[A-Z][a-z]+\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+(?:19|20)\d{2})(?:\s*[·•|—–-].{0,40})?$/u;
 const CHROME_CLASS = /\b(tags?|categories|post-tags|post-meta|entry-meta|share|social|author-box|author-card|bio|related|promo|newsletter|subscribe|cta|breadcrumbs?|kicker|eyebrow)\b|aside|recirc|teaser|sidebar|widget|read-next|more-stories|recommend/iu;
 const META_LINE = /(\b\d+ min(ute)? read\b|\bcomments?\b|\bshare\b|\bposted (on|in|by)\b|\bpublished\b|\bupdated\b|\bestimated reading time\b|\btweet\b)/iu;
 const PERMALINK_CLASS = /anchor|permalink|headerlink|heading-link|hash-link|zola-anchor|header-link|section-link/iu;
-const PERMALINK_TEXT = /^[\s#¶§🔗∞︎⚓]*$/u;
+const PERMALINK_TEXT = /^(?:[\s#¶§🔗∞︎⚓]*|link to this (?:heading|section))$/iu;
 const MAX_TAIL_TRIM_RATIO = 0.4;
+/** A heading with no more text than a byline and a date above it is at the top of the article. */
+const MAX_TEXT_BEFORE_TITLE_HEADING = 200;
 const HEADING_TAGS = new Set(["h1", "h2", "h3", "h4", "h5", "h6"]);
 const MAX_HTML_BYTES = 8 * 1024 * 1024;
 
@@ -43,37 +58,63 @@ function headingText(element: Element) {
   return (element.textContent ?? "").replace(/\s+/g, " ").trim();
 }
 
-/** A list where nearly every item is an internal anchor link is a table of contents. */
-function isAnchorList(element: Element | null) {
+function isFootnoteLink(link: Element) {
+  const marks = `${link.getAttribute("class") ?? ""} ${link.getAttribute("role") ?? ""} ${link.getAttribute("rel") ?? ""}`;
+  return FOOTNOTE_HREF.test(link.getAttribute("href") ?? "") || FOOTNOTE_TEXT.test(link.textContent ?? "") || link.closest("sup") !== null || /footnote|fnref|noteref|backlink/iu.test(marks);
+}
+
+/** The page's own URL without its fragment, as extractors write the base of a resolved "#section". */
+function pageOf(source: string | undefined) {
+  if (!source) return undefined;
+  try { const url = new URL(source); url.hash = ""; return url.href; } catch { return undefined; }
+}
+
+function isSamePage(base: string, page: string | undefined) {
+  if (base === "" || page === undefined) return true;
+  try { return new URL(base, page).href === page; } catch { return false; }
+}
+
+/**
+ * A list whose links are nearly all jumps within this page, and nearly all of whose text is those links:
+ * a table of contents. Points that cite footnotes (ruder-optim) or link into lines of another page
+ * (vickiboykis-gguf's convert script #L91) are prose.
+ */
+function isAnchorList(element: Element | null, page?: string) {
   if (!element) return false;
   const tag = element.tagName.toLowerCase();
   if (tag !== "ul" && tag !== "ol" && tag !== "nav") return false;
-  const hrefs = Array.from(element.querySelectorAll("a[href]")).map((link) => link.getAttribute("href") ?? "");
-  if (hrefs.length < 2) return false;
+  if (element.closest(REFERENCE_CONTAINER)) return false;
+  const links = Array.from(element.querySelectorAll("a[href]")).filter((link) => !isFootnoteLink(link));
+  if (links.length < 2) return false;
+  const text = (element.textContent ?? "").replace(/\s+/gu, "").length;
+  const linkText = links.reduce((sum, link) => sum + (link.textContent ?? "").replace(/\s+/gu, "").length, 0);
+  if (text > 0 && linkText / text < 0.7) return false;
   // Extractors resolve "#section" to the page's absolute URL, so same-page links
   // share one prefix before the fragment; that prefix is the page itself.
   const bases = new Map<string, number>();
-  for (const href of hrefs) {
+  for (const link of links) {
+    const href = link.getAttribute("href") ?? "";
     const hash = href.indexOf("#");
     if (hash < 0 || hash === href.length - 1) continue;
     const base = href.slice(0, hash);
+    if (!isSamePage(base, page)) continue;
     bases.set(base, (bases.get(base) ?? 0) + 1);
   }
   const internal = Math.max(0, ...bases.values());
-  return internal / hrefs.length >= 0.8;
+  return internal / links.length >= 0.8;
 }
 
 /** Siblings that belong to a table of contents: anchor lists, bare anchor links, rules and empty paragraphs. */
-function isTocPart(element: Element | null) {
+function isTocPart(element: Element | null, page?: string) {
   if (!element) return false;
   const tag = element.tagName.toLowerCase();
   if (tag === "hr") return true;
   if (tag === "p" && !(element.textContent ?? "").trim() && !element.querySelector("a[href]")) return true;
   if (tag === "a") return (element.getAttribute("href") ?? "").includes("#");
-  if (isAnchorList(element)) return true;
+  if (isAnchorList(element, page)) return true;
   if (tag === "div" || tag === "nav" || tag === "section" || tag === "aside" || tag === "details") {
     const list = element.querySelector("ul, ol");
-    return isAnchorList(list) && (element.textContent ?? "").trim().length <= (list?.textContent ?? "").trim().length + 40;
+    return isAnchorList(list, page) && (element.textContent ?? "").trim().length <= (list?.textContent ?? "").trim().length + 40;
   }
   return false;
 }
@@ -90,10 +131,10 @@ function removeFollowingParts(start: Element | null, isPart: (element: Element |
   return removed;
 }
 
-function removeTableOfContents(document: Document, rules: string[]) {
+function removeTableOfContents(document: Document, page: string | undefined, rules: string[]) {
   for (const heading of Array.from(document.querySelectorAll("h1, h2, h3, h4, h5, h6")) as El[]) {
     if (!TOC_HEADING.test(headingText(heading))) continue;
-    const removed = removeFollowingParts(heading.nextElementSibling, isTocPart);
+    const removed = removeFollowingParts(heading.nextElementSibling, (element) => isTocPart(element, page));
     if (removed === 0) continue;
     heading.remove();
     rules.push("article.prune.table-of-contents@1");
@@ -101,7 +142,7 @@ function removeTableOfContents(document: Document, rules: string[]) {
   }
   // A bare ToC container without a heading.
   for (const nav of Array.from(document.querySelectorAll("nav.toc, nav#toc, [role='doc-toc'], .table-of-contents, #table-of-contents, #TableOfContents, .toc")) as El[]) {
-    if (!isAnchorList(nav) && !isAnchorList(nav.querySelector("ul, ol"))) continue;
+    if (!isAnchorList(nav, page) && !isAnchorList(nav.querySelector("ul, ol"), page)) continue;
     const previous = nav.previousElementSibling;
     if (previous && TOC_HEADING.test(headingText(previous))) previous.remove();
     nav.remove();
@@ -121,18 +162,35 @@ function removeTrailingChrome(document: Document, rules: string[]) {
     const before = textBefore(document, heading);
     const followedByLinkList = isLinkListOnly(heading.nextElementSibling);
     if (!followedByLinkList && bodyText > 0 && before / bodyText < 0.6) continue;
-    const level = headingLevel(heading) ?? 6;
-    let cursor: Element | null = heading.nextElementSibling;
+    const section = sectionAfter(heading);
+    if (holdsAuthoredContent(heading, section)) continue;
     heading.remove();
-    while (cursor) {
-      const next: Element | null = cursor.nextElementSibling;
-      const cursorLevel = headingLevel(cursor);
-      if (cursorLevel !== undefined && cursorLevel <= level) break;
-      cursor.remove();
-      cursor = next;
-    }
+    for (const element of section) element.remove();
     rules.push("article.prune.trailing-chrome@1");
   }
+}
+
+/** The siblings a heading heads: up to the next heading of the same or a higher level. */
+function sectionAfter(heading: Element) {
+  const level = headingLevel(heading) ?? 6;
+  const section: Element[] = [];
+  for (let cursor = heading.nextElementSibling; cursor; cursor = cursor.nextElementSibling) {
+    const cursorLevel = headingLevel(cursor);
+    if (cursorLevel !== undefined && cursorLevel <= level) break;
+    section.push(cursor);
+  }
+  return section;
+}
+
+/**
+ * A section under a chrome-worded heading that holds a reference list or long prose is the author's, not the
+ * site's. Sub-headings say nothing either way: "Explore more from GitHub" is cards with an h3 each.
+ */
+function holdsAuthoredContent(heading: Element, section: readonly Element[]) {
+  if (section.some((element) => element.matches(REFERENCE_CONTAINER) || element.querySelector(REFERENCE_CONTAINER) !== null)) return true;
+  if (COMMENTS_HEADING.test(headingText(heading))) return false;
+  const prose = section.filter((element) => /^(p|blockquote)$/iu.test(element.tagName) && linkDensity(element) < 0.5).reduce((sum, element) => sum + (element.textContent ?? "").trim().length, 0);
+  return prose > MAX_TRAILING_CHROME_PROSE;
 }
 
 /** An hr and/or a list whose items are all links (a "related posts" block), nothing else. */
@@ -188,6 +246,8 @@ function isLinkCardList(element: Element) {
     if (!link) return false;
     const text = (item.textContent ?? "").replace(/\s+/gu, " ").trim();
     const rest = text.replace(link.textContent ?? "", "").trim();
+    // "ignite lets you take a container image and run it as a Firecracker VM": one link the author wrote a sentence about.
+    if (items.length === 1 && rest.split(" ").length >= 6 && !/(?:19|20)\d{2}/u.test(rest)) return false;
     const cardLike = item.querySelector("h1, h2, h3, h4, img, picture, time") !== null || /(?:19|20)\d{2}/u.test(rest);
     const prose = /[.!?。！？]\s/u.test(rest) && rest.length > 120;
     return !prose && (rest.length <= 80 || (cardLike && text.length <= 240));
@@ -204,12 +264,12 @@ function isStructural(element: Element) {
 const PLACEHOLDER_TEXT = /^(loading|正在加载|加载中|please wait)[.…]*$/iu;
 
 /** Same-page anchor lists anywhere are navigation (an in-page ToC without a heading, a tab strip); loading placeholders are app residue. */
-function removeNavigationLists(document: Document, rules: string[]) {
+function removeNavigationLists(document: Document, page: string | undefined, rules: string[]) {
   let changed = false;
   for (const list of Array.from(document.querySelectorAll("ul, ol"))) {
-    if (!list.isConnected || !isAnchorList(list)) continue;
+    if (!list.isConnected || !isAnchorList(list, page)) continue;
     const previous = (list as El).previousElementSibling;
-    if (previous && /^h[1-6]$/iu.test(previous.tagName) && /references|bibliography|notes|footnotes|links|resources|参考|链接|引用|注释|脚注|文献/iu.test(previous.textContent ?? "")) continue;
+    if (previous && /^h[1-6]$/iu.test(previous.tagName) && REFERENCES_HEADING.test(previous.textContent ?? "")) continue;
     list.remove();
     changed = true;
   }
@@ -219,14 +279,28 @@ function removeNavigationLists(document: Document, rules: string[]) {
   if (changed) rules.push("article.prune.navigation-lists@1");
 }
 
-/** Permalink anchors ("#", "¶", icon-only links) are removed; a heading that is itself a link is unwrapped. */
+/** Permalink anchors ("#", "¶", icon-only links, links to the heading itself) are removed; a heading that is itself a link is unwrapped. */
 function cleanHeadings(document: Document, rules: string[]) {
   let changed = false;
+  const letters = (value: string) => value.toLowerCase().replace(/[^\p{L}\p{N}]/gu, "");
+  const fragmentOf = (href: string) => {
+    const raw = href.includes("#") ? href.slice(href.indexOf("#") + 1) : "";
+    try { return decodeURIComponent(raw); } catch { return raw; } // a malformed escape is compared as written
+  };
+  // A link to its own heading is a permalink whatever its label (joshwcomeau.com: "Link to this heading"), unless its words are what the id was made from.
+  // Extractors absolutize hrefs and the page URL is not known here: "#id" surely means this page, and so does a link that names itself.
+  const linksToOwnHeading = (link: Element, heading: Element, text: string) => {
+    const href = link.getAttribute("href") ?? "";
+    const fragment = fragmentOf(href);
+    if (!fragment) return false;
+    const target = fragment === link.getAttribute("id") || fragment === link.getAttribute("name") || (href.startsWith("#") && fragment === heading.id);
+    return target && !(letters(text) && letters(fragment).includes(letters(text)));
+  };
   for (const heading of Array.from(document.querySelectorAll("h1, h2, h3, h4, h5, h6"))) {
     const headingText = (heading.textContent ?? "").trim();
     for (const link of Array.from(heading.querySelectorAll("a"))) {
       const text = (link.textContent ?? "").trim();
-      const isPermalink = PERMALINK_TEXT.test(text) || PERMALINK_CLASS.test(link.getAttribute("class") ?? "") || link.getAttribute("aria-hidden") === "true";
+      const isPermalink = PERMALINK_TEXT.test(text) || PERMALINK_CLASS.test(link.getAttribute("class") ?? "") || link.getAttribute("aria-hidden") === "true" || linksToOwnHeading(link, heading, text);
       const id = link.getAttribute("id") ?? link.getAttribute("name");
       if (id && !heading.id) heading.setAttribute("id", id);
       if (isPermalink && text !== headingText) { link.remove(); changed = true; continue; }
@@ -252,7 +326,10 @@ function normalizeTitleHeadings(document: Document, title: string | undefined, s
   for (const heading of leading) {
     const text = normalizedTitle(heading.textContent ?? "");
     if (!text) continue;
-    if (!removedTitle && wanted && (text === wanted || wanted.startsWith(text + " ") || text.startsWith(wanted + " "))) {
+    // A heading that is part of the title, or the title padded with UI text, repeats it only at the top: further in,
+    // "Centaurs and Cyborgs" is a section of "Centaurs and Cyborgs on the Jagged Frontier".
+    const partOfTitle = (wanted.startsWith(text + " ") || text.startsWith(wanted + " ")) && textBefore(document, heading) < MAX_TEXT_BEFORE_TITLE_HEADING;
+    if (!removedTitle && wanted && (text === wanted || partOfTitle)) {
       heading.remove();
       rules.push("article.prune.duplicate-title@1");
       removedTitle = true;
@@ -419,8 +496,9 @@ function unwrapCodeBlockquotes(document: Document, rules: string[]) {
 /** Footnote back-references (↩) are navigation the reader provides itself; left in, they become one-line paragraphs. */
 function removeFootnoteBackrefs(document: Document, rules: string[]) {
   let changed = false;
-  for (const link of Array.from(document.querySelectorAll("a[href*='#fnref'], a.footnote-backref, a.reversefootnote, a[role='doc-backlink'], a[rel='footnote-backref']"))) {
-    if (!/^[\s↩↵⤴^↑]*︎?$/u.test((link.textContent ?? "").trim())) continue;
+  for (const link of Array.from(document.querySelectorAll("a[href*='#fnref'], a.footnote-backref, a[class*='footnote'][class*='return'], a.reversefootnote, a[role='doc-backlink'], a[rel='footnote-backref']"))) {
+    // "↩", or Hugo's "[return]" (hillelwayne.com).
+    if (!/^[\s↩↵⤴^↑]*︎?$|^\[?(?:return|back)\]?$/iu.test((link.textContent ?? "").trim())) continue;
     const parent = link.parentElement;
     link.remove();
     if (parent && (parent.textContent ?? "").trim().length === 0 && parent.querySelector("img, pre, table") === null) parent.remove();
@@ -446,6 +524,20 @@ function stripDateLabel(text: string) {
   return text.replace(/^(发表日期|发布日期|日期|date|published( on)?|updated( on)?|posted( on)?)[\s:：]*/iu, "");
 }
 
+/**
+ * A list right under a "References"-like heading, or a paragraph in the run of paragraphs that follows one
+ * (lilian-agent's "[20] AutoGPT. https://…" lines). A tag list after that run is the site's, not a reference.
+ */
+function isUnderReferencesHeading(element: Element) {
+  const isHeading = (candidate: Element | null) => !!candidate && /^h[1-6]$/iu.test(candidate.tagName);
+  if (element.tagName.toLowerCase() !== "p") return isHeading(element.previousElementSibling) && REFERENCES_HEADING.test(element.previousElementSibling?.textContent ?? "");
+  for (let previous = element.previousElementSibling; previous; previous = previous.previousElementSibling) {
+    if (isHeading(previous)) return REFERENCES_HEADING.test(previous.textContent ?? "");
+    if (previous.tagName.toLowerCase() !== "p") return false;
+  }
+  return false;
+}
+
 function trimPromoTail(document: Document, rules: string[]) {
   const body = flowContainer(document);
   if (!body) return;
@@ -461,9 +553,9 @@ function trimPromoTail(document: Document, rules: string[]) {
     if (tag === "hr" || (text.length === 0 && !element.querySelector("img, picture, svg, video, iframe"))) { element.remove(); continue; }
     // "Here's another article just for you:" — a lead-in whose cards were already removed.
     const leadIn = removed > 0 && text.length < 120 && (/[:：]$/u.test(text) || (text.length < 40 && !/[.!?。！？]/u.test(text) && linksWithin(element).length === 0 && !/^h[1-6]$/u.test(tag)));
-    // A link list under "References" / "Notes" is content, and so is everything before it.
-    const previous = (element as El).previousElementSibling;
-    if ((tag === "ul" || tag === "ol") && previous && /^h[1-6]$/u.test(previous.tagName.toLowerCase()) && /references|bibliography|notes|footnotes|sources|citations|acknowledg|links|resources|参考|链接|引用|注释|脚注|文献/iu.test(previous.textContent ?? "")) break;
+    // A link list or a run of reference lines under "References" / "Notes" is content, and so is everything before it.
+    if (/^(ul|ol|p)$/u.test(tag) && isUnderReferencesHeading(element)) break;
+    if (tag === "p" && CITATION_LINE.test(text)) break;
     if (isStructural(element)) break;
     const cards = linksWithin(element).filter((link) => link.querySelector("img, picture, svg")).length;
     const chrome =
@@ -493,6 +585,7 @@ export function pruneArticleChrome(html: string, options: PruneOptions = {}): Pr
   const { document } = parseHTML(`<!doctype html><html><body>${html}</body></html>`);
   const rules: string[] = [];
   const doc = document as unknown as Document;
+  const page = pageOf(options.source);
   unwrapFontTags(doc, rules);
   anchorsToTargets(doc, rules);
   unwrapCodeBlockquotes(doc, rules);
@@ -500,8 +593,8 @@ export function pruneArticleChrome(html: string, options: PruneOptions = {}): Pr
   unwrapLayoutTables(doc, rules);
   cleanHeadings(doc, rules);
   normalizeTitleHeadings(doc, options.title, options.siteNames, rules);
-  removeTableOfContents(doc, rules);
-  removeNavigationLists(doc, rules);
+  removeTableOfContents(doc, page, rules);
+  removeNavigationLists(doc, page, rules);
   removeTrailingChrome(doc, rules);
   trimPromoTail(doc, rules);
   trimPromoHead(doc, options.byline, rules);

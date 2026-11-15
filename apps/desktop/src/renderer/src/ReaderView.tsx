@@ -3,7 +3,7 @@ import type { ReactNode } from "react";
 import { Presence, SplitGroup, SplitPanel, TocRail, useSplitSizes } from "@read/ui";
 import { ColumnSeparator, PAGE_MIN, PANEL_DEFAULT, PANEL_MAX, PANEL_MIN } from "./ContentPane";
 import { ReaderToolbar } from "./ReaderToolbar";
-import { installTextAnnotationHighlights, renderedTextQuoteSelection, resolveTextQuoteRange, textAnnotationHighlightStyles, useDocumentReadingPosition } from "@read/reader";
+import { installTextAnnotationHighlights, renderedTextQuoteSelection, resolveTextQuoteAnchor, resolveTextQuoteRange, textAnnotationHighlightStyles, useDocumentReadingPosition, type TextAnnotationPlacement } from "@read/reader";
 import { ANNOTATION_COLORS, citationFor, useAnnotations } from "./annotations";
 import type { NoteDraft } from "./NotesPanel";
 import { ReaderInspector, type ReaderPanel } from "./ReaderInspector";
@@ -27,6 +27,7 @@ import { isReportShortcut } from "./keyboardMap";
 import { reportSelectionOf, takeLiveSelection, viewportOf, rectOf, type ReportRequest, type ReportSelection } from "./reportRequest";
 
 type OutlineEntry = { id: string; label: string; level: number };
+const NO_PLACEMENTS: ReadonlyMap<string, TextAnnotationPlacement> = new Map();
 
 /** The heading whose top has passed the reading line (a little below the viewport top). */
 function currentHeading(viewport: HTMLElement, root: HTMLElement | null): string | undefined {
@@ -116,6 +117,8 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
   const shownAnnotation = useCallback((annotation: Annotation) => viewAnnotations.find((entry) => entry.id === annotation.id), [viewAnnotations]);
   const [noteDraft, setNoteDraft] = useState<NoteDraft | null>(null);
   const [activeAnnotation, setActiveAnnotation] = useState<string | undefined>(undefined);
+  // Where the highlight layer placed each shown note; the Notes panel lists the unplaced ones and takes sections from the rest.
+  const [placements, setPlacements] = useState(NO_PLACEMENTS);
   // "Ask about this" narrows the agent's context to the selected passage until it is dropped.
   const [asked, setAsked] = useState<SelectionCapture | null>(null);
   const agentContext: AgentContext = asked ? { kind: "selection", materialId: material.id, quote: asked.quote, locator: asked.locator } : { kind: "material", materialId: material.id };
@@ -168,13 +171,14 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
 
   useEffect(() => {
     const root = bodyRef.current;
-    if (!root || viewAnnotations.length === 0) return;
+    if (!root || viewAnnotations.length === 0) { setPlacements(NO_PLACEMENTS); return; }
     const installed = installTextAnnotationHighlights({
       annotations: viewAnnotations.map((annotation) => ({ id: annotation.id, locator: annotation.locator, quote: annotation.quote, kind: annotation.kind, color: annotation.color, ...(annotation.note ? { note: annotation.note } : {}) })),
       namePrefix: "read-note",
       onActivate: (id) => { setActiveAnnotation(id); setPanel("notes"); },
       root,
     });
+    setPlacements(installed.placements);
     return installed.dispose;
   }, [viewAnnotations, bodyGeneration]);
 
@@ -191,11 +195,13 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
     }
     return undefined;
   };
+  const placedRange = (annotation: Annotation) => { const placement = placements.get(annotation.id); return placement && placement.status !== "unplaced" ? placement.range : undefined; };
   const copyText = async (text: string) => { await navigator.clipboard.writeText(text); };
   const jumpTo = (annotation: Annotation) => {
     const root = bodyRef.current;
     if (!root) return;
-    const range = resolveTextQuoteRange(root, annotation.locator, annotation.quote);
+    // Approximately too: a stale note jumps to where it is drawn; an unplaced one has no jump in the Notes panel.
+    const range = resolveTextQuoteAnchor(root, annotation.locator, annotation.quote)?.range;
     if (!range) return;
     (range.startContainer.parentElement ?? root).scrollIntoView({ block: "center", behavior: "smooth" });
     setActiveAnnotation(annotation.id);
@@ -326,7 +332,7 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
               agentSessionId={rebuildSession} onAgentSessionChange={setPanelSession} onReport={reportFromChrome} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError}
               annotations={annotations} annotationsError={annotationsError} mirroredViews={mirroredViews(view, textContent)} activeAnnotation={activeAnnotation} noteDraft={noteDraft} onNoteDraftChange={setNoteDraft}
               onJump={(annotation) => { const shown = shownAnnotation(annotation); if (shown) jumpTo(shown); else onJumpAcross(annotation); }} onUpdateNote={(id, note) => void update(id, { note })} onDeleteAnnotation={(id) => void remove(id)}
-              sectionFor={(annotation) => { const shown = shownAnnotation(annotation); return shown && bodyRef.current ? sectionOf(resolveTextQuoteRange(bodyRef.current, shown.locator, shown.quote)) : undefined; }}
+              sectionFor={(annotation) => sectionOf(placedRange(annotation))} placementOf={(annotation) => placements.get(annotation.id)?.status}
               onMaterialSaved={onMaterialSaved} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onOpenSettings={onOpenSettings} />
           </SplitPanel>
         </>

@@ -1,4 +1,5 @@
 import { placeInteractivePlaceholders, replaceImageObjects } from "./embedded-media";
+import type { ReaderV2CalloutKind } from "./reader-document-v2-contract";
 
 /**
  * Rewrites made to the extractors' working copy of the page before Defuddle
@@ -80,11 +81,215 @@ function imageObjects(document: Document, source: string) {
   return replaceImageObjects(document, source) > 0;
 }
 
+// A class token, or one hyphenated part of one ("callout-warning"), that names a callout's kind.
+const CALLOUT_KIND_TOKENS: ReadonlyMap<string, ReaderV2CalloutKind> = new Map([
+  ["note", "note"],
+  ["info", "note"],
+  ["tip", "tip"],
+  ["hint", "tip"],
+  ["success", "tip"],
+  ["important", "important"],
+  ["key-point", "key-point"],
+  ["keypoint", "key-point"],
+  ["takeaway", "key-point"],
+  ["warning", "warning"],
+  ["warn", "warning"],
+  ["attention", "warning"],
+  ["caution", "caution"],
+  ["danger", "caution"],
+  ["error", "caution"],
+]);
+/** Class tokens by which the author declares a block a callout, however short or link-heavy (matklad's one-link series note). */
+const CALLOUT_CLASSES = new Set(["admonition", "callout", ...CALLOUT_KIND_TOKENS.keys()]);
+const CALLOUT_CANDIDATES = "aside, .admonition, .callout, .note, .key-point";
+const CALLOUT_TAGS = new Set(["ASIDE", "DIV", "SECTION"]);
+// A "note" longer than this is a wrapper, not a callout (eugeneyan.com's div.note holds the whole post).
+const MAX_CALLOUT_TEXT = 2500;
+// An unlabelled aside shorter than this is a line of chrome ("Discuss this page on Reddit.", fasterthanli.me).
+const MIN_ASIDE_TEXT = 80;
+const MAX_ASIDE_LINK_DENSITY = 0.5;
+// The page furniture asides are also made of: sidebars, widgets, tables of contents, related and shared links, comments.
+const CHROME_ASIDE =
+  /(?:^|[\s_-])(?:sidebar|widgets?|toc|related|recirc|read-?next|read-?more|share|sharing|social|newsletter|subscribe|promo|advert|sponsor(?:ed)?|comments?|discuss(?:ion)?|nav(?:igation)?|menu|breadcrumbs?|author|bio|tags|search)(?=$|[\s_-])/iu;
+const HIDDEN_CLASS = /^(?:hidden|invisible|d-none|sr-only|visually-hidden|screen-reader-(?:only|text)|hide-on-print|hide-for-print|hide-print|hidden-print|no-?print|print-none|print:hidden)$/iu;
+const HIDDEN_STYLE = /(?:display\s*:\s*none|visibility\s*:\s*hidden)/iu;
+const PULL_QUOTE_CLASS = /pull-?quote/iu;
+const SCREEN_READER_LABEL = ".screen-reader-only, .screen-reader-text, .sr-only, .visually-hidden";
+
+const normalizedText = (node: Node) => (node.textContent ?? "").replace(/\s+/gu, " ").trim();
+
+function calloutKind(element: Element): ReaderV2CalloutKind | undefined {
+  for (const token of classTokens(element).map((value) => value.toLowerCase())) {
+    const kind = CALLOUT_KIND_TOKENS.get(token) ?? token.split(/[-_]+/u).map((part) => CALLOUT_KIND_TOKENS.get(part)).find(Boolean);
+    if (kind) return kind;
+  }
+  return undefined;
+}
+
+function linkDensity(element: Element, text: string) {
+  const linkText = Array.from(element.querySelectorAll("a"), (link) => normalizedText(link).length).reduce((sum, length) => sum + length, 0);
+  return text.length === 0 ? 0 : linkText / text.length;
+}
+
+/** Hidden, print-hidden (Quanta's pull quotes and column boxes), page chrome by class, or a pull quote: not the article's own text. */
+function isFurniture(element: Element) {
+  if (classTokens(element).some((token) => HIDDEN_CLASS.test(token)) || HIDDEN_STYLE.test(element.getAttribute("style") ?? "")) return true;
+  if (CHROME_ASIDE.test(`${element.getAttribute("class") ?? ""} ${element.id}`)) return true;
+  return [element, ...Array.from(element.querySelectorAll("[class]"))].some((candidate) => PULL_QUOTE_CLASS.test(candidate.getAttribute("class") ?? ""));
+}
+
+/**
+ * Whether a candidate block is a callout the reader should keep. A declared callout (class note,
+ * admonition, callout, key-point…) is the author's; an unlabelled <aside> must also read as prose:
+ * long enough, not mostly links, and not a pull quote repeating text the page already shows.
+ */
+function isCallout(element: Element, pageText: string) {
+  if (!CALLOUT_TAGS.has(element.tagName.toUpperCase())) return false;
+  if (element.closest("noscript, nav, header, footer, pre, code, table, [hidden], [aria-hidden='true']")) return false;
+  if (isFurniture(element) || element.querySelector("h1, article, main, nav, form, aside")) return false;
+  const text = normalizedText(element);
+  if (text.length === 0 || text.length > MAX_CALLOUT_TEXT) return false;
+  if (classTokens(element).some((token) => CALLOUT_CLASSES.has(token.toLowerCase()))) return true;
+  return text.length >= MIN_ASIDE_TEXT && linkDensity(element, text) <= MAX_ASIDE_LINK_DENSITY && pageText.indexOf(text) === pageText.lastIndexOf(text);
+}
+
+/**
+ * Defuddle removes every <aside> but `aside[class*=callout]`, Readability every <aside>, and neither keeps
+ * `.admonition` or `.note` boxes reliably, so a page's callouts (web.dev's "Key point", matklad's closing
+ * note, gwern's "Read The Samples") would go as page chrome. Each becomes a blockquote both keep, marked with
+ * its kind; a screen-reader label that only names the kind (Quarto's "Warning") goes, since the reader shows it.
+ */
+function callouts(document: Document) {
+  const pageText = normalizedText(document.body ?? document.documentElement);
+  let changed = false;
+  for (const element of Array.from(document.querySelectorAll(CALLOUT_CANDIDATES))) {
+    if (element.parentElement?.closest("blockquote[data-callout]") || !isCallout(element, pageText)) continue;
+    const kind = calloutKind(element) ?? "note";
+    for (const label of Array.from(element.querySelectorAll(SCREEN_READER_LABEL))) {
+      if (CALLOUT_KIND_TOKENS.has(normalizedText(label).toLowerCase())) label.remove();
+    }
+    const quote = document.createElement("blockquote");
+    if (element.id) quote.setAttribute("id", element.id);
+    quote.setAttribute("data-callout", kind);
+    quote.append(...Array.from(element.childNodes));
+    element.replaceWith(quote);
+    changed = true;
+  }
+  return changed;
+}
+
+const HEADINGS_IN_FRAGMENT_LINKS = ["h1", "h2", "h3", "h4", "h5", "h6"].map((tag) => `a[href^='#'] > ${tag}`).join(", ");
+const isBlank = (node: Node) => node.nodeType === 8 || (node.nodeType === 3 && (node.textContent ?? "").trim() === "");
+
+/**
+ * A heading wrapped in its own permalink (`<a class="anchor" href="#…"><h2>`, fasterthanli.me's five section
+ * headings) goes with the link when Defuddle removes permalinks. The heading is lifted out with the link's id.
+ */
+function anchorWrappedHeadings(document: Document) {
+  let changed = false;
+  for (const heading of Array.from(document.querySelectorAll(HEADINGS_IN_FRAGMENT_LINKS))) {
+    const link = heading.parentElement;
+    if (!link || link.closest("nav") || !Array.from(link.childNodes).every((node) => node === heading || isBlank(node))) continue;
+    const id = link.getAttribute("id");
+    if (id && !heading.id) {
+      link.removeAttribute("id");
+      heading.setAttribute("id", id);
+    }
+    link.replaceWith(heading);
+    changed = true;
+  }
+  return changed;
+}
+
+const SUBSTACK_FOOTNOTE = "div.footnote[data-component-name='FootnoteToDOM']";
+const childWithClass = (element: Element, token: string) => Array.from(element.children).find((child) => classTokens(child).includes(token));
+
+/**
+ * Substack writes each footnote as its own div (a.footnote-number, then .footnote-content), which no reader
+ * recognises as a footnote list: latent.space's notes became loose "[1]" paragraphs. A run of them becomes one
+ * <section class="footnotes"><ol>, each note an <li> carrying its number's id ("footnote-1").
+ */
+function substackFootnotes(document: Document) {
+  let changed = false;
+  for (const first of Array.from(document.querySelectorAll(SUBSTACK_FOOTNOTE))) {
+    if (!first.parentNode) continue;
+    const run = [first];
+    const between: Node[] = [];
+    for (let node = first.nextSibling; node; node = node.nextSibling) {
+      if (isBlank(node)) between.push(node);
+      else if (node.nodeType === 1 && (node as Element).matches(SUBSTACK_FOOTNOTE)) run.push(node as Element);
+      else break;
+    }
+    // A note without its number's id would have nothing to be referenced by.
+    if (!run.every((note) => childWithClass(note, "footnote-number")?.id)) continue;
+    const list = document.createElement("ol");
+    for (const note of run) {
+      const number = childWithClass(note, "footnote-number")!;
+      const item = document.createElement("li");
+      item.setAttribute("id", number.id);
+      item.append(...Array.from((childWithClass(note, "footnote-content") ?? note).childNodes).filter((child) => child !== number));
+      list.append(item);
+    }
+    const section = document.createElement("section");
+    section.setAttribute("class", "footnotes");
+    section.append(list);
+    first.replaceWith(section);
+    for (const node of [...run.slice(1), ...between]) node.parentNode?.removeChild(node);
+    changed = true;
+  }
+  return changed;
+}
+
+const FOOTNOTE_REFERENCES = ".footnote-anchor, .footnoteRef, .footnote-ref, [role='doc-noteref'], [rel^='footnote']";
+// The class tokens Defuddle's permalink selectors match: a[href^="#"][class*="anchor" i], a[href^="#"][class*="ref" i].
+const PERMALINK_CLASS = /anchor|ref/iu;
+const BACK_REFERENCE = /back|return|reverse/iu;
+
+/** The reference link of a footnote marker, when it points at a note this page holds; a back-reference (rel="footnote-backref") is none. */
+function footnoteReferenceLink(document: Document, marker: Element) {
+  const link = marker.tagName.toUpperCase() === "A" ? marker : marker.querySelector("a[href^='#']");
+  const href = link?.getAttribute("href") ?? "";
+  if (!link || !href.startsWith("#") || link.getAttribute("role") === "doc-backlink") return undefined;
+  if (BACK_REFERENCE.test(`${link.getAttribute("rel") ?? ""} ${link.getAttribute("class") ?? ""}`)) return undefined;
+  return document.getElementById(href.slice(1)) ? link : undefined;
+}
+
+/**
+ * Defuddle removes fragment links whose class holds "anchor" or "ref" as permalinks, and the footnote markers
+ * with them (Substack's footnote-anchor, Pandoc's footnote-ref, colah's footnoteRef). A marker pointing at a note
+ * on the page loses those class tokens, is marked data-footnote-ref and sits in a <sup>.
+ */
+function footnoteReferences(document: Document) {
+  let changed = false;
+  for (const marker of Array.from(document.querySelectorAll(FOOTNOTE_REFERENCES))) {
+    const link = footnoteReferenceLink(document, marker);
+    if (!link || link.hasAttribute("data-footnote-ref")) continue;
+    const kept = classTokens(link).filter((token) => !PERMALINK_CLASS.test(token));
+    if (kept.length > 0) link.setAttribute("class", kept.join(" "));
+    else link.removeAttribute("class");
+    link.setAttribute("data-footnote-ref", "");
+    // Pandoc and colah put the <sup> inside the link; one <sup> around it is enough.
+    const inner = link.children.length === 1 ? link.firstElementChild : null;
+    if (inner?.tagName.toUpperCase() === "SUP" && normalizedText(inner) === normalizedText(link)) inner.replaceWith(...Array.from(inner.childNodes));
+    if (!link.parentElement?.closest("sup")) {
+      const sup = document.createElement("sup");
+      link.replaceWith(sup);
+      sup.append(link);
+    }
+    changed = true;
+  }
+  return changed;
+}
+
 const PREEXTRACTION_PASSES: readonly PreextractionPass[] = [
   { rule: "article.preextract.icon-cells@1", apply: iconLigatureCells },
   { rule: "article.preextract.pseudo-element-classes@1", apply: pseudoElementHiddenClasses },
   { rule: "article.preextract.interactive-placeholders@1", apply: interactivePlaceholders },
   { rule: "article.preextract.image-objects@1", apply: imageObjects },
+  { rule: "article.preextract.callouts@1", apply: callouts },
+  { rule: "article.preextract.anchor-headings@1", apply: anchorWrappedHeadings },
+  { rule: "article.preextract.substack-footnotes@1", apply: substackFootnotes },
+  { rule: "article.preextract.footnote-references@1", apply: footnoteReferences },
 ];
 
 /** Runs every pass over the extractor's own copy of the page at `source` and returns the rules of the passes that changed it. */

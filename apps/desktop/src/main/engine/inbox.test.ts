@@ -237,6 +237,31 @@ describe("readItem", () => {
     expect(await store.get(pasted.material.id)).toMatchObject({ byline: "Mara Lindqvist", meta: { abstract: "From the Atom feed." } });
   });
 
+  it("reads an arXiv item as the paper already pasted by its abs or pdf link, any version, without fetching it again", async () => {
+    const pdf = new Uint8Array(await readFile(join(__dirname, "__fixtures__", "two-pages.pdf")));
+    const fetch = fetcherOf(async (url) => {
+      if (url.pathname === "/abs/2409.12345v2") return { bytes: html("Paper"), mediaType: "text/html", finalUrl: url.toString() };
+      if (url.pathname === "/pdf/2409.54321v1") return { bytes: pdf, mediaType: "application/pdf", finalUrl: url.toString() };
+      throw new Error(`${url.toString()} must not be fetched on Read`);
+    });
+    const store = new MaterialStore(root, fetch);
+    const abs = await store.openUrl("https://arxiv.org/abs/2409.12345v2");
+    const paper = await store.openUrl("https://arxiv.org/pdf/2409.54321v1");
+    if (!abs.ok || !paper.ok) throw new Error("setup");
+    const items = new ItemStore(db);
+    const meta = { kind: "preprint" as const, arxivId: "2409.12345", publication: "arXiv", creators: [{ role: "author" as const, name: "Mara Lindqvist" }] };
+    items.upsert({ id: "arxiv", title: "arXiv cs.CL", kind: "arxiv" }, [
+      { externalId: "2409.12345", title: "Paper", link: "https://arxiv.org/abs/2409.12345", publishedAt: "2026-09-17T00:00:00.000Z", gist: "", readingMinutes: 20, signals: { math: true }, summaryOnly: false, meta },
+      { externalId: "2409.54321", title: "Other", link: "https://arxiv.org/abs/2409.54321", publishedAt: "2026-09-16T00:00:00.000Z", gist: "", readingMinutes: 20, signals: { math: true }, summaryOnly: false },
+    ]);
+    const [first, second] = items.inbox() as [ItemRecord, ItemRecord];
+    const deps = { items, events: new EventStore(db), store, warn: () => { throw new Error("no warning expected"); } };
+    expect(await readItem(first.id, deps)).toMatchObject({ ok: true, material: { id: abs.material.id, byline: "Mara Lindqvist", aliases: ["https://arxiv.org/html/2409.12345"] } });
+    expect(await readItem(second.id, deps)).toMatchObject({ ok: true, material: { id: paper.material.id, primaryView: "pdf" } });
+    expect(fetch.calls).toEqual(["https://arxiv.org/abs/2409.12345v2", "https://arxiv.org/pdf/2409.54321v1"]);
+    expect((await store.list()).map((m) => m.id).sort()).toEqual([abs.material.id, paper.material.id].sort());
+  });
+
   it("keeps the page fetched for one item when another item with the same link cannot be fetched", async () => {
     let down = false;
     const fetch = fetcherOf(async (url) => {

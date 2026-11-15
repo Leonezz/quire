@@ -22,7 +22,7 @@ import {
 } from "./output-budget";
 import { readerDocumentSchema } from "./reader-document-contract";
 import { readerDocumentV2FromHtml, readerDocumentV2FromText } from "./reader-document-v2";
-import { normalizeSyntaxHighlightingHtml } from "./syntax-highlight-html";
+import { normalizeSyntaxHighlightingHtml, textWithBreaks } from "./syntax-highlight-html";
 
 type MdNode = {
   align?: Array<"center" | "left" | "right" | null>;
@@ -113,6 +113,19 @@ function markdownFromHtml(
       const lang = (element.getAttribute("class") ?? "").split(/\s+/).find((token) => /^(?:lang|language)-/.test(token))?.replace(/^(?:lang|language)-/, "") ?? "";
       const text = (element.textContent ?? "").replace(/\n$/, "");
       return `\n\n\`\`\`${lang}\n${text}\n\`\`\`\n\n`;
+    },
+  });
+  // Medium writes <pre><span>line<br/>line</span></pre>: no <code> for Turndown's fence rule, and textContent drops the <br>.
+  // (Turndown's DOM answers a missed querySelector with undefined, so the <br> are counted.)
+  service.addRule("pre-line-breaks", {
+    filter: (node) => node.nodeName === "PRE" && node.getElementsByTagName("br").length > 0,
+    replacement: (_content, node) => {
+      // The same text the reader shows: the <pre>'s <code> child when it has one (reader-document-v2.ts).
+      const code = (Array.from(node.childNodes).find((child) => child.nodeName === "CODE") as HTMLElement | undefined) ?? node;
+      const lang = [code, node].flatMap((element) => (element.getAttribute("class") ?? "").split(/\s+/)).find((token) => /^(?:lang|language)-/.test(token))?.replace(/^(?:lang|language)-/, "") ?? "";
+      const text = textWithBreaks(code).replace(/\n$/, "");
+      const fence = "`".repeat(Math.max(3, ...Array.from(text.matchAll(/^`{3,}/gm), (match) => match[0].length + 1)));
+      return `\n\n${fence}${lang}\n${text}\n${fence}\n\n`;
     },
   });
   service.addRule("safe-links", {

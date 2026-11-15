@@ -27,7 +27,8 @@ function languageFrom(element: Element, pre: Element) {
   return candidates.length === 1 ? candidates[0] : undefined;
 }
 
-function textWithBreaks(node: Node): string {
+/** A code block's text with each <br> as a line end, the way the page shows it. */
+export function textWithBreaks(node: Node): string {
   if (node.nodeType === 3) return node.nodeValue ?? "";
   if (node.nodeType === 1 && (node as Element).tagName.toLowerCase() === "br")
     return "\n";

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   alignImageSources, buildReferenceImages, buildRenderedImages, imageKeys, imageNodesOf, innermostImageUrl, linkImages, matchImages, parseSrcset,
-  referenceCandidates, shortenDataUri, type ReferenceImageFact,
+  referenceCandidates, shortenDataUri, svgDataSize, type ReferenceImageFact,
 } from "./images";
 
 // Real-looking URLs from the corpus (rendered = the reader payload's url, original = the snapshot's attributes).
@@ -27,6 +27,9 @@ describe("innermostImageUrl", () => {
 describe("imageKeys", () => {
   it("reduces size variants of one picture to the same keys", () => {
     expect(imageKeys(SUBSTACK(424))).toEqual(imageKeys(SUBSTACK(1456)));
+    // oneusefulthing-centaurs: the original serves f_webp, the reader payload f_auto (#24).
+    expect(imageKeys(SUBSTACK(1456).replace("f_auto", "f_webp"))).toEqual(imageKeys(SUBSTACK(1456)));
+    expect(imageKeys("https://res.cloudinary.com/demo/image/upload/f_webp,q_auto/v1/docs/chart.png")).toEqual(imageKeys("https://res.cloudinary.com/demo/image/upload/f_auto/docs/chart.png"));
     expect(imageKeys(MEDIUM_V2)).toEqual(imageKeys(MEDIUM_MAX));
     expect(imageKeys(MEDIUM_V2)).toEqual({ path: "miro.medium.com/1*ms0ggcgj2gzqjjly16wq4w.png", stem: "1*ms0ggcgj2gzqjjly16wq4w" });
     expect(imageKeys("https://kentcdodds.com/media/w_1600/kentcdodds.com/content/blog/ctx/type-error.png").path).toBe(imageKeys("https://kentcdodds.com/media/w_280,bg_e6e9ee/kentcdodds.com/content/blog/ctx/type-error.png").path);
@@ -72,6 +75,17 @@ describe("matchImages", () => {
   it("prefers an exact path over an earlier stem-only match", () => {
     const reference = [{ id: "o1", candidates: ["https://cdn.e.com/x/fig-1.png"] }, { id: "o2", candidates: ["https://e.com/posts/fig-1.png"] }];
     expect(Object.fromEntries(matchImages(reference, [{ id: "r1", src: "https://e.com/posts/fig-1.png" }]))).toEqual({ o2: "r1" });
+  });
+
+  it("prefers the very same URL over an earlier image with the same path (acoup-gondor1: the og header and the figure)", () => {
+    const header = "https://i0.wp.com/acoup.blog/wp-content/uploads/2019/05/siege-of-gondor.png?fit=1664%2C649&ssl=1";
+    const figure = "https://i0.wp.com/acoup.blog/wp-content/uploads/2019/05/siege-of-gondor.png?resize=1100%2C429&ssl=1";
+    const reference = [{ id: "o1", candidates: [header] }, { id: "o5", candidates: [figure] }];
+    expect(Object.fromEntries(matchImages(reference, [{ id: "r4", src: figure }]))).toEqual({ o5: "r4" });
+    // With no exact twin the path still matches, first come first served.
+    expect(Object.fromEntries(matchImages(reference, [{ id: "r4", src: figure.replace("1100%2C429", "740%2C289") }]))).toEqual({ o1: "r4" });
+    // The URL parser's spelling, not the raw string, decides "the same URL".
+    expect(Object.fromEntries(matchImages([{ id: "o1", candidates: [header] }, { id: "o2", candidates: ["https://I0.WP.com/acoup.blog/wp-content/uploads/2019/05/siege-of-gondor.png?resize=1100%2C429&ssl=1"] }], [{ id: "r1", src: figure }]))).toEqual({ o2: "r1" });
   });
 
   it("matches relative arXiv HTML sources once resolved", () => {
@@ -124,7 +138,7 @@ describe("shortenDataUri", () => {
   });
 });
 
-const fact = (over: Partial<ReferenceImageFact>): ReferenceImageFact => ({ src: "", lazy: [], srcsets: [], alt: "", width: 0, height: 0, declaredWidth: 0, declaredHeight: 0, context: "", top: 0, tile: 1, ...over });
+const fact = (over: Partial<ReferenceImageFact>): ReferenceImageFact => ({ src: "", lazy: [], srcsets: [], alt: "", width: 0, height: 0, declaredWidth: 0, declaredHeight: 0, naturalWidth: 640, naturalHeight: 480, ariaHidden: false, context: "", top: 0, tile: 1, ...over });
 
 describe("buildReferenceImages", () => {
   it("lists images 48 px or more on one side, or unsized with such a declared size", () => {
@@ -166,6 +180,45 @@ describe("buildReferenceImages placeholders", () => {
       fact({ src: "data:image/png;base64,iVBOR", width: 567, height: 191, top: 4000 }),
     ], "https://e.com/");
     expect(images.map((image) => image.src.slice(0, 30))).toEqual(["https://kentcdodds.com/media/w", "https://blog.cloudflare.com/a.", "data:image/png;base64,…(27 cha"]);
+  });
+
+  // cloudflare-pingora: a 1×1 grey SVG, aria-hidden, stretched to 715×304 above the real image (#24).
+  const GREY_PIXEL = "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%201%201%22%3E%3Crect%20width%3D%221%22%20height%3D%221%22%20fill%3D%22rgb(243%2C243%2C243)%22%2F%3E%3C%2Fsvg%3E";
+
+  it("drops an aria-hidden or 1×1 data: placeholder wherever it is laid out", () => {
+    const images = buildReferenceImages([
+      fact({ src: GREY_PIXEL, width: 715, height: 304, top: 1000, ariaHidden: true, naturalWidth: 150, naturalHeight: 150 }),
+      fact({ src: "https://blog.cloudflare.com/_image?href=a.png", width: 715, height: 303, top: 1400 }),
+      fact({ src: GREY_PIXEL, width: 715, height: 304, top: 2000, naturalWidth: 150, naturalHeight: 150 }),
+      fact({ src: "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP", width: 700, height: 300, top: 3000, naturalWidth: 1, naturalHeight: 1 }),
+      fact({ src: "", width: 700, height: 300, top: 3500, ariaHidden: true }),
+    ], "https://blog.cloudflare.com/p");
+    expect(images.map((image) => image.src)).toEqual(["https://blog.cloudflare.com/_image?href=a.png"]);
+  });
+
+  it("keeps what has a URL of its own, aria-hidden or behind a 1×1 lazy placeholder, and a data: picture of real size", () => {
+    const images = buildReferenceImages([
+      fact({ src: "https://e.com/hero.png", width: 1200, height: 600, ariaHidden: true }),
+      fact({ src: "data:image/gif;base64,R0lGOD", lazy: ["https://e.com/fig.png"], width: 700, height: 300, top: 900, naturalWidth: 1, naturalHeight: 1 }),
+      fact({ src: "data:image/svg+xml,%3Csvg%20width%3D%22567%22%20height%3D%22191%22%3E%3C%2Fsvg%3E", width: 567, height: 191, top: 2000, naturalWidth: 567, naturalHeight: 191 }),
+    ], "https://e.com/p");
+    expect(images.map((image) => image.src.split(",")[0])).toEqual(["https://e.com/hero.png", "data:image/gif;base64", "data:image/svg+xml"]);
+    expect(images[1]?.candidates).toEqual(["https://e.com/fig.png"]);
+  });
+});
+
+describe("svgDataSize", () => {
+  it("reads the root's width and height, else its viewBox, from a URL-encoded or base64 SVG", () => {
+    expect(svgDataSize("data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%201%201%22%3E%3Crect%20width%3D%2250%22%20height%3D%2250%22%2F%3E%3C%2Fsvg%3E")).toEqual({ width: 1, height: 1 });
+    expect(svgDataSize(`data:image/svg+xml;base64,${btoa("<svg xmlns='http://www.w3.org/2000/svg' width='715px' height='304'></svg>")}`)).toEqual({ width: 715, height: 304 });
+    expect(svgDataSize("data:image/svg+xml;charset=utf-8,<svg width=\"100%\" stroke-width=\"1\" viewBox=\"0,0,640,360\"></svg>")).toEqual({ width: 640, height: 360 });
+  });
+
+  it("is undefined when the SVG gives no size, for other data: types and for junk", () => {
+    expect(svgDataSize("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg'></svg>")).toBeUndefined();
+    expect(svgDataSize("data:image/png;base64,iVBOR")).toBeUndefined();
+    expect(svgDataSize("data:image/svg+xml;base64,%%%")).toBeUndefined();
+    expect(svgDataSize("https://e.com/a.svg")).toBeUndefined();
   });
 });
 

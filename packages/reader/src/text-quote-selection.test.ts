@@ -3,6 +3,7 @@ import {
   decodeTextQuoteLocator,
   encodeTextQuoteV2Locator,
   renderedTextQuoteSelection,
+  resolveTextQuoteAnchor,
   resolveTextQuoteRange,
   textInputSelectionCapture,
 } from "./text-quote-selection";
@@ -202,5 +203,64 @@ describe("text quote selection", () => {
       encodeTextQuoteV2Locator({ occurrence: 0, prefix: "", suffix: "" }),
       "missing quote",
     )).toBeUndefined();
+  });
+});
+
+describe("text quote anchors", () => {
+  function captured(html: string, paragraph: number) {
+    const root = document.createElement("article");
+    root.innerHTML = html;
+    document.body.append(root);
+    const range = document.createRange();
+    range.selectNodeContents(root.querySelectorAll("p")[paragraph]!);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    const result = renderedTextQuoteSelection(root, selection);
+    selection?.removeAllRanges();
+    if (result.kind !== "capture") throw new Error(result.reason);
+    return { root, capture: result.capture };
+  }
+
+  it("reports an exact quote as exact", () => {
+    const { root, capture } = captured("<p>Intro.</p><p>The cache keeps every response for an hour.</p>", 1);
+    const anchor = resolveTextQuoteAnchor(root, capture.locator, capture.quote);
+    expect(anchor?.match).toBe("exact");
+    expect(anchor?.range.toString()).toBe("The cache keeps every response for an hour.");
+    root.remove();
+  });
+
+  it("re-places a highlighted sentence approximately after a one-word edit", () => {
+    const { root, capture } = captured(
+      "<p>Intro.</p><p>The cache keeps every <em>response</em> for an hour before it asks again.</p><p>Outro.</p>",
+      1,
+    );
+    root.innerHTML = "<p>Intro.</p><p>The cache keeps every <em>response</em> for a day before it asks again.</p><p>Outro.</p>";
+
+    const anchor = resolveTextQuoteAnchor(root, capture.locator, capture.quote);
+
+    expect(anchor?.match).toBe("approximate");
+    expect(anchor?.range.toString()).toBe("The cache keeps every response for a day before it asks again.");
+    expect(resolveTextQuoteRange(root, capture.locator, capture.quote)).toBeUndefined();
+    root.remove();
+  });
+
+  it("keeps the stored occurrence of an exact quote ahead of a closer approximate context", () => {
+    const root = document.createElement("article");
+    root.innerHTML =
+      "<p>Reads: the request is retried after a short backoff, then fails.</p><p>Writes: the request is retried after a shorter backoff, then succeeds.</p>";
+    const locator = encodeTextQuoteV2Locator({ occurrence: 0, prefix: "Writes:", suffix: ",thensucceeds." });
+
+    const anchor = resolveTextQuoteAnchor(root, locator, "the request is retried after a short backoff");
+
+    expect(anchor?.match).toBe("exact");
+    expect(root.querySelector("p")!.contains(anchor!.range.startContainer)).toBe(true);
+  });
+
+  it("finds nothing once the highlighted text is gone", () => {
+    const { root, capture } = captured("<p>Intro.</p><p>The cache keeps every response for an hour.</p><p>Outro.</p>", 1);
+    root.innerHTML = "<p>Intro.</p><p>Outro.</p>";
+    expect(resolveTextQuoteAnchor(root, capture.locator, capture.quote)).toBeUndefined();
+    root.remove();
   });
 });

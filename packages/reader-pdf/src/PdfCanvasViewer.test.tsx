@@ -1,4 +1,4 @@
-import { act, useEffect, useRef, useState } from "react";
+import { act, StrictMode, useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -9,6 +9,9 @@ const pdfMockState = vi.hoisted(() => ({
   // deferred report stands in for pdf.js still drawing the page.
   deferredPageRenders: new Map<number, () => void>(),
   deferPageRenders: false,
+  // Every document the mock loaded and every page proxy it handed out, to see what the viewer releases.
+  documents: [] as { destroy: () => Promise<void>; file?: string }[],
+  pageProxies: new Map<number, { cleanup: () => boolean }>(),
   nativeRotations: {} as Record<number, number>,
   resolveDeferredSearch: undefined as
     | ((value: { items: readonly { str: string }[] }) => void)
@@ -61,6 +64,7 @@ vi.mock("react-pdf", () => ({
         }>;
       }>;
       getPageIndex: (ref: unknown) => Promise<number>;
+      loadingTask: { destroy: () => Promise<void> };
       numPages: number;
     }) => void;
   }) => {
@@ -74,6 +78,8 @@ vi.mock("react-pdf", () => ({
         : {};
       pdfMockState.deferPageLoads = Boolean(file?.includes("late-page-load"));
       const numPages = file?.includes("large") ? 12 : 3;
+      const destroy = vi.fn(async () => undefined);
+      pdfMockState.documents.push({ destroy, file });
       onLoadSuccess?.({
         getDestination: async (id) =>
           id === "intro" ? [{ gen: 0, num: 2 }, { name: "Fit" }] : null,
@@ -103,6 +109,7 @@ vi.mock("react-pdf", () => ({
             };
           },
         }),
+        loadingTask: { destroy },
         numPages,
       });
       setReady(true);
@@ -130,6 +137,7 @@ vi.mock("react-pdf", () => ({
     width,
   }: {
     onLoadSuccess?: (page: {
+      cleanup: () => boolean;
       rotate: number;
       getViewport: () => { height: number; width: number };
     }) => void;
@@ -140,7 +148,11 @@ vi.mock("react-pdf", () => ({
   }) => {
     const nativeRotation = pdfMockState.nativeRotations[pageNumber] ?? 0;
     useEffect(() => {
+      // Like pdf.js, one proxy per page of the document, whichever <Page> loads it.
+      const proxy = pdfMockState.pageProxies.get(pageNumber) ?? { cleanup: vi.fn(() => true) };
+      pdfMockState.pageProxies.set(pageNumber, proxy);
       const reportLoaded = () => onLoadSuccess?.({
+        cleanup: proxy.cleanup,
         getViewport: () => nativeRotation === 90 || nativeRotation === 270
           ? { height: 600, width: 800 }
           : { height: 800, width: 600 },
@@ -335,6 +347,8 @@ afterEach(() => {
   pdfMockState.deferPageLoads = false;
   pdfMockState.deferredPageRenders.clear();
   pdfMockState.deferPageRenders = false;
+  pdfMockState.documents = [];
+  pdfMockState.pageProxies.clear();
   pdfMockState.nativeRotations = {};
   pdfMockState.resolveDeferredSearch?.({ items: [] });
   pdfMockState.resolveDeferredSearch = undefined;
@@ -1135,6 +1149,69 @@ describe("PdfCanvasViewer", () => {
     ]);
 
     await act(async () => view.root.unmount());
+  });
+
+  it("cleans up the pages that leave the render window and destroys the document on unmount", async () => {
+    const view = renderViewer({
+      pageCount: 12,
+      url: "research-resource://large.pdf",
+    });
+    await act(async () => view.render());
+    await flushViewer();
+    const cleanupOf = (page: number) => pdfMockState.pageProxies.get(page)?.cleanup;
+    expect([1, 2, 3].map((page) => cleanupOf(page))).not.toContain(undefined);
+    expect(cleanupOf(1)).not.toHaveBeenCalled();
+
+    await act(async () =>
+      view.container
+        .querySelector<HTMLButtonElement>('[aria-label="Go to page 10"]')
+        ?.click(),
+    );
+    for (const page of [1, 2, 3]) expect(cleanupOf(page)).toHaveBeenCalledTimes(1);
+    for (const page of [8, 9, 10, 11, 12]) expect(cleanupOf(page)).not.toHaveBeenCalled();
+    expect(pdfMockState.documents).toHaveLength(1);
+    expect(pdfMockState.documents[0]!.destroy).not.toHaveBeenCalled();
+
+    // Destroying the document frees the pages still on screen with it.
+    await act(async () => view.root.unmount());
+    await act(async () => Promise.resolve());
+    expect(pdfMockState.documents[0]!.destroy).toHaveBeenCalledTimes(1);
+    for (const page of [1, 2, 3]) expect(cleanupOf(page)).toHaveBeenCalledTimes(1);
+  });
+
+  it("destroys the previous document when the source changes", async () => {
+    const view = renderViewer();
+    await act(async () => view.render());
+    await flushViewer();
+    expect(pdfMockState.documents).toHaveLength(1);
+
+    await act(async () =>
+      view.render({ title: "Another paper", url: "research-resource://other.pdf" }),
+    );
+    await act(async () => Promise.resolve());
+    expect(pdfMockState.documents[0]!.destroy).toHaveBeenCalledTimes(1);
+
+    await act(async () => view.root.unmount());
+  });
+
+  it("keeps the document through Strict Mode's effect re-run and destroys it once on unmount", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    await act(async () =>
+      root.render(
+        <StrictMode>
+          <PdfCanvasViewer title="A paper" url="research-resource://paper.pdf" />
+        </StrictMode>,
+      ),
+    );
+    await flushViewer();
+    expect(pdfMockState.documents.length).toBeGreaterThan(0);
+    for (const loaded of pdfMockState.documents) expect(loaded.destroy).not.toHaveBeenCalled();
+
+    await act(async () => root.unmount());
+    await act(async () => Promise.resolve());
+    for (const loaded of pdfMockState.documents) expect(loaded.destroy).toHaveBeenCalledTimes(1);
   });
 
   it("searches PDF.js text with keyboard navigation and reports scanned PDFs", async () => {

@@ -1,5 +1,13 @@
 import type { TextAnnotation as AnnotationView, TextAnnotationColor as AnnotationColor, TextAnnotationKind as AnnotationKind } from "./types";
-import { resolveTextQuoteRange } from "./text-quote-selection";
+import { resolveTextQuoteRange, textQuoteAnchorResolver } from "./text-quote-selection";
+
+/**
+ * Where a text annotation landed in this rendering: "current" on its exact quote, "stale" drawn where the
+ * text only approximately matches now (or the host marked it so), "unplaced" nowhere, so it is not drawn.
+ */
+export type TextAnnotationPlacement =
+  | Readonly<{ status: "current" | "stale"; range: Range }>
+  | Readonly<{ status: "unplaced" }>;
 
 type HighlightRegistryLike = {
   delete: (name: string) => unknown;
@@ -80,8 +88,9 @@ function groupName(
   namePrefix: string,
   kind: TextHighlightKind,
   color: HighlightColorName,
+  stale = false,
 ) {
-  return `${namePrefix}-${kind}-${color}`;
+  return `${namePrefix}-${kind}-${color}${stale ? "-stale" : ""}`;
 }
 
 function focusName(namePrefix: string) {
@@ -141,7 +150,22 @@ export function textAnnotationHighlightStyles(namePrefix: string) {
       }),
     )
     .join("\n");
-  return `${annotationStyles}\n::highlight(${focusName(namePrefix)}) { background-color: rgb(63 125 89 / 0.30); text-decoration: underline 3px rgb(45 92 65 / 0.98); text-underline-offset: 0.18em; }`;
+  return `${annotationStyles}\n${staleHighlightStyles(namePrefix)}\n::highlight(${focusName(namePrefix)}) { background-color: rgb(63 125 89 / 0.30); text-decoration: underline 3px rgb(45 92 65 / 0.98); text-underline-offset: 0.18em; }`;
+}
+
+/** Placed only approximately: half the wash and a dashed underline, in the theme's muted ink unless the underline is the mark. */
+function staleHighlightStyles(namePrefix: string) {
+  return (Object.entries(highlightColors) as Array<[HighlightColorName, string]>)
+    .flatMap(([color, channels]) =>
+      textKinds.map((kind) => {
+        const name = groupName(namePrefix, kind, color, true);
+        if (kind === "underline")
+          return `::highlight(${name}) { background-color: rgb(${channels} / 0.05); text-decoration: underline dashed 2px rgb(${channels} / 0.88); text-underline-offset: 0.17em; }`;
+        const opacity = kind === "comment" ? "0.10" : "0.14";
+        return `::highlight(${name}) { background-color: rgb(${channels} / ${opacity}); text-decoration: underline dashed 1.5px var(--label-3); text-underline-offset: 0.2em; }`;
+      }),
+    )
+    .join("\n");
 }
 
 export function installTextAnnotationHighlights({
@@ -159,47 +183,46 @@ export function installTextAnnotationHighlights({
   onActivate?: (annotationId: string) => void;
   root: HTMLElement;
 }) {
+  const rangesByName = new Map<string, Range[]>();
+  const resolvedRanges: ResolvedAnnotationRange[] = [];
+  // Placements are worked out even where nothing can be drawn: the host lists the unplaced ones either way.
+  const placements = new Map<string, TextAnnotationPlacement>();
+  const anchorOf = textQuoteAnchorResolver(root);
+  let unresolved = 0;
+  for (const annotation of annotations) {
+    if (!/^text-quote:v(?:1|2):/.test(annotation.locator)) continue;
+    const kind = textKind(annotation);
+    if (!kind) continue;
+    const anchor = anchorOf(annotation.locator, annotation.quote);
+    if (!anchor) {
+      placements.set(annotation.id, { status: "unplaced" });
+      unresolved += 1;
+      continue;
+    }
+    const stale = anchor.match === "approximate" || annotation.status === "stale";
+    placements.set(annotation.id, { status: stale ? "stale" : "current", range: anchor.range });
+    const name = groupName(
+      namePrefix,
+      kind,
+      colorNames[annotation.color ?? "#ffd400"],
+      stale,
+    );
+    const ranges = rangesByName.get(name) ?? [];
+    ranges.push(anchor.range);
+    rangesByName.set(name, ranges);
+    resolvedRanges.push({ annotationId: annotation.id, range: anchor.range });
+  }
+  const resolved = resolvedRanges.length;
+
   const activeEnvironment = environment ?? environmentFor(root);
   if (!activeEnvironment)
     return {
       dispose: () => undefined,
       emphasisResolved: false,
-      resolved: 0,
-      unresolved: 0,
+      placements,
+      resolved,
+      unresolved,
     };
-
-  const rangesByName = new Map<string, Range[]>();
-  const resolvedRanges: ResolvedAnnotationRange[] = [];
-  let resolved = 0;
-  let unresolved = 0;
-  for (const annotation of annotations) {
-    if (
-      annotation.status === "stale" ||
-      !/^text-quote:v(?:1|2):/.test(annotation.locator)
-    )
-      continue;
-    const kind = textKind(annotation);
-    if (!kind) continue;
-    const range = resolveTextQuoteRange(
-      root,
-      annotation.locator,
-      annotation.quote,
-    );
-    if (!range) {
-      unresolved += 1;
-      continue;
-    }
-    const name = groupName(
-      namePrefix,
-      kind,
-      colorNames[annotation.color ?? "#ffd400"],
-    );
-    const ranges = rangesByName.get(name) ?? [];
-    ranges.push(range);
-    rangesByName.set(name, ranges);
-    resolvedRanges.push({ annotationId: annotation.id, range });
-    resolved += 1;
-  }
 
   let emphasisResolved = false;
   if (emphasis && /^text-quote:v(?:1|2):/.test(emphasis.locator)) {
@@ -254,6 +277,7 @@ export function installTextAnnotationHighlights({
       for (const name of installedNames) activeEnvironment.registry.delete(name);
     },
     emphasisResolved,
+    placements,
     resolved,
     unresolved,
   };

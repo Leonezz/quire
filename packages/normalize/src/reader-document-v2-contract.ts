@@ -84,7 +84,13 @@ export type ReaderV2Section = {
   type: "section";
 };
 
+/** What a callout box says it is; the reader labels the box by it. */
+export const READER_V2_CALLOUT_KINDS = ["note", "tip", "important", "key-point", "warning", "caution"] as const;
+export type ReaderV2CalloutKind = (typeof READER_V2_CALLOUT_KINDS)[number];
+
 export type ReaderV2Blockquote = {
+  /** Set when the source drew the block as a callout (a note, a key point, a warning) rather than a quotation. */
+  callout?: ReaderV2CalloutKind;
   children: ReaderV2FlowNode[];
   type: "blockquote";
 };
@@ -181,7 +187,18 @@ export type ReaderDocumentV2 = {
 /** Figure crops of a PDF's text view, served by the app itself (`quire-figure://<materialId>/<n>.png`). */
 const FIGURE_PROTOCOL = "quire-figure:";
 
+/** One figure a page embeds as base64 (harvard-annotated-transformer's PNGs) can be at most this large, decoded. */
+export const MAX_INLINE_IMAGE_BYTES = 2 * 1024 * 1024;
+/** Raster types only: an SVG is a document of its own, and a page's embedded one is never trusted. */
+const INLINE_IMAGE_URL = /^data:image\/(?:avif|gif|jpeg|png|webp);base64,[A-Za-z\d+/]+={0,2}$/u;
+
+/** A base64 data: URL of a raster image within MAX_INLINE_IMAGE_BYTES, written without whitespace. */
+export function isInlineImageUrl(value: string) {
+  return value.length <= Math.ceil((MAX_INLINE_IMAGE_BYTES * 4) / 3) + 64 && INLINE_IMAGE_URL.test(value);
+}
+
 function isAllowedUrl(value: string, purpose: "image" | "link") {
+  if (purpose === "image" && value.startsWith("data:")) return isInlineImageUrl(value);
   try {
     const parsed = new URL(value);
     if (purpose === "link" && parsed.protocol === "mailto:") return true;
@@ -240,7 +257,7 @@ const readerV2NodeSchema: z.ZodType<unknown> = z.lazy(() =>
       children: z.array(readerV2NodeSchema),
       type: z.literal("section"),
     }).strict(),
-    z.object({ children: z.array(readerV2NodeSchema), type: z.literal("blockquote") }).strict(),
+    z.object({ callout: z.enum(READER_V2_CALLOUT_KINDS).optional(), children: z.array(readerV2NodeSchema), type: z.literal("blockquote") }).strict(),
     z.object({
       children: z.array(readerV2NodeSchema),
       ordered: z.boolean(),

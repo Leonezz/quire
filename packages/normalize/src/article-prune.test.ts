@@ -58,6 +58,27 @@ describe("pruneArticleChrome", () => {
     expect(result.content).toContain("<h2>GPS basics</h2>");
   });
 
+  it("strips a permalink whose text is a label, found by its href pointing at the heading itself (joshwcomeau)", () => {
+    const icon = `<svg viewBox="0 0 24 24"><line x1="2" y1="8" x2="22" y2="8"></line></svg>`;
+    const html = [
+      `<h2 id="the-core-react-loop"><a id="the-core-react-loop-1" href="#the-core-react-loop-1" class="aax5dne"><span>${icon}<span>Link to this heading</span></span></a>The core React loop</h2>`,
+      `<h3 id="pure"><a href="#pure" class="q1">Jump here</a>Pure components</h3>`,
+      `<h3 id="memo"><a id="memo-2" href="https://x.test/post/#memo-2">Lien vers cette section</a>Memo</h3>`,
+      `<h3 id="context"><a class="x9" href="/other">Link to this section</a>Context</h3>`,
+      // Not permalinks: another page's section, and the heading's own words linked to it.
+      `<h3 id="props"><a href="https://x.test/docs#props">Props</a> and state</h3>`,
+      `<h3 id="installation-optional"><a href="#installation-optional">Installation</a> (optional)</h3>`,
+    ].join("") + body(5);
+    const result = pruneArticleChrome(html);
+    expect(result.rulesApplied).toEqual(["article.prune.heading-anchors@1"]);
+    expect(result.content).toContain('<h2 id="the-core-react-loop">The core React loop</h2>');
+    expect(result.content).toContain('<h3 id="pure">Pure components</h3>');
+    expect(result.content).toContain('<h3 id="memo">Memo</h3>');
+    expect(result.content).toContain('<h3 id="context">Context</h3>');
+    expect(result.content).toContain('<h3 id="props"><a href="https://x.test/docs#props">Props</a> and state</h3>');
+    expect(result.content).toContain('<h3 id="installation-optional"><a href="#installation-optional">Installation</a> (optional)</h3>');
+  });
+
   it("unwraps a single-column layout table around an essay but leaves a small data table alone", () => {
     const essay = `<table><tr><td><font size="2">July 2023<br><br>${"Great work needs curiosity. ".repeat(20)}<br><br>${"Second paragraph. ".repeat(20)}</font></td></tr></table>`;
     const data = `<table><tr><td>A</td></tr></table>`;
@@ -115,6 +136,80 @@ describe("pruneArticleChrome", () => {
     expect(result.content).toContain("<blockquote><p>A real quote.</p></blockquote>");
     expect(result.content).not.toContain("↩");
     expect(result.content).toContain("<p>Note text.</p>");
+  });
+
+  it("keeps a list of points that cite footnotes (ruder-optim)", () => {
+    const point = (text: string, n: number) => `<li><p>${text} <sup class="footnote-ref"><a href="https://ruder.io/optimizing-gradient-descent/#fn${n}" id="fnref${n}">[${n}]</a></sup> and the rest of the point.</p></li>`;
+    const html = `${body(6)}<p>Mini-batch gradient descent offers a few challenges that need to be addressed:</p><ul>${point("Learning rate schedules try to adjust the learning rate during training", 1)}${point("These schedules have to be defined in advance", 2)}${point("Dauphin et al. argue that the difficulty arises from saddle points", 3)}</ul>${body(6)}`;
+    const result = pruneArticleChrome(html, { source: "https://ruder.io/optimizing-gradient-descent/" });
+    expect(result.content).toContain("Learning rate schedules");
+    expect(result.content).toContain("saddle points");
+  });
+
+  it("keeps a list whose links all point into one other page (vickiboykis-gguf)", () => {
+    const line = (n: number, text: string) => `<li><p><a href="https://github.com/ggerganov/ggml/blob/b458/examples/gpt-2/convert-ckpt-to-ggml.py#L${n}">${text}</a>, as the script writes it</p></li>`;
+    const html = `${body(6)}<p>The resulting GGML file contains:</p><ul>${line(91, "a magic number")}${line(92, "model-specific hyperparameters")}<li><p>an embedded vocabulary</p></li>${line(137, "a list of tensors")}</ul>${body(6)}`;
+    const result = pruneArticleChrome(html, { source: "https://vickiboykis.com/2024/02/28/gguf-the-long-way-around/" });
+    expect(result.content).toContain("model-specific hyperparameters");
+    expect(result.content).toContain("an embedded vocabulary");
+  });
+
+  it("keeps footnotes whose only links are back-references, and drops the back-references (waitbutwhy-ai)", () => {
+    const note = (n: number) => `<li id="footnote-${n}-3216" class="footnote"><p>Footnote ${n} explains a tangent the main text skipped.<a href="https://waitbutwhy.com/2015/01/artificial-intelligence-revolution-1.html#note-${n}-3216" class="footnote-return">&#8617;</a></p></li>`;
+    const html = `${body(10)}<div class="footnotes"><hr><ol>${note(1)}${note(2)}${note(3)}</ol></div>`;
+    const result = pruneArticleChrome(html, { source: "https://waitbutwhy.com/2015/01/artificial-intelligence-revolution-1.html" });
+    expect(result.content).toContain("Footnote 3 explains");
+    expect(result.content).not.toContain("↩");
+  });
+
+  it("drops Hugo's [return] footnote back-references (hillelwayne-engineers)", () => {
+    const html = `${body(10)}<div class="footnotes"><ol><li id="fn:17">I only interviewed 17 people. <a class="footnote-return" href="#fnref:17"><sup>[return]</sup></a></li><li id="fn:prestige">Sadly, the answer is prestige. <a class="footnote-return" href="#fnref:prestige"><sup>[return]</sup></a></li></ol></div>`;
+    const result = pruneArticleChrome(html, { source: "https://www.hillelwayne.com/post/are-we-really-engineers/" });
+    expect(result.content).toContain("I only interviewed 17 people.");
+    expect(result.content).not.toContain("[return]");
+  });
+
+  it("still removes a table of contents whose links the extractor resolved against the page", () => {
+    const html = `${body(4)}<ul><li><a href="https://x.test/post#a">Part A</a></li><li><a href="https://x.test/post#b">Part B</a></li><li><a href="https://x.test/post#c">Part C</a></li></ul><h2 id="a">Part A</h2>${body(10)}`;
+    const result = pruneArticleChrome(html, { source: "https://x.test/post" });
+    expect(result.content).not.toContain("https://x.test/post#b");
+    expect(result.rulesApplied).toContain("article.prune.navigation-lists@1");
+  });
+
+  it("keeps trailing Further reading and Discussion and Review sections (hf-rlhf, distill-featurevis)", () => {
+    const papers = `<ul><li><a href="https://a.test/tamer.pdf">TAMER</a> (Knox and Stone 2008): proposed a learned agent where humans scored its actions.</li><li><a href="https://b.test/coach.pdf">COACH</a> (MacGlashan et al. 2017): an actor-critic algorithm tuned by human feedback.</li></ul>`;
+    const html = `${body(20)}<h4>Further reading</h4><p>Here is a list of the most prevalent papers on RLHF to date.</p>${papers}<h3>Discussion and Review</h3><p><a href="https://github.com/distillpub/post/issues/1">Review 1 - Anonymous</a><br><a href="https://github.com/distillpub/post/issues/4">Review 2 - Anonymous</a></p><h3>References</h3><ol><li>Erhan, D. Visualizing higher-layer features of a deep network. 2009.</li></ol>`;
+    const result = pruneArticleChrome(html);
+    expect(result.content).toContain("Further reading");
+    expect(result.content).toContain("COACH");
+    expect(result.content).toContain("Discussion and Review");
+    expect(result.content).toContain("Review 2 - Anonymous");
+  });
+
+  it("keeps a trailing chrome-worded section that holds a reference list", () => {
+    const html = `${body(20)}<h2>Notes and sources</h2>${body(1)}<h2>Sponsors</h2><div class="references"><ol><li>Knuth, D. The Art of Computer Programming. 1968.</li><li>Dijkstra, E. A Discipline of Programming. 1976.</li></ol></div>`;
+    const result = pruneArticleChrome(html);
+    expect(result.content).toContain("A Discipline of Programming");
+  });
+
+  it("keeps numbered reference lines whose link text is a bare URL (lilian-agent)", () => {
+    const html = `${body(20)}<h2>References</h2><p>[19] Joon Sung Park, et al. <a href="https://arxiv.org/abs/2304.03442">“Generative Agents.”</a> arXiv preprint arXiv:2304.03442 (2023).</p><p>[20] AutoGPT. <a href="https://github.com/Significant-Gravitas/Auto-GPT">https://github.com/Significant-Gravitas/Auto-GPT</a></p><p>[21] GPT-Engineer. <a href="https://github.com/AntonOsika/gpt-engineer">https://github.com/AntonOsika/gpt-engineer</a></p>`;
+    const result = pruneArticleChrome(html);
+    expect(result.content).toContain("[20] AutoGPT.");
+    expect(result.content).toContain("[21] GPT-Engineer.");
+  });
+
+  it("keeps a one-item list whose text is a sentence of its own (jvns-firecracker)", () => {
+    const html = `${body(20)}<p>software:</p><ul><li><a href="https://github.com/weaveworks/ignite">ignite</a> lets you take a container image and run it as a Firecracker VM</li></ul>`;
+    const result = pruneArticleChrome(html);
+    expect(result.content).toContain("lets you take a container image");
+    expect(result.content).toContain("software:");
+  });
+
+  it("keeps a section heading that only starts like the title (oneusefulthing-centaurs)", () => {
+    const html = `<h2>Inside the Jagged Frontier</h2>${body(6)}<h2>Outside the Jagged Frontier</h2>${body(6)}<h2>Centaurs and Cyborgs</h2>${body(6)}`;
+    const result = pruneArticleChrome(html, { title: "Centaurs and Cyborgs on the Jagged Frontier" });
+    expect(result.content).toContain("<h2>Centaurs and Cyborgs</h2>");
   });
 
   it("removes same-page anchor lists and loading placeholders anywhere, and trailing card lists", () => {

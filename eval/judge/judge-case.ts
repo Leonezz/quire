@@ -46,7 +46,7 @@ export function scoreIssues(reported: readonly JudgeIssue[], context: ScoringCon
 function callFor(input: PromptInput, maxImages: number): Call {
   if (!input.visual) return { prompt: buildPrompt(input), schema: ANSWER_SCHEMA, images: [], mode: "text", texts: [input.source, input.extracted], facts: undefined };
   const plan = planImages(input.visual, maxImages);
-  const facts: FactInventory = { rendered: input.visual.images.rendered, reference: input.visual.images.reference, embeds: input.visual.embeds, tables: input.visual.tables, code: input.visual.code, extracted: input.extracted, sent: { rendered: plan.rendered.sent, reference: plan.reference.sent } };
+  const facts: FactInventory = { rendered: input.visual.images.rendered, reference: input.visual.images.reference, embeds: input.visual.embeds, tables: input.visual.tables, code: input.visual.code, extracted: input.extracted, source: input.source, fullRenderedText: input.visual.fullRenderedText, sent: { rendered: plan.rendered.sent, reference: plan.reference.sent } };
   return { prompt: buildVisualPrompt(input, plan), schema: VISUAL_ANSWER_SCHEMA, images: plan.images, mode: "visual", texts: [input.source, input.extracted, input.visual.renderedText], facts };
 }
 

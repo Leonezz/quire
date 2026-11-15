@@ -53,9 +53,19 @@ export interface PdfInfo {
 
 export interface MaterialRecord extends MaterialSummary {
   finalUrl: string;
+  /** Other URLs this material was opened by, without tracking parameters: the abs link of a paper read as HTML, a page that shares its DOI. */
+  aliases?: string[];
+  /** The page's <link rel="canonical"> when it names another page of the same site (never the site's home page). */
+  canonicalUrl?: string;
   pdf?: PdfInfo;
-  /** The raw page as captured (kept next to the record as <id>.html) so the agent can rebuild from it. */
-  capture?: { byteLength: number; mediaType: string };
+  /**
+   * The raw page as captured (kept next to the record as <id>.html) so the agent can rebuild from it.
+   * `sha256` (the normalizer's contentIdentity) and `fetchedAt` say which bytes, read when; captures
+   * from before #27 have neither.
+   */
+  capture?: { byteLength: number; mediaType: string; sha256?: `sha256:${string}`; fetchedAt?: string };
+  /** A paper read from arXiv: the version it is (2 for 2401.01234v2), while `meta.arxivId` stays version-free. */
+  arxivVersion?: number;
   /** What the source declared (citation_* / Dublin Core / JSON-LD / Open Graph / arXiv), never edited. */
   extracted: MaterialMeta;
   /** What the user overrode; the top-level fields already carry the effective values. */
@@ -115,6 +125,9 @@ export interface CorpusImportResult {
   failed: { slug: string; message: string }[];
 }
 
+/** The scheme resolveImage answers on, served by main from disk (image-protocol.ts). */
+export const IMAGE_SCHEME = "quire-image";
+
 export interface ReadApi extends ReadApiM1, ReadApiM2, ReadApiM3, ReadApiViews, ReadApiUpdates, ReadApiFeedback {
   version: string;
   platform: string;
@@ -128,8 +141,10 @@ export interface ReadApi extends ReadApiM1, ReadApiM2, ReadApiM3, ReadApiViews, 
   openFile: (input: OpenFileInput) => Promise<OpenUrlResult>;
   getMaterial: (id: string) => Promise<MaterialRecord | undefined>;
   /**
-   * A remote image as a data: URL from the local cache (fetched once); undefined when it cannot be cached.
-   * Also serves figure crops of the text view: `quire-figure://<materialId>/<n>.png`.
+   * A remote image as a `quire-image://cache/<key>` URL of its copy in the local cache (fetched once); undefined
+   * when it cannot be cached. A text view's figure crop (`quire-figure://<materialId>/<n>.png`) answers with
+   * `quire-image://figure/<materialId>/<n>.png` while the crop is on disk. Main serves both, so the renderer never
+   * holds the bytes as a string.
    */
   resolveImage: (url: string) => Promise<string | undefined>;
   listAnnotations: (materialId: string) => Promise<Annotation[]>;

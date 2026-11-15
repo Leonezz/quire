@@ -57,6 +57,14 @@ describe("memoizedContentStats", () => {
     expect(linkedom.parseHTML).toHaveBeenCalledTimes(2);
   });
 
+  it("counts a footnote reference marked data-footnote-ref like the footnote-ref class the marking replaces", () => {
+    const measure = memoizedContentStats();
+    const noterefs = (html: string) => measure(html).richUnits[6];
+
+    expect(noterefs(`<p>Scale<a class="footnote-ref" href="#fn1">1</a>.</p>`)).toBe(1);
+    expect(noterefs(`<p>Scale<sup><a data-footnote-ref="" href="#fn1">1</a></sup>.</p>`)).toBe(1);
+  });
+
   it("keeps no measurements from one normalization to the next", () => {
     memoizedContentStats()(ARTICLE);
     memoizedContentStats()(ARTICLE);

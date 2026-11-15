@@ -244,6 +244,9 @@ importers:
       '@shikijs/themes':
         specifier: 4.4.3
         version: 4.4.3
+      approx-string-match:
+        specifier: 2.0.0
+        version: 2.0.0
       katex:
         specifier: ^0.18.4
         version: 0.18.7
@@ -2029,6 +2032,9 @@ packages:
     peerDependencies:
       dmg-builder: 26.16.1
       electron-builder-squirrel-windows: 26.16.1
+
+  approx-string-match@2.0.0:
+    resolution: {integrity: sha512-03v8MsWnZYV4Svv82EYWoVw1RIKAJ/zubmhG1FYvhJwOsBnLPxx6CPHF2dXN/yW8uwHK+653j52IwiNluJR97w==}
 
   argparse@2.0.1:
     resolution: {integrity: sha512-8+9WqebbFzpX9OR+Wa6O29asIogeRMzcGtAINdpMHHyAg10f05aSFVBbcEqGf/PXw1EjAZ+q2/bEBg3DvurK3Q==}
@@ -6058,6 +6064,8 @@ snapshots:
       which: 5.0.0
     transitivePeerDependencies:
       - supports-color
+
+  approx-string-match@2.0.0: {}
 
   argparse@2.0.1: {}
 

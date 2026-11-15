@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { applyOverrides, bylineOf, creatorsFromByline, extractMetadata, normalizeDate, normalizeDoi, publishedAtOf } from "./metadata";
+import { applyOverrides, bylineOf, creatorsFromByline, extractMetadata, extractPage, normalizeDate, normalizeDoi, publishedAtOf } from "./metadata";
 
 const fixture = (name: string) => readFile(join(__dirname, "__fixtures__", "metadata", name), "utf8");
 const FETCHED = "2026-09-18T12:00:00.000Z";
@@ -48,6 +48,12 @@ describe("extractMetadata", () => {
     });
   });
 
+  it("reads Medium's SocialMediaPosting JSON-LD, whose date outranks the republication date in article:published_time", () => {
+    const jsonLd = JSON.stringify({ "@context": "http://schema.org", "@type": "SocialMediaPosting", headline: "Software 2.0", datePublished: "2017-11-11T22:18:53Z", author: { "@type": "Person", name: "Andrej Karpathy" } });
+    const meta = extractMetadata({ html: `<html><head><meta property="article:published_time" content="2021-03-13T18:18:43.264Z"><script type="application/ld+json">${jsonLd}</script></head></html>`, url: "https://karpathy.medium.com/software-2-0-a64152b37c35", mediaType: "text/html", origin: "web", fetchedAt: FETCHED, fallback: { title: "Software 2.0" } });
+    expect(meta).toMatchObject({ kind: "blogPost", date: "2017-11-11T22:18:53.000Z", creators: [{ role: "author", name: "Andrej Karpathy" }] });
+  });
+
   it("falls back to og:site_name, the plain author tag and <html lang> on a bare page", async () => {
     const meta = extractMetadata({ html: await fixture("bare-page.html"), url: "https://beweise.example.test/p/1", mediaType: "text/html", origin: "web", fetchedAt: FETCHED, fallback: { title: "Beweise, die man nicht braucht", byline: "Emmy Noether and Someone Else" } });
     expect(meta).toEqual({
@@ -79,6 +85,14 @@ describe("extractMetadata", () => {
     expect(extractMetadata({ url: "https://blog.example.test/a", mediaType: "text/html", origin: "feed", fetchedAt: FETCHED, fallback: { title: "A" } }).kind).toBe("blogPost");
     expect(extractMetadata({ url: "https://blog.example.test/a", mediaType: "text/html", origin: "feed", fetchedAt: FETCHED, fallback: { title: "A" }, item: { kind: "newsletter", publication: "Systems Weekly" } })).toMatchObject({ kind: "newsletter", publication: "Systems Weekly" });
     expect(extractMetadata({ url: "https://example.test/", mediaType: "text/html", origin: "web", fetchedAt: FETCHED, fallback: {} })).toEqual({ kind: "webpage", url: "https://example.test/", accessed: FETCHED });
+  });
+
+  it("takes the arXiv id from an arxiv.org URL only, and hands back the canonical link the page declares as written", () => {
+    expect(extractMetadata({ url: "https://scholar.example.test/?q=arxiv.org/abs/2409.12345", mediaType: "text/html", origin: "web", fetchedAt: FETCHED, fallback: {} })).not.toHaveProperty("arxivId");
+    expect(extractMetadata({ url: "https://export.arxiv.org/abs/2409.12345v2", mediaType: "text/html", origin: "web", fetchedAt: FETCHED, fallback: {} }).arxivId).toBe("2409.12345");
+    const head = '<link rel="stylesheet" href="/a.css"><link rel="Canonical" href=" /post?utm_source=x "><link rel="canonical" href="/second">';
+    expect(extractPage({ html: head, url: "https://example.test/post/amp", mediaType: "text/html", origin: "web", fetchedAt: FETCHED, fallback: {} }).canonical).toBe("/post?utm_source=x");
+    expect(extractPage({ html: "<title>x</title>", url: "https://example.test/post", mediaType: "text/html", origin: "web", fetchedAt: FETCHED, fallback: {} })).not.toHaveProperty("canonical");
   });
 });
 
