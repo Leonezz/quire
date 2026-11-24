@@ -93,7 +93,7 @@ if (isTauriRuntime() && !window.read) {
   installExternalLinkBridge();
 
   const api: ReadApi = {
-    version: typeof __QUIRE_VERSION__ === "string" ? __QUIRE_VERSION__ : "0.2.0-tauri.1",
+    version: typeof __QUIRE_VERSION__ === "string" ? __QUIRE_VERSION__ : "0.2.0-alpha.1",
     platform: "darwin",
     setTheme: (theme) => invoke("theme_set", { theme }),
     onLibraryChanged: (listener) => subscribeVoid("library:changed", listener),

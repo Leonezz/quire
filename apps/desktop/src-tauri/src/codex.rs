@@ -351,7 +351,7 @@ impl CodexClient {
         self.request(
             "initialize",
             serde_json::json!({
-                "clientInfo": { "name": "quire", "title": "Quire", "version": "0.2.0" },
+                "clientInfo": { "name": "quire", "title": "Quire", "version": env!("CARGO_PKG_VERSION") },
                 "capabilities": { "experimentalApi": true }
             }),
             120_000,

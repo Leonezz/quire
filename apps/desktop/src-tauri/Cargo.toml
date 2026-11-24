@@ -1,6 +1,6 @@
 [package]
 name = "quire-desktop"
-version = "0.2.0-tauri.1"
+version = "0.2.0-alpha.1"
 description = "Quire — a quiet place to read everything you subscribe to"
 authors = ["Leonezz"]
 edition = "2021"

@@ -6,12 +6,12 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to build and publish (for example v0.2.0-tauri.1)"
+        description: "Existing tag to build and publish (for example v0.2.0-alpha.1)"
         required: true
       runner:
-        description: "macOS runner label (e.g. macos-latest, macos-15-intel, macos-26-intel)"
+        description: "macOS runner label (e.g. macos-15-intel, macos-latest, macos-26-intel)"
         required: false
-        default: "macos-latest"
+        default: "macos-15-intel"
 
 permissions:
   contents: write
@@ -23,20 +23,23 @@ env:
 jobs:
   mac:
     name: macOS Tauri 2 (arm64 + x64)
-    runs-on: ${{ github.event.inputs.runner || 'macos-latest' }}
-    timeout-minutes: 90
+    runs-on: ${{ github.event.inputs.runner || 'macos-15-intel' }}
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: ${{ inputs.tag }}
           fetch-depth: 0
           fetch-tags: true
 
       - name: Check the tag matches the app version
         shell: bash
         run: |
-          version="$(node -p "require('./apps/desktop/package.json').version")"
-          if [ "${{ inputs.tag }}" != "v$version" ]; then
-            echo "::error::Tag ${{ inputs.tag }} does not match apps/desktop/package.json version $version"
+          pkg_ver="$(node -p "require('./apps/desktop/package.json').version")"
+          tauri_ver="$(node -p "require('./apps/desktop/src-tauri/tauri.conf.json').version")"
+          cargo_ver="$(sed -n 's/^version = "\(.*\)"/\1/p' apps/desktop/src-tauri/Cargo.toml | head -n 1)"
+          if [ "${{ inputs.tag }}" != "v$pkg_ver" ] || [ "$pkg_ver" != "$tauri_ver" ] || [ "$pkg_ver" != "$cargo_ver" ]; then
+            echo "::error::Tag ${{ inputs.tag }} does not match versions (package.json=$pkg_ver, tauri.conf.json=$tauri_ver, Cargo.toml=$cargo_ver)"
             exit 1
           fi
 
@@ -68,35 +71,191 @@ jobs:
           APPLE_TEAM_ID_SECRET: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           if [ -n "$APPLE_CERTIFICATE_SECRET" ]; then
+            if [ -z "$APPLE_CERTIFICATE_PASSWORD_SECRET" ]; then
+              echo "::error::CSC_LINK is set but CSC_KEY_PASSWORD is missing"
+              exit 1
+            fi
+            probe_dir="$(mktemp -d)"
+            probe_p12="$probe_dir/cert.p12"
+            probe_kc="$probe_dir/probe.keychain-db"
+            clean_b64="$(printf '%s' "$APPLE_CERTIFICATE_SECRET" | sed 's/^data:[^,]*,//' | tr -d '[:space:]')"
+            printf '%s' "$clean_b64" | base64 --decode > "$probe_p12"
+            security create-keychain -p "probe" "$probe_kc"
+            security unlock-keychain -p "probe" "$probe_kc"
+            security import "$probe_p12" -k "$probe_kc" -P "$APPLE_CERTIFICATE_PASSWORD_SECRET" -T /usr/bin/codesign >/dev/null
+            identity="$(security find-identity -p codesigning "$probe_kc" | sed -n 's/.*"\(Developer ID Application:[^"]*\)".*/\1/p' | head -n 1)"
+            if [ -z "$identity" ]; then
+              identity="$(security find-identity -p codesigning "$probe_kc" | sed -n 's/.*"\([^"]*\)".*/\1/p' | head -n 1)"
+            fi
+            if [ -z "$identity" ]; then
+              identity="$( (openssl pkcs12 -in "$probe_p12" -passin "pass:$APPLE_CERTIFICATE_PASSWORD_SECRET" -nokeys -clcerts -legacy 2>/dev/null || openssl pkcs12 -in "$probe_p12" -passin "pass:$APPLE_CERTIFICATE_PASSWORD_SECRET" -nokeys -clcerts 2>/dev/null) | openssl x509 -noout -subject -nameopt RFC2253 | sed -n 's/^subject=.*CN=\([^,]*\).*/\1/p' | head -n 1 )"
+            fi
+            security delete-keychain "$probe_kc" || true
+            rm -rf "$probe_dir"
+            if [ -z "$identity" ]; then
+              echo "::error::Could not extract a code-signing identity from CSC_LINK"
+              exit 1
+            fi
+            echo "Signing with identity: $identity"
             {
-              echo "APPLE_CERTIFICATE=$APPLE_CERTIFICATE_SECRET"
+              echo "APPLE_CERTIFICATE=$clean_b64"
               echo "APPLE_CERTIFICATE_PASSWORD=$APPLE_CERTIFICATE_PASSWORD_SECRET"
+              echo "APPLE_SIGNING_IDENTITY=$identity"
             } >> "$GITHUB_ENV"
+          else
+            echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+            echo "::warning::No CSC_LINK secret: building an ad-hoc signed app."
           fi
+
           if [ -n "$APPLE_ID_SECRET" ]; then
+            if [ -z "$APPLE_PASSWORD_SECRET" ] || [ -z "$APPLE_TEAM_ID_SECRET" ]; then
+              echo "::error::APPLE_ID is set but APPLE_APP_SPECIFIC_PASSWORD or APPLE_TEAM_ID is missing"
+              exit 1
+            fi
+            if [ -z "$APPLE_CERTIFICATE_SECRET" ]; then
+              echo "::error::Notarization needs a signed app: set CSC_LINK and CSC_KEY_PASSWORD as well"
+              exit 1
+            fi
             {
               echo "APPLE_ID=$APPLE_ID_SECRET"
               echo "APPLE_PASSWORD=$APPLE_PASSWORD_SECRET"
               echo "APPLE_TEAM_ID=$APPLE_TEAM_ID_SECRET"
             } >> "$GITHUB_ENV"
+            echo "Notarizing with Apple notary service."
+          else
+            echo "No APPLE_ID secret: skipping notarization."
           fi
 
-      - name: Build arm64 and x64 DMG bundles
+      - name: Create the release for the tag
+        shell: bash
+        run: |
+          tag="${{ inputs.tag }}"
+          if gh release view "$tag" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
+            echo "Release $tag exists; assets will be uploaded to it."
+          else
+            gh release create "$tag" --repo "$RELEASE_REPO" --title "Quire $tag" --notes "Building…" --prerelease
+          fi
+
+      - name: Build arm64 and x64 bundles
         shell: bash
         run: |
           version="${{ inputs.tag }}"
           version="${version#v}"
           mkdir -p apps/desktop/release
-          pnpm --filter @read/desktop exec tauri build --target aarch64-apple-darwin --bundles app,dmg
-          cp "apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Quire_${version}_aarch64.dmg" "apps/desktop/release/Quire-${version}-arm64.dmg"
-          pnpm --filter @read/desktop exec tauri build --target x86_64-apple-darwin --bundles app,dmg
-          cp "apps/desktop/src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/Quire_${version}_x64.dmg" "apps/desktop/release/Quire-${version}-x64.dmg"
 
-      - name: Publish GitHub Release
+          pnpm --filter @read/desktop exec tauri build --ci --target aarch64-apple-darwin --bundles app,dmg
+          arm_dmg="$(ls apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg | head -n 1)"
+          cp "$arm_dmg" "apps/desktop/release/Quire-${version}-arm64.dmg"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Quire.app" \
+            "apps/desktop/release/Quire-${version}-arm64.zip"
+
+          pnpm --filter @read/desktop exec tauri build --ci --target x86_64-apple-darwin --bundles app,dmg
+          x64_dmg="$(ls apps/desktop/src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/*.dmg | head -n 1)"
+          cp "$x64_dmg" "apps/desktop/release/Quire-${version}-x64.dmg"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "apps/desktop/src-tauri/target/x86_64-apple-darwin/release/bundle/macos/Quire.app" \
+            "apps/desktop/release/Quire-${version}-x64.zip"
+
+          RELEASE_VERSION="$version" node -e '
+            const crypto = require("node:crypto");
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const version = process.env.RELEASE_VERSION;
+            const dir = "apps/desktop/release";
+            const names = [
+              `Quire-${version}-x64.zip`,
+              `Quire-${version}-arm64.zip`,
+              `Quire-${version}-x64.dmg`,
+              `Quire-${version}-arm64.dmg`,
+            ];
+            const entries = names.map((name) => {
+              const buf = fs.readFileSync(path.join(dir, name));
+              return {
+                name,
+                size: buf.length,
+                sha512: crypto.createHash("sha512").update(buf).digest("base64"),
+              };
+            });
+            const primary = entries[0];
+            const lines = [
+              `version: ${version}`,
+              "files:",
+              ...entries.flatMap((e) => [
+                `  - url: ${e.name}`,
+                `    sha512: ${e.sha512}`,
+                `    size: ${e.size}`,
+              ]),
+              `path: ${primary.name}`,
+              `sha512: ${primary.sha512}`,
+              `releaseDate: ${JSON.stringify(new Date().toISOString())}`,
+              "",
+            ];
+            fs.writeFileSync(path.join(dir, "latest-mac.yml"), lines.join("\n"));
+          '
+          ls -lh apps/desktop/release
+
+      - name: Publish release assets
         shell: bash
         run: |
           tag="${{ inputs.tag }}"
-          if ! gh release view "$tag" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
-            gh release create "$tag" --repo "$RELEASE_REPO" --title "Quire $tag" --notes "Building…" --prerelease
+          version="${tag#v}"
+          gh release upload "$tag" \
+            "apps/desktop/release/Quire-${version}-arm64.dmg" \
+            "apps/desktop/release/Quire-${version}-x64.dmg" \
+            "apps/desktop/release/Quire-${version}-arm64.zip" \
+            "apps/desktop/release/Quire-${version}-x64.zip" \
+            "apps/desktop/release/latest-mac.yml" \
+            --repo "$RELEASE_REPO" --clobber
+
+          have="$(gh release view "$tag" --repo "$RELEASE_REPO" --json assets --jq '.assets[].name')"
+          missing=""
+          for name in \
+            "Quire-${version}-arm64.dmg" \
+            "Quire-${version}-x64.dmg" \
+            "Quire-${version}-arm64.zip" \
+            "Quire-${version}-x64.zip" \
+            "latest-mac.yml"; do
+            grep -qxF "$name" <<< "$have" || missing="$missing $name"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Release $tag is missing:$missing"
+            exit 1
           fi
-          gh release upload "$tag" apps/desktop/release/*.dmg --repo "$RELEASE_REPO" --clobber
+          echo "Release $tag has all 5 macOS assets."
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: quire-${{ inputs.tag }}-mac
+          if-no-files-found: error
+          path: |
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.zip
+            apps/desktop/release/latest-mac.yml
+
+      - name: Write release notes
+        shell: bash
+        run: |
+          tag="${{ inputs.tag }}"
+          previous="$(git describe --tags --abbrev=0 "${tag}^" 2>/dev/null || true)"
+          if [ -n "$previous" ]; then
+            range="${previous}..${tag}"
+            heading="Changes since ${previous}"
+          else
+            range="$tag"
+            heading="Changes"
+          fi
+          {
+            echo "## ${heading}"
+            echo
+            git log --no-merges --pretty='- %s' "$range" | grep -E '^- (feat|fix)(\([^)]*\))?!?:' || echo "- No feat/fix commits in this range."
+          } > release-notes.md
+          cat release-notes.md
+          if [[ "$tag" == *alpha* || "$tag" == *beta* ]]; then
+            flag="--prerelease"
+          else
+            flag="--prerelease=false --latest"
+          fi
+          # shellcheck disable=SC2086
+          gh release edit "$tag" --repo "$RELEASE_REPO" --title "Quire $tag" --notes-file release-notes.md $flag

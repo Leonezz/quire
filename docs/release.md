@@ -10,7 +10,7 @@ content and stay local (gitignored); everything else is public.
 `.github/workflows/release.yml` runs manually via `workflow_dispatch`:
 
 ```sh
-gh workflow run release.yml -f tag=v0.2.0-tauri.1
+gh workflow run release.yml -f tag=v0.2.0-alpha.1
 ```
 
 Pass `-f runner=macos-15-intel` or `-f runner=macos-26-intel` when GitHub's arm64 pool is congested;

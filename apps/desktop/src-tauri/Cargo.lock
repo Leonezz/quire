@@ -2875,7 +2875,7 @@ dependencies = [
 
 [[package]]
 name = "quire-desktop"
-version = "0.2.0-tauri.1"
+version = "0.2.0-alpha.1"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
