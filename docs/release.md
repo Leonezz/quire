@@ -9,7 +9,7 @@ else is public.
 
 **On GitHub Actions (the default since alpha.3).** `release.yml` runs by hand (Actions → Release →
 Run workflow with an existing tag, or `gh workflow run release.yml -f tag=v<version>`) on a
-`macos-14` runner and publishes with the job's own `GITHUB_TOKEN`. Since alpha.5 it signs with
+`macos-latest` runner and publishes with the job's own `GITHUB_TOKEN`. Since alpha.5 it signs with
 the **Developer ID Application** certificate `Hanzhen Hong (7Z39KUX3QC)` from `CSC_LINK` /
 `CSC_KEY_PASSWORD` (exported from Keychain Access as a `.p12`) and notarizes with the `APPLE_*`
 secrets, so Gatekeeper opens the app on any Mac without a manual override.
@@ -64,7 +64,7 @@ from CI instead).
    ```
 
 3. Start the workflow for that tag: `gh workflow run release.yml -f tag=v0.1.0-alpha.2`. It runs on
-   a `macos-14` runner and:
+   a `macos-latest` runner and:
    - installs the workspace with pnpm and runs `pnpm build` (electron-vite writes `apps/desktop/out`);
    - runs `electron-builder --mac --publish always`, which packages `Quire.app` for `arm64` and
      `x64`, produces a `.dmg` and a `.zip` per architecture plus `latest-mac.yml`, and creates a

@@ -24,7 +24,7 @@ env:
 jobs:
   mac:
     name: macOS (arm64 + x64)
-    runs-on: macos-14
+    runs-on: macos-latest
     # Notarization submits each architecture separately and Apple's queue is not bounded; the team's
     # first submission took 68 minutes.
     timeout-minutes: 120
