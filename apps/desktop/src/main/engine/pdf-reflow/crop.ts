@@ -36,9 +36,26 @@ async function encodePng(canvas: NodeCanvasLike): Promise<Uint8Array> {
   throw new Error("The canvas cannot encode PNG (neither encode() nor toBuffer() exists).");
 }
 
+function offscreenCanvasFactory(): CanvasFactoryLike | undefined {
+  if (typeof OffscreenCanvas === "undefined") return undefined;
+  return {
+    create(width, height) {
+      const canvas = new OffscreenCanvas(width, height);
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("OffscreenCanvas 2d context is unavailable.");
+      return {
+        canvas: {
+          encode: async () => new Uint8Array(await (await canvas.convertToBlob({ type: "image/png" })).arrayBuffer()),
+        },
+        context: context as unknown as CanvasRenderingContext2D,
+      };
+    },
+  };
+}
+
 /**
- * A renderer for the document, or the reason none is possible. Probing creates a 1×1 canvas,
- * which is where a missing @napi-rs/canvas surfaces (pdf.js requires it lazily).
+ * A renderer for the document, or the reason none is possible. Uses OffscreenCanvas in browser/worker
+ * runtimes (zero native addons) and falls back to pdf.js's Node canvasFactory in Node tests.
  */
 export function figureRendererOf(doc: PdfDocument): { renderer: FigureRenderer } | { error: string } {
   let factory: CanvasFactoryLike;
@@ -47,7 +64,9 @@ export function figureRendererOf(doc: PdfDocument): { renderer: FigureRenderer }
     const probe = factory.create(1, 1);
     factory.destroy?.(probe);
   } catch (error) {
-    return { error: error instanceof Error ? error.message : String(error) };
+    const offscreen = offscreenCanvasFactory();
+    if (!offscreen) return { error: error instanceof Error ? error.message : String(error) };
+    factory = offscreen;
   }
   return {
     renderer: {

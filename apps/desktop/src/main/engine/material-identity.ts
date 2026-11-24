@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "@read/normalize";
 import { arxivIdOf } from "./arxiv";
 
 // Which material a link names. A material's id is the hash of its URL with the tracking
@@ -67,7 +67,7 @@ export function arxivIdOfUrl(url: URL): string | undefined {
 }
 
 export function idFor(locator: string): string {
-  return createHash("sha256").update(locator).digest("hex").slice(0, 16);
+  return sha256Hex(locator).slice(0, 16);
 }
 
 /** The id a new material read from this URL gets. */

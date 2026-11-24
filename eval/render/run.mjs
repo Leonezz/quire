@@ -73,8 +73,8 @@ const exported = exportCorpus(slugs, !flags.slugs.length);
 const extractionFailed = new Map(exported.failed.map((f) => [f.slug, f.problems]));
 
 if (flags.build) {
-  console.log("build: electron-vite build (renderer → apps/desktop/out/renderer)");
-  run("pnpm", ["--filter", "@read/desktop", "exec", "electron-vite", "build"], { cwd: REPO });
+  console.log("build: vite build (renderer → apps/desktop/out/renderer)");
+  run("pnpm", ["--filter", "@read/desktop", "build:web"], { cwd: REPO });
 }
 let buildId;
 try { buildId = rendererBuildId(RENDERER_OUT); } catch (error) { fail(error instanceof Error ? error.message : String(error)); }

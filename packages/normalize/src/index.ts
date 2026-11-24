@@ -1,3 +1,3 @@
-// Public surface of the normalization engine (Node only). Mirrors the
-// research repo's module.ts export set so call sites migrate unchanged.
+// Public surface of the normalization engine (runtime-agnostic: Node, browser, Web Worker).
 export * from "./module";
+export { latin1String, sha256Hex, utf8ByteCount } from "./sha256";

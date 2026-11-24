@@ -1,6 +1,4 @@
-import { dirname, join, sep } from "node:path";
-
-/** What the main process learns about a PDF before it is stored. Rendering happens in the renderer. */
+/** What the engine learns about a PDF before it is stored. Rendering happens in the renderer. */
 export interface PdfInspection {
   pages: number;
   title?: string;
@@ -19,17 +17,34 @@ const MAX_SAMPLE_CHARS = 20_000;
 
 type PdfjsModule = typeof import("pdfjs-dist/legacy/build/pdf.mjs");
 let pdfjsModule: Promise<PdfjsModule> | undefined;
+let configuredWorkerSrc: string | undefined;
 
-// pdf.js is ESM-only and stays external to the main bundle; it is loaded once, on first use.
+export function setPdfWorkerSrc(src: string): void {
+  configuredWorkerSrc = src;
+}
+
+// Loaded once, on first use. Browser / Worker hosts pass `setPdfWorkerSrc(...)`;
+// Node / Vitest uses pdfjs's fake-worker fallback with standard fonts from node_modules.
 function loadPdfjs(): Promise<PdfjsModule> {
-  pdfjsModule ??= import("pdfjs-dist/legacy/build/pdf.mjs");
+  pdfjsModule ??= (async () => {
+    const mod = await import("pdfjs-dist/legacy/build/pdf.mjs");
+    if (configuredWorkerSrc && !mod.GlobalWorkerOptions.workerSrc) {
+      mod.GlobalWorkerOptions.workerSrc = configuredWorkerSrc;
+    }
+    return mod;
+  })();
   return pdfjsModule;
 }
 
-// In Node pdf.js reads standard fonts from the filesystem, so this is a directory path, not a URL.
-function standardFontDataUrl(): string {
-  const packageRoot = dirname(require.resolve("pdfjs-dist/package.json"));
-  return join(packageRoot, "standard_fonts") + sep;
+function standardFontDataUrl(): string | undefined {
+  const nodeRequire = (globalThis as { require?: { resolve?: (id: string) => string } }).require;
+  if (typeof nodeRequire?.resolve !== "function") return undefined;
+  try {
+    const pkgPath = nodeRequire.resolve("pdfjs-dist/package.json");
+    return pkgPath.replace(/package\.json$/, "standard_fonts/");
+  } catch {
+    return undefined;
+  }
 }
 
 function cleanText(value: unknown): string | undefined {
@@ -78,11 +93,12 @@ function toPdfError(error: unknown): PdfError {
 /** Opens the document in Node (fake worker, standard fonts from disk), runs `use`, and always destroys the loading task. */
 export async function withPdfDocument<T>(bytes: Uint8Array, use: (doc: PdfDocument) => Promise<T>): Promise<T> {
   const pdfjs = await loadPdfjs();
+  const fontUrl = standardFontDataUrl();
   const task = pdfjs.getDocument({
     data: bytes.slice(),
     disableFontFace: true,
-    useSystemFonts: false,
-    standardFontDataUrl: standardFontDataUrl(),
+    useSystemFonts: fontUrl === undefined,
+    ...(fontUrl ? { standardFontDataUrl: fontUrl } : {}),
   });
   try {
     const doc = await task.promise;

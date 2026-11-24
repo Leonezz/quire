@@ -6,6 +6,8 @@ out/
 storybook-static/
 .vite/
 apps/desktop/release/
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/gen/schemas/
 apps/desktop/src/renderer/public/dev/*.pdf
 eval/out/
 apps/desktop/src/renderer/public/dev/corpus/

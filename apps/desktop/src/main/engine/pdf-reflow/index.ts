@@ -1,7 +1,8 @@
 import type { NormalizationProblem } from "@read/normalize/contract";
 import type { MaterialViewContent, TextViewReport } from "../../../shared/contracts";
-import { TEXT_VIEW_MEDIA_TYPE } from "../material-views";
 import { PdfError, withPdfDocument } from "../pdf";
+
+const TEXT_VIEW_MEDIA_TYPE = "text/x-quire-reflow";
 import { readingMinutes } from "../reading-time";
 import { blocksOfSequence, bodyFontSize, classifyHeadings, mergeAcross, type Block } from "./blocks";
 import { dominantColumns, layoutPage } from "./columns";

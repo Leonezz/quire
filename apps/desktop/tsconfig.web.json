@@ -15,6 +15,12 @@
       "@read/reader": [
         "../../packages/reader/src/index.ts"
       ],
+      "@read/reader-pdf": [
+        "../../packages/reader-pdf/src/index.ts"
+      ],
+      "@read/normalize": [
+        "../../packages/normalize/src/index.ts"
+      ],
       "@read/normalize/contract": [
         "../../packages/normalize/src/contract.ts"
       ]
@@ -24,7 +30,7 @@
     "resolveJsonModule": true
   },
   "include": [
-    "src/preload/index.d.ts",
+    "../../packages/normalize/src/env.d.ts",
     "src/renderer/src",
     "src/artifact-kit",
     "src/shared"

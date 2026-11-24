@@ -1,4 +1,28 @@
-import { isIP } from "node:net";
+function isIpv4Part(value: string): boolean {
+  const parts = value.split(".");
+  if (parts.length !== 4) return false;
+  return parts.every((part) => /^(?:0|[1-9]\d{0,2})$/.test(part) && Number(part) <= 255);
+}
+
+function isIpv6Literal(value: string): boolean {
+  if (!value.includes(":") || /^:(?!:)|(?<!:):$|:::/.test(value)) return false;
+  const halves = value.split("::");
+  if (halves.length > 2) return false;
+  const head = halves[0] ? halves[0].split(":") : [];
+  let tail = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  let ipv4Groups = 0;
+  const last = tail.length > 0 ? tail[tail.length - 1] : head[head.length - 1];
+  if (last && last.includes(".")) {
+    if (!isIpv4Part(last)) return false;
+    ipv4Groups = 2;
+    if (tail.length > 0) tail = tail.slice(0, -1);
+    else head.pop();
+  }
+  const hex16 = (part: string) => /^[0-9A-Fa-f]{1,4}$/.test(part);
+  if (!head.every(hex16) || !tail.every(hex16)) return false;
+  const total = head.length + tail.length + ipv4Groups;
+  return halves.length === 2 ? total < 8 : total === 8;
+}
 
 function isUcsChar(codePoint: number) {
   return (
@@ -69,7 +93,7 @@ function authorityIsValid(authority: string) {
     const remainder = hostPort.slice(closing + 1);
     if (remainder !== "" && !/^:\d*$/u.test(remainder)) return false;
     const ipvFuture = /^[vV][0-9A-Fa-f]+\.[A-Za-z0-9\-._~!$&'()*+,;=:]+$/u.test(literal);
-    return isIP(literal) === 6 || ipvFuture;
+    return isIpv6Literal(literal) || ipvFuture;
   }
   if (hostPort.includes("[") || hostPort.includes("]")) return false;
   const colon = hostPort.lastIndexOf(":");

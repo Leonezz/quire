@@ -1,5 +1,5 @@
 import { createMarkdownRepresentations, type ContentMaterialization, type NormalizationProblem } from "@read/normalize";
-import type { StoredRecord } from "./material-record";
+import type { MaterialRecord } from "../../shared/contracts";
 import type { PdfInspection } from "./pdf";
 import { readingMinutes } from "./reading-time";
 
@@ -12,9 +12,9 @@ const MINUTES_PER_PDF_PAGE = 2.5;
 export const NORMALIZE_BUDGET = { maxBytes: 8 * 1024 * 1024, maxDepth: 100, maxNodes: 100_000, maxOutputBytes: 8 * 1024 * 1024 };
 
 /** The content fields every rendering carries; the record's own for the primary view, a view file's otherwise. */
-export type ContentFields = Pick<StoredRecord, "mediaType" | "pdf" | "reader" | "markdown" | "plain" | "readingMinutes" | "quality" | "problems">;
+export type ContentFields = Pick<MaterialRecord, "mediaType" | "pdf" | "reader" | "markdown" | "plain" | "readingMinutes" | "quality" | "problems">;
 
-type ReaderRepresentation = NonNullable<StoredRecord["reader"]>;
+type ReaderRepresentation = NonNullable<MaterialRecord["reader"]>;
 
 function readerOf(by: (schema: string) => string | undefined): ReaderRepresentation | undefined {
   const v2 = by("reader.document.v2");
@@ -24,7 +24,7 @@ function readerOf(by: (schema: string) => string | undefined): ReaderRepresentat
 }
 
 /** The reader document (v2 preferred), Markdown and plain text an article materialization produced. */
-export function pickRepresentations(materialization: ContentMaterialization): Pick<StoredRecord, "reader" | "markdown" | "plain"> {
+export function pickRepresentations(materialization: ContentMaterialization): Pick<MaterialRecord, "reader" | "markdown" | "plain"> {
   const by = (schema: string) => materialization.representations.find((r) => r.schema === schema)?.content;
   const reader = readerOf(by);
   const markdown = by("agent.gfm.v1");
@@ -33,7 +33,7 @@ export function pickRepresentations(materialization: ContentMaterialization): Pi
 }
 
 /** Reader representations, markdown and quality for Markdown content; shared by files, feeds and agent artifacts. */
-export function markdownParts(content: string, baseUri: string): Pick<StoredRecord, "reader" | "markdown" | "readingMinutes" | "quality" | "problems"> {
+export function markdownParts(content: string, baseUri: string): Pick<MaterialRecord, "reader" | "markdown" | "readingMinutes" | "quality" | "problems"> {
   const { representations } = createMarkdownRepresentations({ baseUri, content, maxDepth: NORMALIZE_BUDGET.maxDepth, maxNodes: NORMALIZE_BUDGET.maxNodes, maxOutputBytes: NORMALIZE_BUDGET.maxOutputBytes, outputBudgetErrorCode: "MARKDOWN_TOO_LARGE" });
   const reader = readerOf((schema) => representations.find((r) => r.schema === schema)?.content);
   return {
@@ -45,7 +45,7 @@ export function markdownParts(content: string, baseUri: string): Pick<StoredReco
 }
 
 /** The content fields of an inspected PDF: page count, text sample, a reading time by pages. */
-export function pdfContent(inspection: PdfInspection, byteLength: number, origin: StoredRecord["origin"]): ContentFields {
+export function pdfContent(inspection: PdfInspection, byteLength: number, origin: MaterialRecord["origin"]): ContentFields {
   return {
     mediaType: "application/pdf",
     ...(inspection.sampleText ? { plain: inspection.sampleText } : {}),
@@ -65,7 +65,7 @@ export function withoutTitleHeading(markdown: string, title: string): string {
 }
 
 /** Image sources referenced by the reader document, in reading order, for caching at save time. */
-export function imageUrlsOf(record: Pick<StoredRecord, "reader">): string[] {
+export function imageUrlsOf(record: Pick<MaterialRecord, "reader">): string[] {
   return readerImageUrls(record.reader, MAX_PREFETCH_IMAGES) ?? [];
 }
 

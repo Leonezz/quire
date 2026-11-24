@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256Hex, utf8ByteCount } from "./sha256";
 
 import type {
   ContentMaterialization,
@@ -190,7 +190,7 @@ function mimeEssence(value: string) {
 }
 
 function externalId(value: string) {
-  return createHash("sha256").update(value).digest("hex");
+  return sha256Hex(value);
 }
 
 function atomLink(entry: XmlNode) {
@@ -757,7 +757,7 @@ function rankedCandidates(values: Candidate[]) {
 }
 
 function serializedBytes(value: unknown) {
-  return Buffer.byteLength(JSON.stringify(value), "utf8");
+  return utf8ByteCount(JSON.stringify(value));
 }
 
 function representationProblem(error: unknown) {

@@ -4,6 +4,7 @@ import type {
   Sha256Identity,
 } from "./model";
 import { createRepresentations, sha256Identity } from "./representations";
+import { utf8ByteCount } from "./sha256";
 
 const MAX_LOCATOR_CHARACTERS = 4_096;
 const MAX_TITLE_CHARACTERS = 500;
@@ -65,15 +66,15 @@ function problem(
 }
 
 function serializedBytes(value: unknown) {
-  return Buffer.byteLength(JSON.stringify(value), "utf8");
+  return utf8ByteCount(JSON.stringify(value));
 }
 
 function truncateUtf8(value: string, maxBytes: number) {
-  if (Buffer.byteLength(value, "utf8") <= maxBytes) return value;
+  if (utf8ByteCount(value) <= maxBytes) return value;
   const characters: string[] = [];
   let bytes = 0;
   for (const character of value) {
-    const characterBytes = Buffer.byteLength(character, "utf8");
+    const characterBytes = utf8ByteCount(character);
     if (bytes + characterBytes > maxBytes) break;
     characters.push(character);
     bytes += characterBytes;

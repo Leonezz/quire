@@ -1,16 +1,12 @@
 name: Release
 
-# Cutting a release: bump apps/desktop/package.json `version`, commit, tag `v<version>` and push the
-# tag. electron-builder publishes the macOS artifacts (dmg + zip, arm64 and x64, plus latest-mac.yml
-# for electron-updater) to this repository's Releases page. See docs/release.md.
-# Manual only: without the signing secrets a run publishes an unsigned build, and on the first alpha
-# a tag-triggered run replaced locally signed assets with unsigned ones. Since alpha.5 the secrets
-# hold the Developer ID certificate and the notarization credentials (see docs/release.md).
+# Cutting a Tauri 2 release: bump apps/desktop/package.json, apps/desktop/src-tauri/Cargo.toml,
+# and apps/desktop/src-tauri/tauri.conf.json `version`, commit, tag `v<version>`, and push the tag.
 on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Existing tag to build and publish (for example v0.1.0-alpha.2)"
+        description: "Existing tag to build and publish (for example v0.2.0-tauri.1)"
         required: true
       runner:
         description: "macOS runner label (e.g. macos-latest, macos-15-intel, macos-26-intel)"
@@ -21,21 +17,17 @@ permissions:
   contents: write
 
 env:
-  # Releases live in this repository, so the job's own token publishes them.
   GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   RELEASE_REPO: ${{ github.repository }}
 
 jobs:
   mac:
-    name: macOS (arm64 + x64)
+    name: macOS Tauri 2 (arm64 + x64)
     runs-on: ${{ github.event.inputs.runner || 'macos-latest' }}
-    # Notarization submits each architecture separately and Apple's queue is not bounded; the team's
-    # first submission took 68 minutes.
-    timeout-minutes: 120
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
         with:
-          # The changelog needs the previous tag and the commits since it.
           fetch-depth: 0
           fetch-tags: true
 
@@ -55,133 +47,56 @@ jobs:
           node-version: 22
           cache: pnpm
 
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build
-        run: pnpm build
-
-      # Signing and notarization are opt-in through secrets. Without a Developer ID certificate the
-      # build is explicitly unsigned (CSC_IDENTITY_AUTO_DISCOVERY=false); Gatekeeper then asks users
-      # to allow the app and electron-updater will not install updates on macOS.
-      - name: Configure signing
+      - name: Configure Apple code signing & notarization
         shell: bash
         env:
-          CSC_LINK_SECRET: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD_SECRET: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_CERTIFICATE_SECRET: ${{ secrets.CSC_LINK }}
+          APPLE_CERTIFICATE_PASSWORD_SECRET: ${{ secrets.CSC_KEY_PASSWORD }}
           APPLE_ID_SECRET: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD_SECRET: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_PASSWORD_SECRET: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID_SECRET: ${{ secrets.APPLE_TEAM_ID }}
         run: |
-          if [ -n "$CSC_LINK_SECRET" ]; then
-            if [ -z "$CSC_KEY_PASSWORD_SECRET" ]; then
-              echo "::error::CSC_LINK is set but CSC_KEY_PASSWORD is missing"
-              exit 1
-            fi
+          if [ -n "$APPLE_CERTIFICATE_SECRET" ]; then
             {
-              echo "CSC_LINK=$CSC_LINK_SECRET"
-              echo "CSC_KEY_PASSWORD=$CSC_KEY_PASSWORD_SECRET"
+              echo "APPLE_CERTIFICATE=$APPLE_CERTIFICATE_SECRET"
+              echo "APPLE_CERTIFICATE_PASSWORD=$APPLE_CERTIFICATE_PASSWORD_SECRET"
             } >> "$GITHUB_ENV"
-            echo "Signing with the Developer ID certificate from CSC_LINK."
-          else
-            echo "CSC_IDENTITY_AUTO_DISCOVERY=false" >> "$GITHUB_ENV"
-            echo "::warning::No CSC_LINK secret: building an unsigned app. Users must allow it in Gatekeeper and cannot auto-update."
           fi
           if [ -n "$APPLE_ID_SECRET" ]; then
-            if [ -z "$APPLE_APP_SPECIFIC_PASSWORD_SECRET" ] || [ -z "$APPLE_TEAM_ID_SECRET" ]; then
-              echo "::error::APPLE_ID is set but APPLE_APP_SPECIFIC_PASSWORD or APPLE_TEAM_ID is missing"
-              exit 1
-            fi
-            if [ -z "$CSC_LINK_SECRET" ]; then
-              echo "::error::Notarization needs a signed app: set CSC_LINK and CSC_KEY_PASSWORD as well"
-              exit 1
-            fi
             {
               echo "APPLE_ID=$APPLE_ID_SECRET"
-              echo "APPLE_APP_SPECIFIC_PASSWORD=$APPLE_APP_SPECIFIC_PASSWORD_SECRET"
+              echo "APPLE_PASSWORD=$APPLE_PASSWORD_SECRET"
               echo "APPLE_TEAM_ID=$APPLE_TEAM_ID_SECRET"
             } >> "$GITHUB_ENV"
-            echo "Notarizing with notarytool."
-          else
-            echo "No APPLE_ID secret: skipping notarization."
           fi
 
-      # electron-builder publishes each architecture separately and, when no release exists yet for the
-      # tag, creates one per architecture (two releases with the same tag, and `gh release edit` then
-      # fails with "tag_name already exists"). Creating the release first makes both uploads land in it.
-      - name: Create the release for the tag
+      - name: Build arm64 and x64 DMG bundles
+        shell: bash
+        run: |
+          version="${{ inputs.tag }}"
+          version="${version#v}"
+          mkdir -p apps/desktop/release
+          pnpm --filter @read/desktop exec tauri build --target aarch64-apple-darwin --bundles app,dmg
+          cp "apps/desktop/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/Quire_${version}_aarch64.dmg" "apps/desktop/release/Quire-${version}-arm64.dmg"
+          pnpm --filter @read/desktop exec tauri build --target x86_64-apple-darwin --bundles app,dmg
+          cp "apps/desktop/src-tauri/target/x86_64-apple-darwin/release/bundle/dmg/Quire_${version}_x64.dmg" "apps/desktop/release/Quire-${version}-x64.dmg"
+
+      - name: Publish GitHub Release
         shell: bash
         run: |
           tag="${{ inputs.tag }}"
-          if gh release view "$tag" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
-            echo "Release $tag exists; assets will be added to it."
-          else
+          if ! gh release view "$tag" --repo "$RELEASE_REPO" >/dev/null 2>&1; then
             gh release create "$tag" --repo "$RELEASE_REPO" --title "Quire $tag" --notes "Building…" --prerelease
           fi
-
-      # electron-builder skips every upload, and still exits 0, when the existing release was published
-      # more than two hours ago. The step above creates that release on purpose, so a re-run of a failed
-      # job (alpha.5) must not be refused for its age.
-      - name: Package and publish
-        env:
-          EP_GH_IGNORE_TIME: "true"
-        run: pnpm --filter @read/desktop exec electron-builder --mac --publish always
-
-      - name: Check the release has every asset
-        shell: bash
-        run: |
-          tag="${{ inputs.tag }}"
-          version="${tag#v}"
-          have="$(gh release view "$tag" --repo "$RELEASE_REPO" --json assets --jq '.assets[].name')"
-          missing=""
-          for arch in arm64 x64; do
-            for ext in dmg dmg.blockmap zip zip.blockmap; do
-              name="Quire-${version}-${arch}.${ext}"
-              grep -qxF "$name" <<< "$have" || missing="$missing $name"
-            done
-          done
-          grep -qxF latest-mac.yml <<< "$have" || missing="$missing latest-mac.yml"
-          if [ -n "$missing" ]; then
-            echo "::error::Release $tag is missing:$missing"
-            exit 1
-          fi
-          echo "Release $tag has all 9 assets."
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: quire-${{ inputs.tag }}-mac
-          if-no-files-found: error
-          path: |
-            apps/desktop/release/*.dmg
-            apps/desktop/release/*.zip
-            apps/desktop/release/*.blockmap
-            apps/desktop/release/*.yml
-
-      # electron-builder created the release; this fills in its notes from the feat/fix commits since
-      # the previous tag and sets the prerelease flag from the tag name.
-      - name: Write release notes
-        shell: bash
-        run: |
-          tag="${{ inputs.tag }}"
-          previous="$(git describe --tags --abbrev=0 "${tag}^" 2>/dev/null || true)"
-          if [ -n "$previous" ]; then
-            range="${previous}..${tag}"
-            heading="Changes since ${previous}"
-          else
-            range="$tag"
-            heading="Changes"
-          fi
-          {
-            echo "## ${heading}"
-            echo
-            git log --no-merges --pretty='- %s' "$range" | grep -E '^- (feat|fix)(\([^)]*\))?!?:' || echo "- No feat/fix commits in this range."
-          } > release-notes.md
-          cat release-notes.md
-          if [[ "$tag" == *alpha* || "$tag" == *beta* ]]; then
-            flag="--prerelease"
-          else
-            flag="--prerelease=false --latest"
-          fi
-          # shellcheck disable=SC2086
-          gh release edit "$tag" --repo "$RELEASE_REPO" --title "Quire $tag" --notes-file release-notes.md $flag
+          gh release upload "$tag" apps/desktop/release/*.dmg --repo "$RELEASE_REPO" --clobber

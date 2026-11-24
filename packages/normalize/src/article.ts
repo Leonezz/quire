@@ -11,6 +11,7 @@ import {
   inspectHtmlStructureBeforeParse,
   transformInputByteLimit,
 } from "./output-budget";
+import { latin1String, utf8ByteCount } from "./sha256";
 import {
   applyArticleSiteAdapter,
   articleSiteAdapterRule,
@@ -115,7 +116,7 @@ function htmlAttribute(tag: string, name: string) {
 }
 
 function metaCharset(bytes: Uint8Array): CharsetEvidence | undefined {
-  const prescan = Buffer.from(bytes.subarray(0, 1_024)).toString("latin1");
+  const prescan = latin1String(bytes.subarray(0, 1_024));
   for (const match of prescan.matchAll(/<meta\b[^>]*>/giu)) {
     const tag = match[0];
     const direct = htmlAttribute(tag, "charset");
@@ -233,15 +234,15 @@ function decodeHtml(bytes: Uint8Array, mediaType: string): HtmlDecodeResult {
 }
 
 function serializedBytes(value: unknown) {
-  return Buffer.byteLength(JSON.stringify(value), "utf8");
+  return utf8ByteCount(JSON.stringify(value));
 }
 
 function truncateUtf8(value: string, maxBytes: number) {
-  if (Buffer.byteLength(value, "utf8") <= maxBytes) return value;
+  if (utf8ByteCount(value) <= maxBytes) return value;
   const characters: string[] = [];
   let bytes = 0;
   for (const character of value) {
-    const characterBytes = Buffer.byteLength(character, "utf8");
+    const characterBytes = utf8ByteCount(character);
     if (bytes + characterBytes > maxBytes) break;
     characters.push(character);
     bytes += characterBytes;
@@ -305,7 +306,7 @@ function articleFailure(
     if (serializedBytes(outcome) <= maxOutputBytes) return outcome;
     candidate = truncateUtf8(
       candidate,
-      Math.floor(Buffer.byteLength(candidate, "utf8") / 2),
+      Math.floor(utf8ByteCount(candidate) / 2),
     );
   }
   return withoutFallback;

@@ -1,28 +1,9 @@
 import { createHash } from "node:crypto";
 import type { ItemDecision, ItemRecord, ItemSignals, MaterialMeta, SourceKind, SourceRecord } from "../../shared/contracts";
 import type { Database } from "./db";
+import type { ItemContent, ItemInput } from "./feeds";
 
-/** Full content a feed entry carried, kept on the item so Read can fall back to it when the page cannot be fetched. */
-export interface ItemContent {
-  reader?: { schema: "reader.document.v1" | "reader.document.v2"; payload: string };
-  markdown?: string;
-  plain?: string;
-}
-
-/** What a source produces per entry; the store adds identity, state and timestamps. */
-export interface ItemInput {
-  externalId: string;
-  title: string;
-  link: string;
-  publishedAt: string;
-  gist: string;
-  readingMinutes: number;
-  signals: ItemSignals;
-  summaryOnly: boolean;
-  content?: ItemContent;
-  /** What the source declared about the entry (arXiv authors and abstract, the feed's title); merged under the page's own metadata on Read. */
-  meta?: MaterialMeta;
-}
+export type { ItemContent, ItemInput } from "./feeds";
 
 export interface SourceHealth {
   itemCount: number;

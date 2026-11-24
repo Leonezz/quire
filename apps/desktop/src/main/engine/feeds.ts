@@ -1,8 +1,28 @@
 import { readingMinutes, wordCount } from "./reading-time";
-import { createHash } from "node:crypto";
-import { normalizeFeedCapture, type NormalizedFeedEntry } from "@read/normalize";
+import { normalizeFeedCapture, sha256Hex, type NormalizedFeedEntry } from "@read/normalize";
 import type { ItemSignals, MaterialMeta } from "../../shared/contracts";
-import type { ItemContent, ItemInput } from "./items";
+
+/** Full content a feed entry carried, kept on the item so Read can fall back to it when the page cannot be fetched. */
+export interface ItemContent {
+  reader?: { schema: "reader.document.v1" | "reader.document.v2"; payload: string };
+  markdown?: string;
+  plain?: string;
+}
+
+/** What a source produces per entry; the store adds identity, state and timestamps. */
+export interface ItemInput {
+  externalId: string;
+  title: string;
+  link: string;
+  publishedAt: string;
+  gist: string;
+  readingMinutes: number;
+  signals: ItemSignals;
+  summaryOnly: boolean;
+  content?: ItemContent;
+  /** What the source declared about the entry (arXiv authors and abstract, the feed's title); merged under the page's own metadata on Read. */
+  meta?: MaterialMeta;
+}
 
 const BUDGET = { maxBytes: 8 * 1024 * 1024, maxDepth: 100, maxEntries: 200, maxEntryOutputBytes: 2 * 1024 * 1024, maxNodes: 200_000, maxTotalOutputBytes: 64 * 1024 * 1024 };
 const GIST_CHARS = 300;
@@ -127,7 +147,7 @@ export function parseFeed(bytes: Uint8Array, mediaType: string, url: string, now
   if (mediaType === "text/html" || (mediaType === "application/octet-stream" && looksLikeHtml(bytes))) throw new Error(`Not a feed: ${url} answered with an HTML page. Paste the site's feed URL, or the page itself to discover one.`);
   const outcome = normalizeFeedCapture({
     budget: BUDGET,
-    capture: { baseLocator: url, bytes, contentIdentity: `sha256:${createHash("sha256").update(bytes).digest("hex")}`, mediaType: mediaType || "application/xml" },
+    capture: { baseLocator: url, bytes, contentIdentity: `sha256:${sha256Hex(bytes)}`, mediaType: mediaType || "application/xml" },
   });
   if (!outcome.ok) {
     const fatal = outcome.problems.find((p) => p.severity === "fatal") ?? outcome.problems[0];

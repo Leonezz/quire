@@ -1,3 +1,5 @@
+import { utf8ByteCount } from "./sha256";
+
 const MAX_TRANSFORM_INPUT_BYTES = 16 * 1024 * 1024;
 const TRANSFORM_INPUT_TO_OUTPUT_RATIO = 2;
 
@@ -13,7 +15,7 @@ export function transformInputByteLimit(maxOutputBytes: number) {
 }
 
 export function utf8ByteLength(value: string) {
-  return Buffer.byteLength(value, "utf8");
+  return utf8ByteCount(value);
 }
 
 const HTML_RAW_TEXT_ELEMENT_NAMES = new Set([

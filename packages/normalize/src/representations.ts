@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "./sha256";
 
 import { toString } from "mdast-util-to-string";
 import { normalizeIdentifier } from "micromark-util-normalize-identifier";
@@ -74,7 +74,7 @@ const FLOW_TYPES = new Set(["blockquote", "code", "heading", "list", "paragraph"
 const PHRASING_TYPES = new Set(["break", "delete", "emphasis", "image", "inlineCode", "link", "strong", "text"]);
 
 export function sha256Identity(value: string | Uint8Array): Sha256Identity {
-  return `sha256:${createHash("sha256").update(value).digest("hex")}`;
+  return `sha256:${sha256Hex(value)}`;
 }
 
 function safeUrl(rawValue: string, baseUri: string | undefined, purpose: "image" | "link") {

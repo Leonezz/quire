@@ -1,6 +1,5 @@
 import type { MaterialMeta } from "../../shared/contracts";
-import type { ItemInput } from "./items";
-import type { ParsedFeed } from "./feeds";
+import type { ItemInput, ParsedFeed } from "./feeds";
 
 const ARCHIVES = new Set(["cs", "math", "stat", "physics", "q-bio", "q-fin", "econ", "eess", "astro-ph", "cond-mat", "gr-qc", "hep-ex", "hep-lat", "hep-ph", "hep-th", "math-ph", "nlin", "nucl-ex", "nucl-th", "quant-ph"]);
 const CATEGORY = /^([a-z-]+)(\.[A-Z]{2})?$/;

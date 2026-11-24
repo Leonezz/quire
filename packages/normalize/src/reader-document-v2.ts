@@ -31,7 +31,7 @@ import {
   type ReaderV2TableSection,
 } from "./reader-document-v2-contract";
 import { trackingPixelRule } from "./image-policy";
-import { htmlStructureWithinBudget, Utf8Budget } from "./output-budget";
+import { htmlStructureWithinBudget, utf8ByteLength, Utf8Budget } from "./output-budget";
 
 // <video> and <audio> are here so their fallback text ("Your browser does not support…") never reads as
 // body text; the ones with a URL were already turned into links (embedded-media.ts).
@@ -762,11 +762,11 @@ function escapedXml(value: string, context: Context, attribute: boolean) {
   let bytes = 0;
   let cursor = 0;
   for (const match of value.matchAll(pattern)) {
-    bytes += Buffer.byteLength(value.slice(cursor, match.index), "utf8");
+    bytes += utf8ByteLength(value.slice(cursor, match.index));
     bytes += match[0] === "&" ? 5 : match[0] === '"' ? 6 : 4;
     cursor = match.index + 1;
   }
-  bytes += Buffer.byteLength(value.slice(cursor), "utf8");
+  bytes += utf8ByteLength(value.slice(cursor));
   context.outputBudget.consumeBytes(bytes);
   const text = value
     .replaceAll("&", "&amp;")

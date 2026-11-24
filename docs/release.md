@@ -1,147 +1,50 @@
-# Releasing Quire
+# Releasing Quire (Tauri 2)
 
-Quire ships as a macOS app built with electron-builder from `apps/desktop`. Releases live on this
-repository's Releases page, which is also what the in-app updater polls. The extraction eval's
-page snapshots (`eval/corpus/`) are third-party content and stay local (gitignored); everything
-else is public.
+Quire ships as a native macOS app built with **Tauri 2** (`apps/desktop/src-tauri` + Vite frontend in
+`apps/desktop/src/renderer`). Releases live on this repository's Releases page, which is also what
+the in-app updater polls. The extraction eval's page snapshots (`eval/corpus/`) are third-party
+content and stay local (gitignored); everything else is public.
 
-## Two ways to publish
+## Publishing on GitHub Actions
 
-**On GitHub Actions (the default since alpha.3).** `release.yml` runs by hand (Actions → Release →
-Run workflow with an existing tag, or `gh workflow run release.yml -f tag=v<version>`) on a
-`macos-latest` runner (pass `-f runner=macos-15-intel` or `-f runner=macos-26-intel` when GitHub's
-arm64 pool is congested) and publishes with the job's own `GITHUB_TOKEN`. Since alpha.5 it signs with
-the **Developer ID Application** certificate `Hanzhen Hong (7Z39KUX3QC)` from `CSC_LINK` /
-`CSC_KEY_PASSWORD` (exported from Keychain Access as a `.p12`) and notarizes with the `APPLE_*`
-secrets, so Gatekeeper opens the app on any Mac without a manual override.
-
-Keep every release on team `7Z39KUX3QC`: electron-updater refuses an update whose signature does not
-satisfy the running app's designated requirement. A renewed Developer ID certificate from the same
-team keeps updates working (the current one expires 2027-02-01); a different team or identity type
-does not. alpha.1–alpha.4 were signed with the maintainer's Apple Development identity
-(`leonez12138@gmail.com (LGNAH9RZH4)`), so users of those builds cannot update in place to alpha.5
-and download it once by hand from the release page.
-
-The workflow is deliberately not tag-triggered: without the secrets it would publish an unsigned
-build, and on the first alpha a tag-triggered run replaced locally signed assets with unsigned ones.
-It also rewrites the release notes from the `feat:`/`fix:` commits since the previous tag; for a
-hand-written changelog run `gh release edit v<version> --notes-file apps/desktop/release-notes.md`
-after it finishes.
-
-**Locally, as a fallback.** When the runner is unavailable, the same build can be made on the
-maintainer's Mac:
+`.github/workflows/release.yml` runs manually via `workflow_dispatch`:
 
 ```sh
-pnpm build
-pnpm --filter @read/desktop release:local
+gh workflow run release.yml -f tag=v0.2.0-tauri.1
 ```
 
-`release:local` signs with the Developer ID certificate `Hanzhen Hong (7Z39KUX3QC)` (override with
-`CSC_NAME`, which electron-builder rejects when it carries the `Developer ID Application:` prefix).
-electron-builder hands codesign the certificate's name, so the keychain must hold exactly one
-identity of that name: the maintainer's Mac has two (both created on 2026-10-15) and codesign stops
-with "ambiguous" until one is removed in Keychain Access → My Certificates. It notarizes with the notarytool keychain profile `quire-notary` (override with
-`APPLE_KEYCHAIN_PROFILE`; create it with `xcrun notarytool store-credentials quire-notary
---apple-id <Apple ID> --team-id 7Z39KUX3QC`), builds with `--publish never`, then runs
-`scripts/publish-release.mjs <notes.md>`
-(`NOTES=` overrides the default `release-notes.md`), which writes `latest-mac.yml` from the
-artifacts' sha512, pushes the tag `v<version>`, and creates the prerelease with `gh` from every
-`.dmg` / `.zip` / `.blockmap` plus the manifest. electron-builder's own GitHub publisher is not
-used here: it posts the release before the tag exists and GitHub answers 422. Expect it to be slow:
-`codesign --timestamp` takes about ten minutes per architecture and the four 160 MB assets upload
-at whatever the local uplink allows (alpha.3 was abandoned after two hours at 90 KB/s and cut
-from CI instead).
+Pass `-f runner=macos-15-intel` or `-f runner=macos-26-intel` when GitHub's arm64 pool is congested;
+because Rust cross-compiles both `aarch64-apple-darwin` and `x86_64-apple-darwin` targets natively,
+either runner produces both `Quire-<version>-arm64.dmg` and `Quire-<version>-x64.dmg`.
 
-## Cutting an alpha
+It reuses the repository's existing signing and notarization secrets (`CSC_LINK`, `CSC_KEY_PASSWORD`,
+`APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`, mapped to Tauri's `APPLE_CERTIFICATE*`
+and `APPLE_*` environment variables) for Developer ID team `7Z39KUX3QC`.
 
-1. Bump the version in `apps/desktop/package.json` (for example `0.1.0-alpha.2`). The release
-   workflow refuses a tag that does not match this field.
-2. Commit, then tag and push the tag:
+## Cutting a release
 
-   ```sh
-   git commit -am "chore: release 0.1.0-alpha.2"
-   git tag v0.1.0-alpha.2
-   git push origin main v0.1.0-alpha.2
-   ```
+1. Align the version across:
+   - `apps/desktop/package.json`
+   - `apps/desktop/src-tauri/Cargo.toml`
+   - `apps/desktop/src-tauri/tauri.conf.json`
+2. Commit, tag `v<version>`, and push.
+3. Trigger `gh workflow run release.yml -f tag=v<version>`.
 
-3. Start the workflow for that tag: `gh workflow run release.yml -f tag=v0.1.0-alpha.2`. It runs on
-   a `macos-latest` runner and:
-   - installs the workspace with pnpm and runs `pnpm build` (electron-vite writes `apps/desktop/out`);
-   - runs `electron-builder --mac --publish always`, which packages `Quire.app` for `arm64` and
-     `x64`, produces a `.dmg` and a `.zip` per architecture plus `latest-mac.yml`, and creates a
-     release `v<version>` on this repository with those files;
-   - fails unless the release carries all nine assets: electron-builder skips every upload, with
-     exit code 0, to a release published more than two hours ago, so the publish step sets
-     `EP_GH_IGNORE_TIME=true` and re-running a failed job (or a new run for the same tag) still
-     uploads;
-   - uploads the same files, blockmaps included, as a workflow artifact (`quire-v<version>-mac`);
-   - writes the release notes from the `feat:`/`fix:` commits since the previous tag and marks the
-     release as a prerelease when the tag contains `alpha` or `beta` (otherwise it becomes the
-     latest release).
+## Local build & smoke test
 
-Tags containing `alpha`/`beta` stay prereleases; electron-updater in the app decides separately
-whether prereleases are offered.
-
-## Secrets
-
-Set these in the source repository (Settings → Secrets and variables → Actions):
-
-| Secret | Required | Purpose |
-| --- | --- | --- |
-| `GITHUB_TOKEN` | automatic | The job's own token; releases are created on this repository. |
-| `CSC_LINK` | for signing | Base64 of the signing certificate exported as `.p12` with its private key (`gh secret set CSC_LINK < <(base64 -i cert.p12)`). The **Developer ID Application** certificate of team `7Z39KUX3QC`; delete the `.p12` once the secret is set. |
-| `CSC_KEY_PASSWORD` | with `CSC_LINK` | Password of that `.p12`. |
-| `APPLE_ID` | for notarization | Apple ID of the developer account. |
-| `APPLE_APP_SPECIFIC_PASSWORD` | with `APPLE_ID` | An app-specific password for that Apple ID (appleid.apple.com). |
-| `APPLE_TEAM_ID` | with `APPLE_ID` | The 10-character team id. |
-
-The workflow only exports a signing or notarization variable when its secret exists, and fails
-early when a set is incomplete (for example `APPLE_ID` without `APPLE_TEAM_ID`, or notarization
-requested without a certificate).
-
-### Why signing matters
-
-- **Unsigned build** (no `CSC_LINK`): the workflow sets `CSC_IDENTITY_AUTO_DISCOVERY=false` and
-  electron-builder skips signing and notarization. The app runs, but Gatekeeper reports it as from
-  an unidentified developer (right-click → Open, or `xattr -d com.apple.quarantine Quire.app`),
-  and **electron-updater refuses to install updates of unsigned macOS apps**, so users download each
-  alpha by hand from the release page.
-- **Signed + notarized build**: with a Developer ID certificate and the three `APPLE_*` secrets the
-  app is signed under the hardened runtime (entitlements in `apps/desktop/build/entitlements.mac.plist`,
-  only `com.apple.security.cs.allow-jit`), notarized with `notarytool` and stapled. This is what
-  makes in-app auto-update work on macOS.
-
-## Packaging configuration
-
-`apps/desktop/electron-builder.yml` holds the configuration; the notable decisions:
-
-- `files` restricts `node_modules` in the asar to the main process's runtime externals and their
-  dependency closure (`@mixmark-io/domino`, `linkedom`, `mathml-to-latex`, `temml`, `pdfjs-dist`,
-  see `electron.vite.config.ts`). Everything else is bundled into `out/` by Vite. When an external
-  or one of its dependencies changes, update that list; a missing package fails loudly at launch.
-- `extraMetadata.productName: Quire` makes the packaged app store its data under
-  `~/Library/Application Support/Quire`, separate from the dev app (`@read/desktop`).
-- `npmRebuild: false`: there are no native modules to rebuild (`node:sqlite` ships with Electron).
-- `publish` targets this repository (`Leonezz/quire`) with `releaseType: prerelease`.
-
-## Local smoke test
-
-Before tagging, package the app for the current architecture and launch it from a terminal so the
-main process's stderr is visible:
+Build the `.app` and `.dmg` locally:
 
 ```sh
-CSC_IDENTITY_AUTO_DISCOVERY=false pnpm --filter @read/desktop package:dir
-apps/desktop/release/mac-arm64/Quire.app/Contents/MacOS/Quire
+pnpm --filter @read/desktop package
 ```
 
-The window should open on the Inbox with nothing on stderr (a missing module in the asar shows up
-here as `Cannot find module`). `~/Library/Application Support/Quire/quire.sqlite` appears on first
-launch. `pnpm --filter @read/desktop package` additionally builds the dmg and zip for both
-architectures into `apps/desktop/release/`; without `--publish` nothing is uploaded.
+Launch the built binary directly to inspect logs and verify startup:
 
-## Continuous integration
+```sh
+apps/desktop/src-tauri/target/release/bundle/macos/Quire.app/Contents/MacOS/quire-desktop
+```
 
-`.github/workflows/ci.yml` runs `pnpm typecheck` and `pnpm test` on Ubuntu for pushes to `main`
-and pull requests. The `@read/ui` tests render every story in headless Chromium, so the job installs
-Playwright's Chromium (cached between runs). The Electron binary download is skipped there because
-nothing in the checks launches Electron.
+User data is stored at `~/Library/Application Support/Quire` (`quire.sqlite` WAL schema v4,
+`materials/`, `images/`, `figures/`, `annotations/`, `settings.json`, `feedback/`, `codex/`),
+100% compatible with libraries created by earlier builds. Override `QUIRE_DATA_DIR` to point at an
+isolated directory during testing.

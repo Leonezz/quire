@@ -7,7 +7,6 @@
       "DOM.Iterable"
     ],
     "types": [
-      "electron-vite/node",
       "node",
       "vitest/globals"
     ],
@@ -25,9 +24,8 @@
   },
   "include": [
     "../../packages/normalize/src/env.d.ts",
-    "electron.vite.config.ts",
+    "vite.config.ts",
     "src/main",
-    "src/preload",
     "src/shared",
     "vitest.config.ts"
   ]
