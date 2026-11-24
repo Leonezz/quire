@@ -9,7 +9,8 @@ else is public.
 
 **On GitHub Actions (the default since alpha.3).** `release.yml` runs by hand (Actions → Release →
 Run workflow with an existing tag, or `gh workflow run release.yml -f tag=v<version>`) on a
-`macos-latest` runner and publishes with the job's own `GITHUB_TOKEN`. Since alpha.5 it signs with
+`macos-latest` runner (pass `-f runner=macos-15-intel` or `-f runner=macos-26-intel` when GitHub's
+arm64 pool is congested) and publishes with the job's own `GITHUB_TOKEN`. Since alpha.5 it signs with
 the **Developer ID Application** certificate `Hanzhen Hong (7Z39KUX3QC)` from `CSC_LINK` /
 `CSC_KEY_PASSWORD` (exported from Keychain Access as a `.p12`) and notarizes with the `APPLE_*`
 secrets, so Gatekeeper opens the app on any Mac without a manual override.

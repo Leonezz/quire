@@ -12,6 +12,10 @@ on:
       tag:
         description: "Existing tag to build and publish (for example v0.1.0-alpha.2)"
         required: true
+      runner:
+        description: "macOS runner label (e.g. macos-latest, macos-15-intel, macos-26-intel)"
+        required: false
+        default: "macos-latest"
 
 permissions:
   contents: write
@@ -24,7 +28,7 @@ env:
 jobs:
   mac:
     name: macOS (arm64 + x64)
-    runs-on: macos-latest
+    runs-on: ${{ github.event.inputs.runner || 'macos-latest' }}
     # Notarization submits each architecture separately and Apple's queue is not bounded; the team's
     # first submission took 68 minutes.
     timeout-minutes: 120
