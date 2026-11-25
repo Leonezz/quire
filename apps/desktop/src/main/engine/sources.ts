@@ -90,6 +90,88 @@ export class SourceStore {
 
 const FEED_ROOT = /^(?:\uFEFF)?\s*(?:<\?xml[^>]*\?>\s*)?(?:<!--[\s\S]*?-->\s*)*<(?:rss|feed|rdf:RDF)\b/;
 const XML_TYPES = /^(?:application\/(?:rss|atom|rdf)\+xml|application\/xml|text\/xml)$/;
+const PODCAST_ENCLOSURE = /<enclosure\b[^>]*?(?:\btype\s*=\s*["']audio\/|\burl\s*=\s*["'][^"']+\.(?:mp3|m4a|aac|ogg|opus|wav)(?:[?#][^"']*)?["'])/i;
+const APPLE_PODCAST_URL = /^https?:\/\/podcasts\.apple\.com\/(?:([a-z]{2})\/)?podcast\/(?:[^/?#]+\/)?id(\d+)(?:\?[^#]*?\bi=(\d+))?/i;
+
+export interface ApplePodcastRef {
+  country: string;
+  collectionId: string;
+  trackId?: string;
+}
+
+export function parseApplePodcastUrl(raw: string): ApplePodcastRef | undefined {
+  const match = APPLE_PODCAST_URL.exec(raw.trim());
+  if (!match) return undefined;
+  return {
+    country: (match[1] ?? "us").toLowerCase(),
+    collectionId: match[2]!,
+    ...(match[3] ? { trackId: match[3] } : {}),
+  };
+}
+
+interface ItunesLookupEntry {
+  wrapperType?: string;
+  kind?: string;
+  collectionId?: number;
+  trackId?: number;
+  collectionName?: string;
+  trackName?: string;
+  feedUrl?: string;
+  collectionViewUrl?: string;
+  trackTimeMillis?: number;
+}
+
+async function detectApplePodcast(ref: ApplePodcastRef, pageUrl: string, fetch: Fetcher): Promise<SourceDetection> {
+  const lookupUrl = new URL(`https://itunes.apple.com/lookup?id=${ref.collectionId}&country=${ref.country}&entity=podcastEpisode&limit=200`);
+  const resp = await fetch(lookupUrl, "application/json");
+  const parsed = JSON.parse(new TextDecoder("utf-8", { fatal: false }).decode(resp.bytes)) as { results?: ItunesLookupEntry[] };
+  const results = Array.isArray(parsed.results) ? parsed.results : [];
+  const show = results.find((r) => r.kind === "podcast" || r.wrapperType === "collection" || Boolean(r.feedUrl));
+  const feedUrl = show?.feedUrl?.trim();
+
+  if (ref.trackId) {
+    let episode = results.find((r) => String(r.trackId) === ref.trackId && r.kind === "podcast-episode");
+    if (!episode) {
+      const singleUrl = new URL(`https://itunes.apple.com/lookup?id=${ref.trackId}&country=${ref.country}&entity=podcastEpisode`);
+      try {
+        const singleResp = await fetch(singleUrl, "application/json");
+        const singleParsed = JSON.parse(new TextDecoder("utf-8", { fatal: false }).decode(singleResp.bytes)) as { results?: ItunesLookupEntry[] };
+        episode = singleParsed.results?.find((r) => String(r.trackId) === ref.trackId);
+      } catch {
+        // Keep show-level fallback when single track lookup fails.
+      }
+    }
+    const title = episode?.trackName?.trim() || show?.collectionName?.trim() || undefined;
+    const durationSec = typeof episode?.trackTimeMillis === "number" && episode.trackTimeMillis > 0
+      ? Math.round(episode.trackTimeMillis / 1000)
+      : undefined;
+    const feed = feedUrl ? offeredFeed(feedUrl) : undefined;
+    return {
+      kind: "episode",
+      url: pageUrl,
+      mediaKind: "audio",
+      ...(title ? { title } : {}),
+      ...(durationSec !== undefined ? { durationSec } : {}),
+      ...(feed ? { feed } : {}),
+    };
+  }
+
+  if (!feedUrl) throw new FetchError("PODCAST_NOT_FOUND", "Apple Podcasts did not return an RSS feed for this show.");
+  assertPublicHttpUrl(feedUrl);
+  const title = show?.collectionName?.trim() || undefined;
+  const siteUrl = show?.collectionViewUrl ? offeredFeed(show.collectionViewUrl) : undefined;
+  return {
+    kind: "podcast",
+    url: feedUrl,
+    ...(title ? { title } : {}),
+    ...(siteUrl ? { siteUrl } : {}),
+  };
+}
+
+function feedSiteUrlOf(xmlHead: string): string | undefined {
+  const rss = /<channel\b[^>]*>[\s\S]*?<link>\s*(https?:\/\/[^<\s]+)\s*<\/link>/i.exec(xmlHead);
+  return rss?.[1] ? offeredFeed(rss[1]) : undefined;
+}
 
 function decodeHead(bytes: Uint8Array, length = 64 * 1024): string {
   return new TextDecoder("utf-8", { fatal: false }).decode(bytes.subarray(0, length));
@@ -148,11 +230,19 @@ export async function detectSource(input: string, fetch: Fetcher): Promise<Sourc
   const value = input.trim();
   const category = arxivCategoryFromInput(value);
   if (category) return { kind: "arxiv", category, title: arxivSourceTitle(category) };
-  const url = assertPublicHttpUrl(/^https?:\/\//i.test(value) ? value : `https://${value}`);
+  const normalized = /^https?:\/\//i.test(value) ? value : `https://${value}`;
+  const url = assertPublicHttpUrl(normalized);
+  const apple = parseApplePodcastUrl(url.toString());
+  if (apple) return detectApplePodcast(apple, url.toString(), fetch);
   const page = await fetch(url, FEED_ACCEPT);
   const head = decodeHead(page.bytes);
   if (XML_TYPES.test(page.mediaType) || FEED_ROOT.test(head)) {
     const title = feedTitleOf(page.bytes);
+    const head256 = decodeHead(page.bytes, 256 * 1024);
+    if (PODCAST_ENCLOSURE.test(head256)) {
+      const siteUrl = feedSiteUrlOf(head256);
+      return { kind: "podcast", url: page.finalUrl, ...(title ? { title } : {}), ...(siteUrl ? { siteUrl } : {}) };
+    }
     return { kind: "feed", url: page.finalUrl, ...(title ? { title } : {}) };
   }
   const alternate = alternateFeedOf(head, page.finalUrl);
@@ -176,7 +266,15 @@ export function subscriptionOf(detection: SourceDetection): SourceInput | undefi
     case "podcast": return { kind: "podcast", locator: detection.url, title: detection.title ?? new URL(detection.url).hostname, ...(detection.siteUrl ? { siteUrl: detection.siteUrl } : {}) };
     case "youtube": return { kind: "youtube", locator: detection.url, title: detection.title ?? "YouTube channel" };
     case "page":
-    case "episode":
       return detection.feed ? { kind: "feed", locator: detection.feed, title: new URL(detection.feed).hostname } : undefined;
+    case "episode": {
+      if (!detection.feed) return undefined;
+      const kind: SourceKind = detection.mediaKind === "audio"
+        ? "podcast"
+        : detection.feed.includes("youtube.com/feeds/videos.xml")
+          ? "youtube"
+          : "feed";
+      return { kind, locator: detection.feed, title: new URL(detection.feed).hostname };
+    }
   }
 }

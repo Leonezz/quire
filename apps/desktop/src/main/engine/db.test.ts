@@ -14,14 +14,16 @@ const columns = (db: Database, table: string) => (db.prepare(`PRAGMA table_info(
 const tables = (db: Database) => (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as { name: string }[]).map((t) => t.name);
 
 describe("openDatabase", () => {
-  it("creates a fresh database at the current version with the M3 tables", () => {
+  it("creates a fresh database at the current version with the M3 and media tables", () => {
     const db = openDatabase(":memory:");
-    expect(SCHEMA_VERSION).toBe(4);
-    expect(version(db)).toBe(4);
-    expect(tables(db)).toEqual(["agent_sessions", "agent_turns", "items", "material_meta", "reading_events", "sources"]);
+    expect(SCHEMA_VERSION).toBe(5);
+    expect(version(db)).toBe(5);
+    expect(tables(db)).toEqual(["agent_sessions", "agent_turns", "items", "material_meta", "media_states", "reading_events", "sources"]);
     expect(columns(db, "items")).toContain("kept_at");
     expect(columns(db, "items")).toContain("meta");
+    expect(columns(db, "sources")).toContain("config");
     expect(columns(db, "material_meta")).toEqual(["material_id", "overrides", "updated_at"]);
+    expect(columns(db, "media_states")).toEqual(["material_id", "position_sec", "duration_sec", "playback_speed", "updated_at"]);
     db.close();
   });
 
@@ -34,15 +36,17 @@ describe("openDatabase", () => {
     old.close();
 
     const db = openDatabase(path);
-    expect(version(db)).toBe(4);
+    expect(version(db)).toBe(5);
     expect(columns(db, "items")).toContain("kept_at");
     expect(columns(db, "items")).toContain("meta");
+    expect(columns(db, "sources")).toContain("config");
     expect(tables(db)).toContain("material_meta");
+    expect(tables(db)).toContain("media_states");
     expect(db.prepare("SELECT id, kept_at, meta FROM items").all()).toEqual([{ id: "i1", kept_at: null, meta: null }]);
     db.close();
 
     const again = openDatabase(path);
-    expect(version(again)).toBe(4);
+    expect(version(again)).toBe(5);
     expect(again.prepare("SELECT COUNT(*) AS n FROM items").get()).toEqual({ n: 1 });
     again.close();
   });
@@ -59,7 +63,7 @@ describe("openDatabase", () => {
     old.close();
 
     const db = openDatabase(path);
-    expect(version(db)).toBe(4);
+    expect(version(db)).toBe(5);
     expect(columns(db, "material_meta")).toEqual(["material_id", "overrides", "updated_at"]);
     const meta = new MetaStore(db);
     expect(meta.get("aaaaaaaaaaaaaaaa")).toEqual({
@@ -82,7 +86,7 @@ describe("openDatabase", () => {
     const db = openDatabase(path);
     db.exec("PRAGMA user_version = 99");
     db.close();
-    expect(() => openDatabase(path)).toThrow(/schema version 99, newer than this build understands \(4\)/);
+    expect(() => openDatabase(path)).toThrow(/schema version 99, newer than this build understands \(5\)/);
   });
 });
 

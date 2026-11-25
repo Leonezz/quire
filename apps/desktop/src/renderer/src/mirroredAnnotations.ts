@@ -1,6 +1,7 @@
 import type { Annotation, MaterialView, MaterialViewId } from "../../shared/contracts";
 import { annotationView, hasReadyView } from "./materialViews";
-import { pdfRegionsForQuote, textQuoteForRegions, type TextViewSource } from "./textViewAnchors";
+import { locateQuote, pdfRegionsForQuote, textQuoteForRegions, type TextViewSource } from "./textViewAnchors";
+import { fallbackQuoteForTimeRange, type TranscriptViewSource } from "./transcriptAnchors";
 
 // An annotation is stored once, with the locator of the view it was made in. The PDF and its text
 // view show each other's notes by mapping locators through the text view's anchors at render time.
@@ -35,11 +36,29 @@ function mirrored(annotation: Annotation, view: MaterialViewId, from: MaterialVi
  * The annotations a reader anchors in its body: those made in `view` as they are, and those made in the
  * mirrored view with their locator mapped. Ids are kept, so the Notes panel's active card follows.
  */
-export function resolveViewAnnotations(annotations: readonly Annotation[], view: MaterialViewId, primaryView: MaterialViewId, textContent: TextViewSource | undefined): Annotation[] {
+export function resolveViewAnnotations(
+  annotations: readonly Annotation[],
+  view: MaterialViewId,
+  primaryView: MaterialViewId,
+  textContent: TextViewSource | undefined,
+  transcriptContent?: TranscriptViewSource | undefined,
+): Annotation[] {
   const mirrors = mirroredViews(view, textContent);
   return annotations.flatMap((annotation) => {
     const from = annotationView(annotation, primaryView);
-    if (from === view) return [annotation];
+    if (from === view) {
+      if (
+        view === "transcript" &&
+        annotation.timeRange &&
+        transcriptContent?.plain &&
+        transcriptContent.timeAnchors?.length &&
+        !locateQuote(transcriptContent.plain, annotation)
+      ) {
+        const recovered = fallbackQuoteForTimeRange(transcriptContent, annotation.timeRange);
+        if (recovered) return [{ ...annotation, locator: recovered.locator, quote: recovered.quote }];
+      }
+      return [annotation];
+    }
     if (!textContent || !mirrors.includes(from)) return [];
     const carried = mirrored(annotation, view, from, textContent);
     return carried ? [carried] : [];

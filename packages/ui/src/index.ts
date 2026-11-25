@@ -45,3 +45,5 @@ export { ChoiceChips } from "./primitives/ChoiceChips";
 export type { ChoiceChipOption, ChoiceChipsProps } from "./primitives/ChoiceChips";
 export { Checkbox } from "./primitives/Checkbox";
 export { Presence, ShimmerText, useShake } from "./primitives/Motion";
+export { CompanionPlayer, NowPlayingBar, PLAYBACK_SPEEDS, formatMediaClock } from "./primitives/MediaPlayer";
+export type { CompanionPlayerProps, NowPlayingBarProps, MediaCacheBadgeState } from "./primitives/MediaPlayer";

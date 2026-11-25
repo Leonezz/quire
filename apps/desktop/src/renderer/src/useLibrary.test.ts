@@ -19,6 +19,12 @@ describe("library cuts", () => {
     expect(inCut(material({ kind: "document", mediaType: "application/pdf", origin: "file" }), "papers")).toBe(true);
     expect(inCut(material({ kind: "webpage" }), "papers")).toBe(false);
   });
+  it("puts podcast episodes under Podcasts and video recordings under Videos", () => {
+    expect(inCut(material({ kind: "podcastEpisode" }), "podcasts")).toBe(true);
+    expect(inCut(material({ kind: "podcastEpisode" }), "articles")).toBe(false);
+    expect(inCut(material({ kind: "videoRecording" }), "videos")).toBe(true);
+    expect(inCut(material({ kind: "videoRecording" }), "podcasts")).toBe(false);
+  });
   it("maps the sort and the focus onto the engine's filter", () => {
     expect(filterOf({ cut: "artifacts", tag: undefined }, "oldest", " ")).toEqual({ kind: "artifact", sort: "fetched" });
     expect(filterOf({ cut: "all", tag: "react" }, "title", "hooks")).toEqual({ kind: "all", sort: "title", tag: "react", query: "hooks" });

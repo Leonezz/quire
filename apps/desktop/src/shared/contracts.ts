@@ -9,6 +9,38 @@ import type {
 
 export type { NormalizedMediaChapter, TranscriptAnchor, TranscriptOrigin };
 
+export interface TranscriptTrackRef {
+  url: string;
+  type: string;
+  language?: string;
+  rel?: string;
+}
+
+export interface MediaState {
+  materialId: string;
+  positionSec: number;
+  durationSec?: number;
+  playbackSpeed: number;
+  updatedAt: string;
+}
+
+export interface MediaCacheProgress {
+  materialId: string;
+  downloadedBytes: number;
+  totalBytes?: number;
+  phase: "downloading" | "done" | "error";
+  error?: string;
+}
+
+export interface ReadApiMedia {
+  getMediaState: (materialId: string) => Promise<MediaState | undefined>;
+  saveMediaState: (state: Omit<MediaState, "updatedAt"> & { updatedAt?: string }) => Promise<void>;
+  downloadMediaCache: (materialId: string) => Promise<MaterialRecord>;
+  removeMediaCache: (materialId: string) => Promise<MaterialRecord>;
+  clearMediaCache: () => Promise<number>;
+  onMediaCacheProgress: (listener: (progress: MediaCacheProgress) => void) => () => void;
+}
+
 export interface MediaInfo {
   kind: "audio" | "video";
   provider: "podcast" | "youtube" | "web";
@@ -105,6 +137,8 @@ export interface MaterialRecord extends MaterialSummary {
   markdown?: string;
   /** Plain text when nothing richer could be produced. */
   plain?: string;
+  /** transcript primary view: paragraph anchors mapping `plain` character spans to `[startSec, endSec]` media timestamps. */
+  timeAnchors?: TranscriptAnchor[];
   problems: NormalizationProblem[];
   /** Agent artifacts: the source exactly as the agent wrote it (Markdown, code, HTML or SVG); what an update edits. */
   artifactSource?: string;
@@ -151,8 +185,10 @@ export interface CorpusImportResult {
 
 /** The scheme resolveImage answers on, served by main from disk (image-protocol.ts). */
 export const IMAGE_SCHEME = "quire-image";
+/** The scheme companion audio/video streams from, proxied with Range support by main. */
+export const MEDIA_SCHEME = "quire-media";
 
-export interface ReadApi extends ReadApiM1, ReadApiM2, ReadApiM3, ReadApiViews, ReadApiUpdates, ReadApiFeedback {
+export interface ReadApi extends ReadApiM1, ReadApiM2, ReadApiM3, ReadApiViews, ReadApiUpdates, ReadApiFeedback, ReadApiMedia {
   version: string;
   platform: string;
   /** Fires after the main process changed the library on its own (an import); the renderer reloads the list. */
@@ -215,9 +251,15 @@ export interface ItemSignals {
   figures?: boolean;
   lang?: string;
   media?: "audio" | "video";
+  enclosureUrl?: string;
+  enclosureType?: string;
   durationSec?: number;
+  imageUrl?: string;
   hasTranscript?: boolean;
+  transcripts?: TranscriptTrackRef[];
+  chaptersUrl?: string;
   chapters?: NormalizedMediaChapter[];
+  videoId?: string;
 }
 
 /**

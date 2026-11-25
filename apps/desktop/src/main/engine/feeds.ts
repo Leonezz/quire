@@ -117,9 +117,24 @@ export function signalsOf(content: ItemContent, lang: string | undefined, media?
     ...(scan.figures ? { figures: true } : {}),
     ...(lang ? { lang } : {}),
     ...(media ? { media: media.kind } : {}),
+    ...(media?.streamUrl ? { enclosureUrl: media.streamUrl } : {}),
+    ...(media?.mediaType ? { enclosureType: media.mediaType } : {}),
     ...(media?.durationSec !== undefined ? { durationSec: media.durationSec } : {}),
-    ...(media?.transcripts?.length ? { hasTranscript: true } : {}),
+    ...(media?.imageUrl ? { imageUrl: media.imageUrl } : {}),
+    ...(media?.transcripts?.length
+      ? {
+          hasTranscript: true,
+          transcripts: media.transcripts.map((t) => ({
+            url: t.url,
+            type: t.mediaType,
+            ...(t.lang ? { language: t.lang } : {}),
+            ...(t.rel ? { rel: t.rel } : {}),
+          })),
+        }
+      : {}),
+    ...(media?.chaptersUrl ? { chaptersUrl: media.chaptersUrl } : {}),
     ...(media?.chapters?.length ? { chapters: media.chapters } : {}),
+    ...(media?.videoId ? { videoId: media.videoId } : {}),
   };
 }
 
@@ -141,16 +156,21 @@ export function itemOf(entry: NormalizedFeedEntry, lang: string | undefined, now
   const summaryOnly = entry.media
     ? !entry.media.transcripts?.length && wordCount(plain) < SUMMARY_WORDS
     : !carriesFullText || wordCount(plain) < SUMMARY_WORDS;
+  const keepContent = entry.media
+    ? Boolean(plain || content.markdown || content.reader)
+    : !summaryOnly;
   return {
     externalId: entry.externalId,
     title: collapse(entry.title) || "Untitled",
     link: entry.link,
     publishedAt: entry.publishedAt ?? now().toISOString(),
     gist: gistOf(gistSource),
-    readingMinutes: readingMinutes(plain),
+    readingMinutes: entry.media?.durationSec
+      ? Math.max(1, Math.round(entry.media.durationSec / 60))
+      : readingMinutes(plain),
     signals: signalsOf(content, lang, entry.media),
     summaryOnly,
-    ...(summaryOnly ? {} : { content }),
+    ...(keepContent ? { content } : {}),
   };
 }
 

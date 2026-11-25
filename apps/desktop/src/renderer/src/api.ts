@@ -1,4 +1,4 @@
-import type { Annotation, MaterialRecord, MaterialSummary, OpenUrlResult, ReadApi } from "../../shared/contracts";
+import type { Annotation, MaterialRecord, MaterialSummary, MediaState, OpenUrlResult, ReadApi } from "../../shared/contracts";
 import sample from "./dev/sample-material.json";
 import samplePdf from "./dev/sample-pdf.json";
 import samplePlain from "./dev/sample-plaintext.json";
@@ -124,6 +124,26 @@ const browserPreview: ReadApi = {
     previewM3.notifyLibraryChanged();
     return requirePreviewMaterial(id);
   },
+  getMediaState: async (materialId) => {
+    try {
+      const raw = localStorage.getItem(`read:preview-media-state:${materialId}`);
+      return raw ? (JSON.parse(raw) as MediaState) : undefined;
+    } catch {
+      return undefined;
+    }
+  },
+  saveMediaState: async (state) => {
+    try {
+      const saved: MediaState = { ...state, updatedAt: state.updatedAt ?? new Date().toISOString() };
+      localStorage.setItem(`read:preview-media-state:${state.materialId}`, JSON.stringify(saved));
+    } catch {
+      // Storage may be unavailable in restricted contexts.
+    }
+  },
+  downloadMediaCache: async () => { throw new Error("Offline media caching requires the desktop app."); },
+  removeMediaCache: async (id) => requirePreviewMaterial(id),
+  clearMediaCache: async () => 0,
+  onMediaCacheProgress: () => () => undefined,
 };
 
 export const read: ReadApi = typeof window !== "undefined" && "read" in window && window.read ? window.read : browserPreview;

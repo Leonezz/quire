@@ -8,14 +8,17 @@ use crate::materials::{
     delete_materials, image_urls_of_record, is_material_view_id, query_library, search_hits,
     storage_usage, valid_hex_16, AnnotationStore, MaterialStore,
 };
+use crate::media::MediaCache;
 use crate::normalizer_bridge::{BridgeReply, TauriNormalizerBridge};
 use crate::settings::SettingsStore;
-use crate::sqlite_stores::{EventStore, ItemStore, MetaStore, SessionStore, SourceStore};
+use crate::sqlite_stores::{
+    EventStore, ItemStore, MediaStateStore, MetaStore, SessionStore, SourceStore,
+};
 use crate::sync::{add_source, keep_item, read_item, sync_source, SyncCoordinator};
 use crate::types::{
     AddSourceResult, AgentRequest, AgentResult, AgentRun, AgentSession, AgentSessionSummary,
     AgentStatus, Annotation, CorpusImportResult, DeleteMaterialsResult, ItemRecord, LibraryFilter,
-    MaterialRecord, MaterialSummary, MaterialViewContent, OpenUrlResult, ReadingEvent,
+    MaterialRecord, MaterialSummary, MaterialViewContent, MediaState, OpenUrlResult, ReadingEvent,
     ReadingStats, RenderingFeedback, RenderingFeedbackDraft, SearchHit, Settings, SourceDetection,
     SourceRecord, StorageUsage, SyncSourceResult, TagCount, UpdateState,
 };
@@ -36,6 +39,8 @@ pub struct AppState {
     pub meta: MetaStore,
     pub store: Arc<MaterialStore>,
     pub images: ImageCache,
+    pub media_cache: MediaCache,
+    pub media_states: MediaStateStore,
     pub annotations: AnnotationStore,
     pub items: ItemStore,
     pub sources: SourceStore,
@@ -604,6 +609,9 @@ pub async fn material_delete(
         return Err("IPC_INVALID_IDS".into());
     }
     let res = delete_materials(&ids, &state.store, &state.annotations, &state.items, &state.images).await;
+    for id in &ids {
+        let _ = state.media_states.remove(id);
+    }
     let _ = app.emit("library:changed", ());
     let (_, unlinked, out) = res?;
     if unlinked > 0 {
@@ -640,6 +648,88 @@ pub fn settings_update(
 #[tauri::command]
 pub fn storage_usage_get(state: State<'_, AppState>) -> Result<StorageUsage, String> {
     Ok(storage_usage(&state.data_dir))
+}
+
+#[tauri::command]
+pub fn media_state_get(
+    state: State<'_, AppState>,
+    material_id: String,
+) -> Result<Option<MediaState>, String> {
+    if !valid_hex_16(&material_id) {
+        return Err("IPC_INVALID_ID".into());
+    }
+    state.media_states.get(&material_id)
+}
+
+#[tauri::command]
+pub fn media_state_save(
+    state: State<'_, AppState>,
+    media_state: MediaState,
+) -> Result<(), String> {
+    if !valid_hex_16(&media_state.material_id) {
+        return Err("IPC_INVALID_ID".into());
+    }
+    if !media_state.position_sec.is_finite() || !media_state.playback_speed.is_finite() {
+        return Err("IPC_INVALID_MEDIA_STATE".into());
+    }
+    state.media_states.save(media_state)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn media_cache_download(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    material_id: String,
+) -> Result<MaterialRecord, String> {
+    if !valid_hex_16(&material_id) {
+        return Err("IPC_INVALID_ID".into());
+    }
+    let record = state
+        .store
+        .read_stored(&material_id)?
+        .ok_or_else(|| "MATERIAL_NOT_FOUND".to_string())?;
+    let media = record
+        .media
+        .ok_or_else(|| "This material has no audio or video stream.".to_string())?;
+    let app_ev = app.clone();
+    state
+        .media_cache
+        .download(&material_id, &media.stream_url, |prog| {
+            let _ = app_ev.emit("media:cache:progress", &prog);
+        })
+        .await?;
+    let updated = state
+        .store
+        .get(&material_id)?
+        .ok_or_else(|| "MATERIAL_NOT_FOUND".to_string())?;
+    let _ = app.emit("library:changed", ());
+    Ok(updated)
+}
+
+#[tauri::command]
+pub fn media_cache_remove(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    material_id: String,
+) -> Result<MaterialRecord, String> {
+    if !valid_hex_16(&material_id) {
+        return Err("IPC_INVALID_ID".into());
+    }
+    state.media_cache.remove(&material_id)?;
+    let updated = state
+        .store
+        .get(&material_id)?
+        .ok_or_else(|| "MATERIAL_NOT_FOUND".to_string())?;
+    let _ = app.emit("library:changed", ());
+    Ok(updated)
+}
+
+#[tauri::command]
+pub fn media_cache_clear_all(app: AppHandle, state: State<'_, AppState>) -> Result<u64, String> {
+    let freed = state.media_cache.clear_all()?;
+    let _ = app.emit("library:changed", ());
+    Ok(freed)
 }
 
 #[tauri::command]

@@ -1,9 +1,16 @@
 import { useCallback, useState } from "react";
 
-/** The four cuts of the Library the sidebar offers. */
-export type LibraryCut = "all" | "articles" | "papers" | "artifacts";
-export const LIBRARY_CUTS: readonly LibraryCut[] = ["all", "articles", "papers", "artifacts"];
-export const CUT_LABELS: Record<LibraryCut, string> = { all: "Library", articles: "Articles", papers: "Papers", artifacts: "Artifacts" };
+/** The cuts of the Library the sidebar offers. */
+export type LibraryCut = "all" | "articles" | "papers" | "podcasts" | "videos" | "artifacts";
+export const LIBRARY_CUTS: readonly LibraryCut[] = ["all", "articles", "papers", "podcasts", "videos", "artifacts"];
+export const CUT_LABELS: Record<LibraryCut, string> = {
+  all: "Library",
+  articles: "Articles",
+  papers: "Papers",
+  podcasts: "Podcasts",
+  videos: "Videos",
+  artifacts: "Artifacts",
+};
 
 /**
  * What the window shows: an action list (Inbox, Queue, Agent), a cut of the Library, one tag,

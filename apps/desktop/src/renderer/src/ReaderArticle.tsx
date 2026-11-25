@@ -1,6 +1,7 @@
-import { useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, Ref } from "react";
 import { ReaderDocumentSurface } from "@read/reader";
+import { formatMediaClock } from "@read/ui";
 import { IMAGE_SCHEME, type ArtifactInfo, type ArtifactType, type MaterialRecord, type MaterialViewContent } from "../../shared/contracts";
 import { ArtifactSurface } from "./ArtifactCitations";
 import { ArtifactCanvas } from "./ArtifactFrame";
@@ -49,20 +50,115 @@ export interface ReaderArticleProps {
   banner?: ReactNode;
   /** Hands an error an artifact hit while running to the agent, to fix the artifact. */
   onFixArtifact?: ((error: string) => void) | undefined;
+  /** Transcript view: the currently spoken paragraph index, highlighted with a calm left rule. */
+  activeParagraphIndex?: number | undefined;
+  /** Transcript view: seeks and plays from a clicked margin timestamp. */
+  onSeekTime?: ((seconds: number) => void) | undefined;
+}
+
+interface MarginStamp {
+  paragraphIndex: number;
+  startSec: number;
+  top: number;
+}
+
+function assignRef<T>(ref: Ref<T> | undefined, value: T | null): void {
+  if (!ref) return;
+  if (typeof ref === "function") ref(value);
+  else (ref as { current: T | null }).current = value;
 }
 
 /**
  * The article column as a reader sees it: host, title, byline and the document surface, laid out with the reading prefs.
  * ReaderView wraps it with the reader's chrome; RenderHarness.tsx renders it alone for the eval capture, so the two never drift.
  */
-export function ReaderArticle({ material, content, prefs, resolveImage, onOpenLink, onOpenMaterial, scrolls = true, viewportRef, bodyRef, onShowSources, bylineExtra, banner, onFixArtifact }: ReaderArticleProps) {
+export function ReaderArticle({ material, content, prefs, resolveImage, onOpenLink, onOpenMaterial, scrolls = true, viewportRef, bodyRef, onShowSources, bylineExtra, banner, onFixArtifact, activeParagraphIndex, onSeekTime }: ReaderArticleProps) {
+  const articleRef = useRef<HTMLElement | null>(null);
+  const setBodyRefs = useCallback((node: HTMLElement | null) => {
+    articleRef.current = node;
+    assignRef(bodyRef, node);
+  }, [bodyRef]);
+  const [stamps, setStamps] = useState<MarginStamp[]>([]);
+  const timeAnchors = content.timeAnchors;
+
+  useEffect(() => {
+    const article = articleRef.current;
+    if (!article || !timeAnchors || timeAnchors.length === 0) {
+      setStamps([]);
+      return;
+    }
+    const syncLayout = () => {
+      const paragraphs = article.querySelectorAll<HTMLParagraphElement>(".reader-document > p");
+      let prevSpeaker: string | undefined;
+      const measured: MarginStamp[] = [];
+      paragraphs.forEach((p) => p.removeAttribute("data-speaker"));
+      for (const anchor of timeAnchors) {
+        const p = paragraphs[anchor.paragraphIndex];
+        if (!p) continue;
+        if (anchor.speaker && anchor.speaker !== prevSpeaker) {
+          p.setAttribute("data-speaker", anchor.speaker);
+        }
+        prevSpeaker = anchor.speaker;
+        measured.push({
+          paragraphIndex: anchor.paragraphIndex,
+          startSec: anchor.startSec,
+          top: p.offsetTop,
+        });
+      }
+      setStamps(measured);
+    };
+
+    const frame = requestAnimationFrame(syncLayout);
+    let observer: ResizeObserver | undefined;
+    if (typeof ResizeObserver !== "undefined") {
+      observer = new ResizeObserver(syncLayout);
+      observer.observe(article);
+    }
+    return () => {
+      cancelAnimationFrame(frame);
+      observer?.disconnect();
+    };
+  }, [timeAnchors, content.reader?.payload, prefs]);
+
+  useEffect(() => {
+    const article = articleRef.current;
+    if (!article) return;
+    const paragraphs = article.querySelectorAll<HTMLParagraphElement>(".reader-document > p");
+    paragraphs.forEach((p, idx) => {
+      if (activeParagraphIndex !== undefined && idx === activeParagraphIndex) {
+        p.setAttribute("data-active-turn", "true");
+      } else {
+        p.removeAttribute("data-active-turn");
+      }
+    });
+  }, [activeParagraphIndex, timeAnchors, content.reader?.payload]);
+
   const fallback = useMemo(() => (content.markdown ? { content: content.markdown, format: "gfm" as const } : { content: content.plain ?? "", format: "plain" as const }), [content]);
   const surface = { schema: content.reader?.schema ?? "none", payload: content.reader?.payload ?? "", fallback, onOpenLink, hostImageSchemes: HOST_IMAGE_SCHEMES, resolveImageSource: resolveImage, resolveRemoteImageSource: resolveImage, showFallbackNotice: false };
   const host = hostLabel(material);
   const lineageCount = material.origin === "agent" ? (material.lineage?.length ?? 0) : 0;
   return (
-    <div ref={viewportRef} className={`reader-viewport px-14 pb-[120px] pt-12${scrolls ? " overflow-auto" : ""}`} style={prefsStyle(prefs)}>
-      <article ref={bodyRef} className="reader-body" style={{ textAlign: prefs.justify ? "justify" : "start" }}>
+    <div ref={viewportRef} className={`reader-viewport px-14 ${material.media ? "pb-[156px]" : "pb-[120px]"} pt-12${scrolls ? " overflow-auto" : ""}`} style={prefsStyle(prefs)}>
+      <article ref={setBodyRefs} className="reader-body relative" style={{ textAlign: prefs.justify ? "justify" : "start" }}>
+        {stamps.length > 0 ? (
+          <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 -left-13 w-11 select-none">
+            {stamps.map((stamp) => {
+              const isActive = activeParagraphIndex === stamp.paragraphIndex;
+              return (
+                <button
+                  key={`${stamp.paragraphIndex}-${stamp.startSec}`}
+                  type="button"
+                  tabIndex={-1}
+                  onClick={() => onSeekTime?.(stamp.startSec)}
+                  style={{ top: stamp.top + 3 }}
+                  className={`pointer-events-auto absolute right-0 cursor-pointer rounded-control border-0 bg-transparent px-1 py-0.5 font-mono text-[11px] leading-[15px] tabular-nums transition-colors hover:bg-fill hover:text-label ${isActive ? "font-semibold text-accent-text" : "text-label-3"}`}
+                >
+                  {formatMediaClock(stamp.startSec)}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
         {lineageCount && onShowSources
           ? <button type="button" className="mb-3 block cursor-default border-0 bg-transparent p-0 text-[13px] font-medium text-accent-text hover:underline" onClick={onShowSources}>{host} · sources in Info</button>
           : <p className="mb-3 text-[13px] font-medium text-accent-text">{host}</p>}

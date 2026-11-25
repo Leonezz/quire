@@ -364,6 +364,9 @@ async fn material_of_item(
     let meta = items.meta(&item.id).ok().flatten();
     let res = if item.source_kind == "arxiv" {
         materialize_arxiv(item, store, meta).await
+    } else if item.signals.enclosure_url.is_some() && item.signals.media.as_deref() == Some("audio") {
+        let content = items.content(&item.id).ok().flatten();
+        store.materialize_podcast_item(item, content, meta).await
     } else {
         materialize_feed_item(item, items, store, meta).await
     };

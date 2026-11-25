@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
+import { formatMediaClock } from "@read/ui";
 import type { Annotation, AnnotationColor, AnnotationKind, MaterialRecord, MaterialViewId } from "../../shared/contracts";
 import { read } from "./api";
 import { creatorsText, displayDate } from "./materialMeta";
+import { deepLinkWithTimestamp } from "./transcriptAnchors";
 
 export const ANNOTATION_COLORS: { color: AnnotationColor; label: string }[] = [
   { color: "#ffd400", label: "Yellow" },
@@ -29,8 +31,20 @@ export function useAnnotations(materialId: string) {
   }, [materialId]);
 
   /** `view` names the view the locator belongs to (the one being read); an annotation without it counts as the primary view's. */
-  const add = useCallback(async (input: { locator: string; quote: string; kind: AnnotationKind; color: AnnotationColor; note?: string; view?: MaterialViewId }) => {
-    const draft: Annotation = { id: newId(), materialId, locator: input.locator, quote: input.quote, kind: input.kind, color: input.color, ...(input.note ? { note: input.note } : {}), ...(input.view ? { view: input.view } : {}), createdAt: "", updatedAt: "" };
+  const add = useCallback(async (input: { locator: string; quote: string; kind: AnnotationKind; color: AnnotationColor; note?: string; view?: MaterialViewId; timeRange?: [number, number] }) => {
+    const draft: Annotation = {
+      id: newId(),
+      materialId,
+      locator: input.locator,
+      quote: input.quote,
+      kind: input.kind,
+      color: input.color,
+      ...(input.note ? { note: input.note } : {}),
+      ...(input.view ? { view: input.view } : {}),
+      ...(input.timeRange ? { timeRange: input.timeRange } : {}),
+      createdAt: "",
+      updatedAt: "",
+    };
     const saved = await read.saveAnnotation(draft);
     setAnnotations((current) => [...current, saved]);
     return saved;
@@ -53,22 +67,30 @@ export function useAnnotations(materialId: string) {
 }
 
 /** "Title, Creators, Publication, Date (url)": the source line under a quote and at the top of an export. */
-function sourceLine(material: MaterialRecord): string {
+function sourceLine(material: MaterialRecord, startSec?: number): string {
   const meta = material.meta;
+  const baseUrl = meta.url ?? material.finalUrl;
+  const link = startSec !== undefined ? deepLinkWithTimestamp(baseUrl, startSec) : baseUrl;
   const parts = [material.title, creatorsText(meta.creators), meta.publication ?? "", displayDate(meta.date)].filter(Boolean);
-  return `${parts.join(", ")} (${meta.url ?? material.finalUrl})`;
+  return `${parts.join(", ")} (${link})`;
 }
 
 /** `quote — Title, Creators, Publication, Date (link)`: pasteable into any note. */
-export function citationFor(material: MaterialRecord, annotation: Pick<Annotation, "quote" | "note">, section?: string) {
+export function citationFor(material: MaterialRecord, annotation: Pick<Annotation, "quote" | "note" | "timeRange">, section?: string) {
+  const stamp = annotation.timeRange ? ` · ${formatMediaClock(annotation.timeRange[0])}` : "";
   const where = section ? ` · ${section}` : "";
   const note = annotation.note ? `\n\n${annotation.note}` : "";
-  return `> ${annotation.quote.replace(/\s+/g, " ").trim()}\n\n— ${sourceLine(material)}${where}${note}`;
+  return `> ${annotation.quote.replace(/\s+/g, " ").trim()}\n\n— ${sourceLine(material, annotation.timeRange?.[0])}${stamp}${where}${note}`;
 }
 
 /** Every highlight and note of a material as Markdown, in reading order. */
 export function annotationsMarkdown(material: MaterialRecord, annotations: readonly Annotation[]) {
   const header = `# ${material.title}\n\n${sourceLine(material)}\n`;
-  const body = annotations.map((annotation) => `\n> ${annotation.quote.replace(/\s+/g, " ").trim()}\n${annotation.note ? `\n${annotation.note}\n` : ""}`).join("");
+  const body = annotations.map((annotation) => {
+    const stamp = annotation.timeRange
+      ? ` ([${formatMediaClock(annotation.timeRange[0])}](${deepLinkWithTimestamp(material.meta.url ?? material.finalUrl, annotation.timeRange[0])}))`
+      : "";
+    return `\n> ${annotation.quote.replace(/\s+/g, " ").trim()}${stamp}\n${annotation.note ? `\n${annotation.note}\n` : ""}`;
+  }).join("");
   return `${header}${body}`;
 }

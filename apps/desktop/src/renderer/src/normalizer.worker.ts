@@ -1,4 +1,12 @@
-import { normalizeArticleCapture, sha256Hex } from "@read/normalize";
+import {
+  normalizeArticleCapture,
+  normalizeTranscript,
+  parseTranscriptCues,
+  sha256Hex,
+  type TranscriptChapter,
+  type TranscriptCue,
+  type TranscriptKeyframe,
+} from "@read/normalize";
 import type { MaterialMeta, MaterialRecord } from "../../shared/contracts";
 import { compileReact } from "../../main/artifact-runtime";
 import { arxivItemsOf } from "../../main/engine/arxiv";
@@ -204,6 +212,33 @@ async function runJob(op: string, payload: Record<string, unknown>): Promise<unk
 
   if (op === "compileReact") {
     return compileReact(String(payload.source ?? ""));
+  }
+
+  if (op === "normalizeTranscript") {
+    const rawText = typeof payload.rawText === "string" ? payload.rawText : undefined;
+    const mediaType = typeof payload.mediaType === "string" ? payload.mediaType : undefined;
+    const suppliedCues = Array.isArray(payload.cues) ? (payload.cues as TranscriptCue[]) : undefined;
+    const chapters = Array.isArray(payload.chapters) ? (payload.chapters as TranscriptChapter[]) : undefined;
+    const keyframes = Array.isArray(payload.keyframes) ? (payload.keyframes as TranscriptKeyframe[]) : undefined;
+    const title = typeof payload.title === "string" ? payload.title : undefined;
+
+    const cues = suppliedCues ?? parseTranscriptCues(rawText ?? "", mediaType);
+    if (cues.length === 0) {
+      throw new Error("Transcript contained no timed cues.");
+    }
+    const normalized = normalizeTranscript(cues, {
+      ...(chapters ? { chapters } : {}),
+      ...(keyframes ? { keyframes } : {}),
+      ...(title ? { title } : {}),
+    });
+    return {
+      reader: normalized.reader,
+      markdown: normalized.markdown,
+      plain: normalized.plain,
+      readingMinutes: readingMinutes(normalized.plain),
+      timeAnchors: normalized.anchors,
+      cues,
+    };
   }
 
   throw new Error(`Unknown normalizer operation: ${op}`);

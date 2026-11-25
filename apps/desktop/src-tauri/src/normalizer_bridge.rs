@@ -1,7 +1,7 @@
 use crate::sqlite_stores::ItemInput;
 use crate::types::{
-    ContentNormalizationQuality, MaterialMeta, MaterialViewContent, NormalizationProblem,
-    ReaderPayload,
+    ContentNormalizationQuality, MaterialMeta, MaterialViewContent, MediaChapter,
+    NormalizationProblem, ReaderPayload, TranscriptAnchor,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -95,6 +95,57 @@ pub struct ParsedFeedResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct TranscriptCueDto {
+    pub start_sec: f64,
+    pub end_sec: f64,
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptKeyframeDto {
+    pub time_sec: f64,
+    pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caption: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NormalizeTranscriptInput {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cues: Option<Vec<TranscriptCueDto>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chapters: Option<Vec<MediaChapter>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keyframes: Option<Vec<TranscriptKeyframeDto>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NormalizedTranscriptResult {
+    pub reader: ReaderPayload,
+    pub markdown: String,
+    pub plain: String,
+    pub reading_minutes: u32,
+    pub time_anchors: Vec<TranscriptAnchor>,
+    pub cues: Vec<TranscriptCueDto>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CompiledReact {
     pub code: String,
     pub files: Vec<String>,
@@ -163,6 +214,11 @@ pub trait Normalizer: Send + Sync {
     fn capture_text<'a>(&'a self, html: &'a str) -> BoxFuture<'a, Result<String, String>>;
 
     fn compile_react<'a>(&'a self, source: &'a str) -> BoxFuture<'a, Result<CompiledReact, String>>;
+
+    fn normalize_transcript<'a>(
+        &'a self,
+        input: NormalizeTranscriptInput,
+    ) -> BoxFuture<'a, Result<NormalizedTranscriptResult, String>>;
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -377,5 +433,13 @@ impl Normalizer for TauriNormalizerBridge {
             }
             Ok(compiled)
         })
+    }
+
+    fn normalize_transcript<'a>(
+        &'a self,
+        input: NormalizeTranscriptInput,
+    ) -> BoxFuture<'a, Result<NormalizedTranscriptResult, String>> {
+        let payload = serde_json::to_value(&input).unwrap_or(serde_json::Value::Null);
+        Box::pin(async move { self.call("normalizeTranscript", payload, 30).await })
     }
 }

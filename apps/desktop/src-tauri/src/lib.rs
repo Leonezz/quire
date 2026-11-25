@@ -6,6 +6,7 @@ pub mod feedback;
 pub mod http;
 pub mod images;
 pub mod materials;
+pub mod media;
 pub mod normalizer_bridge;
 pub mod protocols;
 pub mod settings;
@@ -22,17 +23,18 @@ use feedback::FeedbackStore;
 use http::build_http_client;
 use images::ImageCache;
 use materials::{AnnotationStore, MaterialStore};
+use media::{media_protocol_response, MediaCache};
 use normalizer_bridge::TauriNormalizerBridge;
 use protocols::{artifact_protocol_response, image_protocol_response};
 use settings::{KeychainAesEncryptor, SettingsStore};
-use sqlite_stores::{EventStore, ItemStore, MetaStore, SessionStore, SourceStore};
+use sqlite_stores::{EventStore, ItemStore, MediaStateStore, MetaStore, SessionStore, SourceStore};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use sync::SyncCoordinator;
 use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::window::{Effect, EffectState, EffectsBuilder};
 use tauri::{Emitter, Manager, RunEvent};
-use types::{AgentEvent, FeedbackAppInfo, ARTIFACT_SCHEME, IMAGE_SCHEME};
+use types::{AgentEvent, FeedbackAppInfo, ARTIFACT_SCHEME, IMAGE_SCHEME, MEDIA_SCHEME};
 use updates::UpdateService;
 
 fn default_data_dir(home: &str) -> PathBuf {
@@ -130,6 +132,15 @@ pub fn run() {
                 responder.respond(resp);
             });
         })
+        .register_asynchronous_uri_scheme_protocol(MEDIA_SCHEME, |ctx, request, responder| {
+            let state = ctx.app_handle().state::<AppState>();
+            let store = state.store.clone();
+            let media_cache = state.media_cache.clone();
+            tauri::async_runtime::spawn(async move {
+                let resp = media_protocol_response(&request, &store, &media_cache).await;
+                responder.respond(resp);
+            });
+        })
         .setup(|app| {
             let handle = app.handle().clone();
             let app_version = app.package_info().version.to_string();
@@ -171,7 +182,9 @@ pub fn run() {
             let sources = SourceStore::new(db.clone());
             let events = EventStore::new(db.clone());
             let sessions = SessionStore::new(db.clone());
+            let media_states = MediaStateStore::new(db.clone());
             let images = ImageCache::new(&data_dir);
+            let media_cache = MediaCache::new(&data_dir);
             let annotations = AnnotationStore::new(&data_dir);
 
             let settings_keep = settings.clone();
@@ -364,6 +377,8 @@ pub fn run() {
                 meta,
                 store,
                 images,
+                media_cache,
+                media_states,
                 annotations,
                 items,
                 sources,
@@ -423,6 +438,11 @@ pub fn run() {
             commands::settings_get,
             commands::settings_update,
             commands::storage_usage_get,
+            commands::media_state_get,
+            commands::media_state_save,
+            commands::media_cache_download,
+            commands::media_cache_remove,
+            commands::media_cache_clear_all,
             commands::agent_sessions_list,
             commands::agent_sessions_get,
             commands::agent_sessions_delete,

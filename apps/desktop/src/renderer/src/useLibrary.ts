@@ -33,6 +33,8 @@ export function inCut(material: MaterialSummary, cut: LibraryCut): boolean {
   switch (cut) {
     case "all": return true;
     case "artifacts": return material.origin === "agent";
+    case "podcasts": return material.kind === "podcastEpisode";
+    case "videos": return material.kind === "videoRecording";
     case "articles": return material.origin !== "agent" && (ARTICLE_KINDS.has(material.kind) || material.mediaType === "text/markdown");
     case "papers": return PAPER_KINDS.has(material.kind) || material.mediaType === "application/pdf";
   }

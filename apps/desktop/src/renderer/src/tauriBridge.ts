@@ -7,6 +7,8 @@ import type {
   ItemRecord,
   MaterialRecord,
   MaterialViewContent,
+  MediaCacheProgress,
+  MediaState,
   ReadApi,
   ReadApiFeedback,
   UpdateState,
@@ -190,6 +192,16 @@ if (isTauriRuntime() && !window.read) {
     feedbackSetIssueUrl: (id, issueUrl) => invoke("feedback_set_issue_url", { id, issueUrl }),
     feedbackReveal: (id) => invoke("feedback_reveal", { id }),
     onFeedbackChanged: (listener) => subscribeVoid("feedback:changed", listener),
+
+    // Media playback state & offline cache
+    getMediaState: async (materialId) =>
+      (await invoke<MediaState | null>("media_state_get", { materialId })) ?? undefined,
+    saveMediaState: (mediaState) =>
+      invoke("media_state_save", { mediaState: { updatedAt: "", ...mediaState } }),
+    downloadMediaCache: (materialId) => invoke("media_cache_download", { materialId }),
+    removeMediaCache: (materialId) => invoke("media_cache_remove", { materialId }),
+    clearMediaCache: () => invoke("media_cache_clear_all"),
+    onMediaCacheProgress: (listener) => subscribePayload<MediaCacheProgress>("media:cache:progress", listener),
   };
 
   window.read = api;

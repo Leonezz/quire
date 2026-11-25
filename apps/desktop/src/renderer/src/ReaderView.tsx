@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { Presence, SplitGroup, SplitPanel, TocRail, useSplitSizes } from "@read/ui";
+import { CompanionPlayer, Presence, SplitGroup, SplitPanel, TocRail, useSplitSizes, type MediaCacheBadgeState } from "@read/ui";
 import { ColumnSeparator, PAGE_MIN, PANEL_DEFAULT, PANEL_MAX, PANEL_MIN } from "./ContentPane";
 import { ReaderToolbar } from "./ReaderToolbar";
 import { installTextAnnotationHighlights, renderedTextQuoteSelection, resolveTextQuoteAnchor, resolveTextQuoteRange, textAnnotationHighlightStyles, useDocumentReadingPosition, type TextAnnotationPlacement } from "@read/reader";
@@ -18,8 +18,11 @@ import { ReaderArticle } from "./ReaderArticle";
 import { ArtifactVersionBar, useArtifactVersions } from "./ArtifactVersions";
 import { read } from "./api";
 import type { MaterialRecord, MaterialViewContent } from "../../shared/contracts";
+import { durationLabel } from "./format";
+import { activeChapterOf, mediaStore, useMediaPlayback } from "./mediaStore";
 import { mirroredViews, resolveViewAnnotations } from "./mirroredAnnotations";
 import { TextViewBanner } from "./TextViewBanner";
+import { activeParagraphForTime, timeRangeForQuote } from "./transcriptAnchors";
 import type { MaterialViewController } from "./useMaterialView";
 import { flashQuoteRange, reportQuoteJump, resolveQuoteRange, scrollQuoteIntoView, type MaterialQuoteJump } from "./quoteJump";
 import { qualityLabel } from "./qualityLabel";
@@ -113,8 +116,32 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
   // through the anchors; the Notes panel still lists every view's.
   const primaryView = material.primaryView;
   const textContent = content.view === "text" ? content : undefined;
-  const viewAnnotations = useMemo(() => resolveViewAnnotations(annotations, view, primaryView, textContent), [annotations, view, primaryView, textContent]);
+  const transcriptContent = content.view === "transcript" ? content : undefined;
+  const viewAnnotations = useMemo(
+    () => resolveViewAnnotations(annotations, view, primaryView, textContent, transcriptContent),
+    [annotations, view, primaryView, textContent, transcriptContent],
+  );
   const shownAnnotation = useCallback((annotation: Annotation) => viewAnnotations.find((entry) => entry.id === annotation.id), [viewAnnotations]);
+  const playback = useMediaPlayback();
+  const hasMedia = material.media !== undefined;
+  const isCurrentMedia = hasMedia && playback.materialId === material.id;
+  const [drifted, setDrifted] = useState(false);
+
+  useEffect(() => {
+    mediaStore.setMountedReader(material.id);
+    return () => { mediaStore.setMountedReader(undefined); };
+  }, [material.id]);
+
+  useEffect(() => {
+    setDrifted(false);
+    if (material.media) void mediaStore.hydrateMaterial(material);
+  }, [material]);
+
+  const activeAnchor = useMemo(
+    () => (isCurrentMedia ? activeParagraphForTime(transcriptContent?.timeAnchors, playback.positionSec) : undefined),
+    [isCurrentMedia, playback.positionSec, transcriptContent?.timeAnchors],
+  );
+  const activeParagraphIndex = activeAnchor?.paragraphIndex;
   const [noteDraft, setNoteDraft] = useState<NoteDraft | null>(null);
   const [activeAnnotation, setActiveAnnotation] = useState<string | undefined>(undefined);
   // Where the highlight layer placed each shown note; the Notes panel lists the unplaced ones and takes sections from the rest.
@@ -212,17 +239,40 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
     const captured = renderedTextQuoteSelection(root, selection);
     return captured.kind === "capture" ? captured.capture : undefined;
   }, []);
-  const onHighlight = (capture: SelectionCapture, color: Annotation["color"]) => { void add({ ...capture, kind: "highlight", color, view }); };
+  const onHighlight = (capture: SelectionCapture, color: Annotation["color"]) => {
+    const timeRange = transcriptContent ? timeRangeForQuote(transcriptContent, capture) : undefined;
+    void add({ ...capture, kind: "highlight", color, view, ...(timeRange ? { timeRange } : {}) });
+  };
   const onNote = async (capture: SelectionCapture) => {
-    const saved = await add({ ...capture, kind: "comment", color: ANNOTATION_COLORS[0]!.color, view });
+    const timeRange = transcriptContent ? timeRangeForQuote(transcriptContent, capture) : undefined;
+    const saved = await add({ ...capture, kind: "comment", color: ANNOTATION_COLORS[0]!.color, view, ...(timeRange ? { timeRange } : {}) });
     setPanel("notes");
     setActiveAnnotation(saved.id);
     setNoteDraft({ id: saved.id, value: "" });
   };
   const onCopyCapture = (capture: SelectionCapture) => {
     const range = bodyRef.current ? resolveTextQuoteRange(bodyRef.current, capture.locator, capture.quote) : undefined;
-    void copyText(citationFor(material, { quote: capture.quote }, sectionOf(range)));
+    const timeRange = transcriptContent ? timeRangeForQuote(transcriptContent, capture) : undefined;
+    void copyText(citationFor(material, { quote: capture.quote, ...(timeRange ? { timeRange } : {}) }, sectionOf(range)));
   };
+  const onListenCapture = hasMedia && transcriptContent?.timeAnchors?.length
+    ? (capture: SelectionCapture) => {
+        const timeRange = timeRangeForQuote(transcriptContent, capture);
+        if (timeRange) void mediaStore.playSnippet(material, timeRange[0], timeRange[1]);
+      }
+    : undefined;
+  const seekAndPlay = useCallback((seconds: number) => {
+    setDrifted(false);
+    void mediaStore.seekTo(seconds, material, true);
+  }, [material]);
+  const jumpToCurrentMedia = useCallback(() => {
+    setDrifted(false);
+    mediaStore.setFollowing(true);
+    const root = bodyRef.current;
+    if (!root || activeParagraphIndex === undefined) return;
+    const paragraphs = root.querySelectorAll<HTMLParagraphElement>(".reader-document > p");
+    paragraphs[activeParagraphIndex]?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [activeParagraphIndex]);
   // A report measures the viewport when it is submitted, and finds an attached passage again for its box then.
   const measureReport = useCallback((selection: ReportSelection | undefined) => {
     const viewport = viewportOf(viewportRef.current, fractionRef.current);
@@ -275,6 +325,34 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
     return () => viewport.removeEventListener("scroll", onScroll);
   }, [material.id]);
 
+  // Manual wheel or touch scrolling during playback pauses auto-follow cleanly instead of fighting the scroll wheel.
+  useEffect(() => {
+    const viewport = viewportRef.current;
+    if (!viewport || !isCurrentMedia || !playback.playing || !playback.following) return;
+    const onManualInput = () => setDrifted(true);
+    viewport.addEventListener("wheel", onManualInput, { passive: true });
+    viewport.addEventListener("touchmove", onManualInput, { passive: true });
+    return () => {
+      viewport.removeEventListener("wheel", onManualInput);
+      viewport.removeEventListener("touchmove", onManualInput);
+    };
+  }, [isCurrentMedia, playback.playing, playback.following]);
+
+  // Smart Follow: keep the currently spoken paragraph inside the comfortable reading band unless the reader scrolled away.
+  useEffect(() => {
+    if (!isCurrentMedia || !playback.playing || !playback.following || drifted || activeParagraphIndex === undefined) return;
+    const viewport = viewportRef.current;
+    const root = bodyRef.current;
+    if (!viewport || !root) return;
+    const target = root.querySelectorAll<HTMLParagraphElement>(".reader-document > p")[activeParagraphIndex];
+    if (!target) return;
+    const vpRect = viewport.getBoundingClientRect();
+    const pRect = target.getBoundingClientRect();
+    if (pRect.top < vpRect.top + 80 || pRect.bottom > vpRect.bottom - 160) {
+      target.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }, [activeParagraphIndex, drifted, isCurrentMedia, playback.following, playback.playing]);
+
   // On `document`, not `window`: the shell's own ⌘J listens on the window and yields when a reader already handled it.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -284,23 +362,53 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
       if (isReportShortcut(event)) { event.preventDefault(); report(takeLiveSelection(bodyRef.current, captureSelection)); return; }
       if (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement) return;
       if (event.key === "Escape") { event.preventDefault(); if (panel) setPanel(null); else onBack?.(); }
-      if (event.key === "t") { event.preventDefault(); setTocPinned((pinned) => !pinned); }
-      if (event.key === "n" && !event.metaKey && !event.ctrlKey) { event.preventDefault(); setPanel((open) => (open === "notes" ? null : "notes")); }
-      if (event.key === "i" && !event.metaKey && !event.ctrlKey) { event.preventDefault(); setPanel((open) => (open === "info" ? null : "info")); }
+      if (event.key === "t" && !event.metaKey && !event.ctrlKey && !event.altKey) { event.preventDefault(); setTocPinned((pinned) => !pinned); }
+      if (event.key === "n" && !event.metaKey && !event.ctrlKey && !event.altKey) { event.preventDefault(); setPanel((open) => (open === "notes" ? null : "notes")); }
+      if (event.key === "i" && !event.metaKey && !event.ctrlKey && !event.altKey) { event.preventDefault(); setPanel((open) => (open === "info" ? null : "info")); }
+      if (hasMedia && !event.metaKey && !event.ctrlKey && !event.altKey) {
+        if (event.key === "k") { event.preventDefault(); void mediaStore.togglePlay(material); return; }
+        if (event.key === "j") { event.preventDefault(); mediaStore.skip(material.media?.kind === "video" ? -10 : -15, material); return; }
+        if (event.key === "l") { event.preventDefault(); mediaStore.skip(material.media?.kind === "video" ? 10 : 30, material); return; }
+        if (event.key === "[") { event.preventDefault(); mediaStore.stepPlaybackSpeed(-0.25); return; }
+        if (event.key === "]") { event.preventDefault(); mediaStore.stepPlaybackSpeed(0.25); return; }
+      }
       if ((event.metaKey || event.ctrlKey) && event.key === "j") { event.preventDefault(); setPanel((open) => (open === "agent" ? null : "agent")); }
       if ((event.metaKey || event.ctrlKey) && event.key === "f") { event.preventDefault(); setFindOpen(true); }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [panel, onBack, report, captureSelection]);
+  }, [panel, onBack, report, captureSelection, hasMedia, material]);
 
   // A stable resolver: the surface keys its image cache by resolver identity, so a new function per render
   // would re-request every image on each scroll tick (flicker and layout jumps).
   const resolveImage = useCallback((url: string) => read.resolveImage(url), []);
   const host = hostLabel(material);
-  const subtitle = [material.origin === "agent" ? "Agent" : host, `${progress}%`, `${content.readingMinutes} min`].join(" · ");
+  const mediaDur = durationLabel(material.media?.durationSec);
+  const subtitle = [material.origin === "agent" ? "Agent" : host, `${progress}%`, mediaDur ?? `${content.readingMinutes} min`].join(" · ");
   const viewSwitch = { view, views: views.views, fetching: views.fetching, onSelect: views.select };
   const panelOpen = panel !== null && !prefs.focus;
+  const mediaPosition = isCurrentMedia ? playback.positionSec : 0;
+  const mediaDuration = (isCurrentMedia && playback.durationSec > 0 ? playback.durationSec : material.media?.durationSec) ?? 0;
+  const mediaChapter = activeChapterOf(material.media?.chapters, mediaPosition)?.title;
+  const cacheState: MediaCacheBadgeState | undefined = hasMedia
+    ? playback.cacheProgress?.materialId === material.id && playback.cacheProgress.phase === "downloading"
+      ? {
+          status: "downloading",
+          ...(playback.cacheProgress.totalBytes
+            ? { percent: Math.round((playback.cacheProgress.downloadedBytes / playback.cacheProgress.totalBytes) * 100) }
+            : {}),
+        }
+      : (material.media?.cachedBytes ?? 0) > 0
+        ? { status: "cached" }
+        : { status: "none" }
+    : undefined;
+  const toggleMediaCache = useCallback(() => {
+    if (!material.media) return;
+    const op = (material.media.cachedBytes ?? 0) > 0
+      ? read.removeMediaCache(material.id)
+      : read.downloadMediaCache(material.id);
+    void op.then(onMaterialSaved).catch(() => undefined);
+  }, [material.id, material.media, onMaterialSaved]);
 
   return (
     <div className="grid h-full grid-cols-[minmax(0,1fr)] grid-rows-[52px_minmax(0,1fr)]">
@@ -311,17 +419,56 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
       <main key={material.id} className="reader-enter relative grid h-full min-h-0 grid-rows-[2px_minmax(0,1fr)] overflow-hidden bg-content">
         <div className="bg-separator-soft">{prefs.focus ? null : <i className="block h-full bg-accent opacity-80" style={{ width: `${progress}%` }} />}</div>
         <Presence show={findOpen}>{findOpen ? <FindBar root={bodyRef.current} generation={bodyGeneration} onClose={() => setFindOpen(false)} /> : null}</Presence>
-        <SelectionToolbar root={bodyRef.current} viewport={viewportRef.current} capture={captureSelection} onHighlight={onHighlight} onNote={(capture) => void onNote(capture)} onCopy={onCopyCapture} onAsk={(capture) => { setAsked(capture); setPanel("agent"); }} onReport={(capture, rect) => report(reportSelectionOf(capture, rect))} />
+        <SelectionToolbar root={bodyRef.current} viewport={viewportRef.current} capture={captureSelection} onHighlight={onHighlight} onNote={(capture) => void onNote(capture)} onCopy={onCopyCapture} onAsk={(capture) => { setAsked(capture); setPanel("agent"); }} onReport={(capture, rect) => report(reportSelectionOf(capture, rect))} onListen={onListenCapture} />
         {outline.length > 1 ? (
           <div className="pointer-events-none absolute inset-y-6 right-1.5 z-10 flex items-center">
             <TocRail aria-label="Contents" entries={outline.map((entry) => ({ id: entry.id, label: entry.label, level: entry.level - 1 }))} activeId={activeHeading} pinned={tocPinned} resting="hidden" onSelect={(id) => document.getElementById(id)?.scrollIntoView({ block: "start", behavior: "smooth" })} />
           </div>
         ) : null}
         <ReaderArticle material={material} content={artifactVersions.content} prefs={prefs} resolveImage={resolveImage} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} viewportRef={viewportRef} bodyRef={bodyRef} onShowSources={() => setPanel("info")} onFixArtifact={material.origin === "agent" ? fixArtifact : undefined}
+          activeParagraphIndex={activeParagraphIndex} onSeekTime={hasMedia ? seekAndPlay : undefined}
           bylineExtra={material.origin === "agent" ? null : <a href={material.finalUrl} onClick={(event) => { event.preventDefault(); onOpenLink(material.finalUrl); }}>Open original ↗</a>}
           banner={content.view === "text" && content.report
             ? <TextViewBanner report={content.report} onOpenPdf={() => views.select("pdf")} />
-            : <><ArtifactVersionBar versions={artifactVersions} /><QualityBanner material={material} low={quality.low} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onReport={reportFromChrome} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError} /></>} />
+            : <>
+                <ArtifactVersionBar versions={artifactVersions} />
+                {material.media?.transcriptOrigin === "absent" ? (
+                  <div role="status" className="mb-6 flex flex-wrap items-center justify-between gap-2 rounded-card bg-fill px-3.5 py-2.5 text-[12.5px] text-label-2">
+                    <span>No publisher transcript came with this episode. Listen below while reading the show notes.</span>
+                  </div>
+                ) : null}
+                <QualityBanner material={material} low={quality.low} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onReport={reportFromChrome} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError} />
+              </>} />
+        {hasMedia ? (
+          <div className="pointer-events-none absolute inset-x-4 bottom-3 z-20 flex justify-center">
+            <CompanionPlayer
+              className="pointer-events-auto w-full max-w-[680px]"
+              playing={isCurrentMedia && playback.playing}
+              positionSec={mediaPosition}
+              durationSec={mediaDuration}
+              playbackSpeed={isCurrentMedia ? playback.playbackSpeed : 1}
+              skipBackSec={material.media?.kind === "video" ? 10 : 15}
+              skipForwardSec={material.media?.kind === "video" ? 10 : 30}
+              chapterTitle={mediaChapter}
+              following={isCurrentMedia ? playback.following : true}
+              drifted={drifted}
+              cacheState={cacheState}
+              onTogglePlay={() => void mediaStore.togglePlay(material)}
+              onSeek={(sec) => { setDrifted(false); void mediaStore.seekTo(sec, material, false); }}
+              onSkip={(delta) => mediaStore.skip(delta, material)}
+              onSpeedChange={(speed) => mediaStore.setPlaybackSpeed(speed)}
+              onToggleFollow={transcriptContent?.timeAnchors?.length ? () => {
+                if (drifted) {
+                  jumpToCurrentMedia();
+                } else {
+                  mediaStore.setFollowing(!playback.following);
+                }
+              } : undefined}
+              onJumpToCurrent={transcriptContent?.timeAnchors?.length ? jumpToCurrentMedia : undefined}
+              onToggleCache={toggleMediaCache}
+            />
+          </div>
+        ) : null}
       </main>
       </SplitPanel>
       {panelOpen ? (
@@ -333,6 +480,7 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
               annotations={annotations} annotationsError={annotationsError} mirroredViews={mirroredViews(view, textContent)} activeAnnotation={activeAnnotation} noteDraft={noteDraft} onNoteDraftChange={setNoteDraft}
               onJump={(annotation) => { const shown = shownAnnotation(annotation); if (shown) jumpTo(shown); else onJumpAcross(annotation); }} onUpdateNote={(id, note) => void update(id, { note })} onDeleteAnnotation={(id) => void remove(id)}
               sectionFor={(annotation) => sectionOf(placedRange(annotation))} placementOf={(annotation) => placements.get(annotation.id)?.status}
+              onPlayTime={hasMedia ? seekAndPlay : undefined}
               onMaterialSaved={onMaterialSaved} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onOpenSettings={onOpenSettings} />
           </SplitPanel>
         </>

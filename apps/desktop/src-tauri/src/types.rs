@@ -3,6 +3,7 @@ use std::collections::HashMap;
 
 pub const IMAGE_SCHEME: &str = "quire-image";
 pub const ARTIFACT_SCHEME: &str = "quire-artifact";
+pub const MEDIA_SCHEME: &str = "quire-media";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -56,6 +57,42 @@ pub struct PdfInfo {
     pub pages: u32,
     pub byte_length: u64,
     pub text_layer: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptTrackRef {
+    pub url: String,
+    #[serde(rename = "type")]
+    pub media_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rel: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaState {
+    pub material_id: String,
+    pub position_sec: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_sec: Option<f64>,
+    pub playback_speed: f64,
+    #[serde(default)]
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaCacheProgress {
+    pub material_id: String,
+    pub downloaded_bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_bytes: Option<u64>,
+    pub phase: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -267,6 +304,8 @@ pub struct MaterialRecord {
     pub markdown: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plain: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_anchors: Option<Vec<TranscriptAnchor>>,
     pub problems: Vec<NormalizationProblem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artifact_source: Option<String>,
@@ -378,11 +417,23 @@ pub struct ItemSignals {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub media: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub enclosure_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub enclosure_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub duration_sec: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub has_transcript: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub transcripts: Option<Vec<TranscriptTrackRef>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chapters_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub chapters: Option<Vec<MediaChapter>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

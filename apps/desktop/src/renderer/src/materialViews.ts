@@ -22,7 +22,7 @@ export function annotationView(annotation: Pick<Annotation, "view">, primaryView
 
 /** The record's own content as a view: the primary view's content travels on the record itself. */
 export function contentOfRecord(material: MaterialRecord): MaterialViewContent {
-  const { primaryView, mediaType, pdf, reader, markdown, plain, readingMinutes, quality, problems, artifact, artifactSource } = material;
+  const { primaryView, mediaType, pdf, reader, markdown, plain, timeAnchors, readingMinutes, quality, problems, artifact, artifactSource } = material;
   // An artifact that renders outside the reader (ArtifactFrame) does so from its source, as the engine's artifact view does.
   const body = artifact && artifact.type !== "markdown" && artifact.type !== "code" && artifactSource !== undefined ? { type: artifact.type, source: artifactSource, version: artifact.version } : undefined;
   return {
@@ -31,6 +31,7 @@ export function contentOfRecord(material: MaterialRecord): MaterialViewContent {
     ...(reader ? { reader } : {}),
     ...(markdown ? { markdown } : {}),
     ...(plain ? { plain } : {}),
+    ...(timeAnchors ? { timeAnchors } : {}),
     ...(body ? { artifactBody: body } : {}),
   };
 }

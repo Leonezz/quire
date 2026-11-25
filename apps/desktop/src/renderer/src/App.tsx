@@ -268,7 +268,7 @@ export function App() {
           const collapsed = size.inPixels === 0;
           setSidebarCollapsed(collapsed); saveSidebarCollapsed(collapsed);
         }}>
-        <AppSidebar slideWidth={slideWidth} scope={scope} onScope={setScope} inbox={lists.inbox} queueCount={lists.queue.length} conversationCount={agentSessions.sessions.length} runningCount={agentRunning} tags={library.tags} sources={lists.sources} onHide={toggleSidebar} onOpenSettings={() => openSettings()} />
+        <AppSidebar slideWidth={slideWidth} scope={scope} onScope={setScope} inbox={lists.inbox} queueCount={lists.queue.length} conversationCount={agentSessions.sessions.length} runningCount={agentRunning} tags={library.tags} sources={lists.sources} onHide={toggleSidebar} onOpenSettings={() => openSettings()} onOpenMaterial={(id) => showMaterial(id)} />
       </SplitPanel>
       {/* With the sidebar hidden the separator takes no room, so the list segment starts at the window's edge. */}
       <SplitSeparator aria-label="Resize sidebar" hit={sidebarCollapsed ? 0 : 10} footprint={sidebarCollapsed ? 0 : 1} line="always" className={sidebarCollapsed ? "invisible" : ""} />

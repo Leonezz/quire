@@ -94,15 +94,20 @@ describe("parseFeed", () => {
     const ep = parsed.items[0]!;
     expect(ep.signals).toEqual({
       media: "audio",
+      enclosureUrl: "https://cdn.latent.space/ep42.mp3",
+      enclosureType: "audio/mpeg",
       durationSec: 3510,
       hasTranscript: true,
+      transcripts: [{ url: "https://cdn.latent.space/ep42.vtt", type: "text/vtt" }],
       chapters: [
         { startSec: 0, title: "Cold Open" },
         { startSec: 310, title: "Verifier Loops" },
       ],
     });
+    expect(ep.readingMinutes).toBe(59);
     expect(ep.gist).toBe("Deep dive into verifier loops and synthetic reasoning traces.");
     expect(ep.summaryOnly).toBe(false);
+    expect(ep.content?.plain).toContain("Deep dive into verifier loops");
     expect(ep.meta).toEqual({
       kind: "podcastEpisode",
       publication: "Latent Space",
