@@ -15,12 +15,16 @@ use crate::sqlite_stores::{
     EventStore, ItemStore, MediaStateStore, MetaStore, SessionStore, SourceStore,
 };
 use crate::sync::{add_source, keep_item, read_item, sync_source, SyncCoordinator};
+use crate::transcribe::{
+    check_asr_model_status, download_asr_model, test_asr_connection, TranscriptionService,
+};
 use crate::types::{
     AddSourceResult, AgentRequest, AgentResult, AgentRun, AgentSession, AgentSessionSummary,
-    AgentStatus, Annotation, CorpusImportResult, DeleteMaterialsResult, ItemRecord, LibraryFilter,
-    MaterialRecord, MaterialSummary, MaterialViewContent, MediaState, OpenUrlResult, ReadingEvent,
-    ReadingStats, RenderingFeedback, RenderingFeedbackDraft, SearchHit, Settings, SourceDetection,
-    SourceRecord, StorageUsage, SyncSourceResult, TagCount, UpdateState,
+    AgentStatus, Annotation, AsrConnectionTestResult, AsrModelStatus, CorpusImportResult,
+    DeleteMaterialsResult, ItemRecord, LibraryFilter, MaterialRecord, MaterialSummary,
+    MaterialViewContent, MediaState, OpenUrlResult, ReadingEvent, ReadingStats, RenderingFeedback,
+    RenderingFeedbackDraft, SearchHit, Settings, SourceDetection, SourceRecord, StorageUsage,
+    SyncSourceResult, TagCount, TranscribeJobSnapshot, UpdateState,
 };
 use crate::updates::UpdateService;
 use base64::Engine;
@@ -49,6 +53,7 @@ pub struct AppState {
     pub sync_coord: Arc<SyncCoordinator>,
     pub codex: Arc<CodexClient>,
     pub agent: Arc<AgentService>,
+    pub transcribe: Arc<TranscriptionService>,
     pub updates: Arc<UpdateService>,
     pub feedback: Arc<FeedbackStore>,
 }
@@ -477,8 +482,15 @@ pub fn event_record(
     }
     let rid = bounded_str(&reference, 64, "IPC_INVALID_ID")?;
     let ev = state.events.record(&kind, &rid)?;
-    if kind == "finished" && state.items.mark_finished(&rid).unwrap_or(0) > 0 {
-        let _ = app.emit("sources:changed", ());
+    if kind == "finished" {
+        if state.items.mark_finished(&rid).unwrap_or(0) > 0 {
+            let _ = app.emit("sources:changed", ());
+        }
+        if state.settings.get().remove_cached_media_after_finish && valid_hex_16(&rid) {
+            if state.media_cache.remove(&rid).unwrap_or(0) > 0 {
+                let _ = app.emit("library:changed", ());
+            }
+        }
     }
     Ok(ev)
 }
@@ -508,7 +520,14 @@ pub async fn agent_ask(
 ) -> Result<AgentResult, String> {
     if !matches!(
         request.task.as_str(),
-        "ask" | "explain" | "verify" | "related" | "summary" | "synthesis" | "rebuild"
+        "ask"
+            | "explain"
+            | "verify"
+            | "related"
+            | "summary"
+            | "synthesis"
+            | "rebuild"
+            | "cleanup_transcript"
     ) {
         return Err("IPC_INVALID_AGENT_TASK".into());
     }
@@ -730,6 +749,52 @@ pub fn media_cache_clear_all(app: AppHandle, state: State<'_, AppState>) -> Resu
     let freed = state.media_cache.clear_all()?;
     let _ = app.emit("library:changed", ());
     Ok(freed)
+}
+
+#[tauri::command]
+pub fn transcribe_start(
+    state: State<'_, AppState>,
+    material_id: String,
+    provider: Option<String>,
+) -> Result<TranscribeJobSnapshot, String> {
+    if !valid_hex_16(&material_id) {
+        return Err("IPC_INVALID_ID".into());
+    }
+    state.transcribe.start(&material_id, provider)
+}
+
+#[tauri::command]
+pub fn transcribe_cancel(state: State<'_, AppState>, material_id: String) -> Result<(), String> {
+    if !valid_hex_16(&material_id) {
+        return Err("IPC_INVALID_ID".into());
+    }
+    state.transcribe.cancel(&material_id);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn transcribe_jobs(state: State<'_, AppState>) -> Result<Vec<TranscribeJobSnapshot>, String> {
+    Ok(state.transcribe.list_jobs())
+}
+
+#[tauri::command]
+pub fn asr_model_status(state: State<'_, AppState>) -> Result<AsrModelStatus, String> {
+    let cur = state.settings.get();
+    Ok(check_asr_model_status(&state.data_dir, &cur.local_whisper_model))
+}
+
+#[tauri::command]
+pub async fn asr_model_download(
+    state: State<'_, AppState>,
+    model: String,
+) -> Result<AsrModelStatus, String> {
+    let m = bounded_str(&model, 32, "IPC_INVALID_MODEL")?;
+    download_asr_model(&state.http, &state.data_dir, &m).await
+}
+
+#[tauri::command]
+pub async fn asr_test_connection(state: State<'_, AppState>) -> Result<AsrConnectionTestResult, String> {
+    test_asr_connection(&state.settings).await
 }
 
 #[tauri::command]

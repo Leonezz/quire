@@ -11,6 +11,7 @@ import type {
   MediaState,
   ReadApi,
   ReadApiFeedback,
+  TranscribeEvent,
   UpdateState,
 } from "../../shared/contracts";
 import { startNormalizerHost } from "./normalizerHost";
@@ -202,6 +203,14 @@ if (isTauriRuntime() && !window.read) {
     removeMediaCache: (materialId) => invoke("media_cache_remove", { materialId }),
     clearMediaCache: () => invoke("media_cache_clear_all"),
     onMediaCacheProgress: (listener) => subscribePayload<MediaCacheProgress>("media:cache:progress", listener),
+    startTranscription: (materialId, provider) =>
+      invoke("transcribe_start", { materialId, ...(provider ? { provider } : {}) }),
+    cancelTranscription: (materialId) => invoke("transcribe_cancel", { materialId }),
+    listTranscriptionJobs: () => invoke("transcribe_jobs"),
+    onTranscribeEvent: (listener) => subscribePayload<TranscribeEvent>("transcribe:event", listener),
+    asrModelStatus: () => invoke("asr_model_status"),
+    downloadAsrModel: (model) => invoke("asr_model_download", { model }),
+    testAsrConnection: () => invoke("asr_test_connection"),
   };
 
   window.read = api;

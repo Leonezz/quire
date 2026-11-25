@@ -12,9 +12,10 @@ export function mockRead(overrides: Partial<ReadApi> = {}): ReadApi {
     "getUpdateState", "checkForUpdates", "installUpdate", "downloadUpdate", "openDownloadedUpdate", "openReleasePage", "onUpdateState",
     "feedbackSubmit", "onFeedbackProgress", "feedbackCopyScreenshot", "feedbackCreate", "feedbackList", "feedbackDelete", "feedbackOpenIssue", "feedbackSetIssueUrl", "feedbackReveal", "onFeedbackChanged",
     "getMediaState", "saveMediaState", "downloadMediaCache", "removeMediaCache", "clearMediaCache", "onMediaCacheProgress",
+    "startTranscription", "cancelTranscription", "listTranscriptionJobs", "onTranscribeEvent", "asrModelStatus", "downloadAsrModel", "testAsrConnection",
   ];
   const base = Object.fromEntries(names.map((name) => [name, vi.fn(async () => { throw new Error(`read.${name} is not stubbed in this test`); })])) as unknown as ReadApi;
-  const subscriptions = { onLibraryChanged: () => () => undefined, onSourcesChanged: () => () => undefined, onAgentEvent: () => () => undefined, onAgentOpenSession: () => () => undefined, onAgentSessionsChanged: () => () => undefined, onAgentStatusChanged: () => () => undefined, onUpdateState: () => () => undefined, onFeedbackChanged: () => () => undefined, onFeedbackProgress: () => () => undefined, onMediaCacheProgress: () => () => undefined };
+  const subscriptions = { onLibraryChanged: () => () => undefined, onSourcesChanged: () => () => undefined, onAgentEvent: () => () => undefined, onAgentOpenSession: () => () => undefined, onAgentSessionsChanged: () => () => undefined, onAgentStatusChanged: () => () => undefined, onUpdateState: () => () => undefined, onFeedbackChanged: () => () => undefined, onFeedbackProgress: () => () => undefined, onMediaCacheProgress: () => () => undefined, onTranscribeEvent: () => () => undefined };
   return { ...base, ...subscriptions, version: "test", platform: "test", ...overrides };
 }
 

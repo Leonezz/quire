@@ -3,7 +3,7 @@ import { Square, X } from "lucide-react";
 import { Button, Icon, Kbd, TextField } from "@read/ui";
 import type { AgentStatus, AgentTask } from "../../shared/contracts";
 
-export const taskLabel: Record<AgentTask, string> = { ask: "Ask", explain: "Explain", verify: "Verify", related: "Find related", summary: "Summarise", synthesis: "Synthesise", rebuild: "Rebuild" };
+export const taskLabel: Record<AgentTask, string> = { ask: "Ask", explain: "Explain", verify: "Verify", related: "Find related", summary: "Summarise", synthesis: "Synthesise", rebuild: "Rebuild", cleanup_transcript: "Clean up transcript" };
 
 export interface AgentComposerProps {
   status: AgentStatus | undefined;

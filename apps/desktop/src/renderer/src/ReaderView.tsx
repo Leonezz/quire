@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { CompanionPlayer, Presence, SplitGroup, SplitPanel, TocRail, VideoDockFrame, useSplitSizes, type MediaCacheBadgeState } from "@read/ui";
+import { Button, CompanionPlayer, Presence, ShimmerText, SplitGroup, SplitPanel, TocRail, VideoDockFrame, useSplitSizes, type MediaCacheBadgeState } from "@read/ui";
 import { ColumnSeparator, PAGE_MIN, PANEL_DEFAULT, PANEL_MAX, PANEL_MIN } from "./ContentPane";
 import { ReaderToolbar } from "./ReaderToolbar";
 import { installTextAnnotationHighlights, renderedTextQuoteSelection, resolveTextQuoteAnchor, resolveTextQuoteRange, textAnnotationHighlightStyles, useDocumentReadingPosition, type TextAnnotationPlacement } from "@read/reader";
@@ -10,6 +10,7 @@ import { ReaderInspector, type ReaderPanel } from "./ReaderInspector";
 import { hostLabel } from "./ArtifactLineage";
 import { QualityBanner, canRebuild, type RebuildState } from "./RebuildBanner";
 import { agentStore, useAgentRun } from "./agentStore";
+import { transcribeStore, useTranscriptionJob } from "./transcribeStore";
 import { SelectionToolbar, type SelectionCapture } from "./SelectionToolbar";
 import type { AgentContext, Annotation } from "../../shared/contracts";
 import { FindBar } from "./FindBar";
@@ -155,11 +156,42 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
   const [panelSession, setPanelSession] = useState<string | undefined>(undefined);
   const [rebuildSession, setRebuildSession] = useState<string | undefined>(undefined);
   const [rebuildPhase, setRebuildPhase] = useState<{ kind: "idle" } | { kind: "starting" } | { kind: "failed"; error?: string | undefined }>({ kind: "idle" });
+  const [cleanupError, setCleanupError] = useState<string | undefined>(undefined);
   const rebuildRun = useAgentRun(rebuildSession);
-  useEffect(() => { setRebuildSession(undefined); setRebuildPhase({ kind: "idle" }); }, [material.id]);
+  useEffect(() => { setRebuildSession(undefined); setRebuildPhase({ kind: "idle" }); setCleanupError(undefined); }, [material.id]);
   const rebuildOutcome = rebuildRun?.outcome;
   useEffect(() => { if (rebuildOutcome && rebuildOutcome.status !== "done") setRebuildPhase({ kind: "failed", error: rebuildOutcome.message }); }, [rebuildOutcome]);
   const rebuild: RebuildState = rebuildPhase.kind === "starting" || (rebuildRun !== undefined && rebuildOutcome === undefined) ? "running" : rebuildPhase.kind === "failed" ? "failed" : "idle";
+  const transcription = useTranscriptionJob(hasMedia ? material.id : undefined);
+  useEffect(() => {
+    const completedChunks = transcription.job?.completedChunks ?? 0;
+    if (transcription.completedNonce === undefined && completedChunks === 0) return;
+    read.getMaterial(material.id)
+      .then((rec) => {
+        if (!rec) return;
+        onMaterialSaved(rec);
+        if (rec.readyViews.includes("transcript") && views.view !== "transcript") {
+          views.select("transcript");
+        }
+      })
+      .catch(() => undefined);
+  }, [material.id, onMaterialSaved, transcription.completedNonce, transcription.job?.completedChunks, views]);
+  const startCleanupTranscript = useCallback(async () => {
+    setAsked(null); setPanel("agent"); setCleanupError(undefined);
+    if (prefs.focus) setPrefs({ ...prefs, focus: false });
+    try {
+      const result = await agentStore.ask({
+        context: { kind: "material", materialId: material.id },
+        task: "cleanup_transcript",
+        text: "",
+        ...(panelSession ? { sessionId: panelSession } : {}),
+      });
+      if (!result.ok) { setCleanupError(result.message); return; }
+      setRebuildSession(result.sessionId);
+    } catch (cause: unknown) {
+      setCleanupError(cause instanceof Error ? cause.message : "The agent did not answer.");
+    }
+  }, [material.id, panelSession, prefs, setPrefs]);
   const startRebuild = useCallback(async () => {
     setAsked(null); setPanel("agent"); setRebuildPhase({ kind: "starting" });
     // Focus mode hides the panel, and the rebuild is worth watching: leave it.
@@ -464,9 +496,35 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
             ? <TextViewBanner report={content.report} onOpenPdf={() => views.select("pdf")} />
             : <>
                 <ArtifactVersionBar versions={artifactVersions} />
-                {material.media?.transcriptOrigin === "absent" ? (
+                {transcription.job ? (
                   <div role="status" className="mb-6 flex flex-wrap items-center justify-between gap-2 rounded-card bg-fill px-3.5 py-2.5 text-[12.5px] text-label-2">
-                    <span>No publisher transcript came with this episode. Listen below while reading the show notes.</span>
+                    <ShimmerText>
+                      {transcription.job.phase === "transcribing" && transcription.job.totalChunks > 0
+                        ? `Transcribing segment ${transcription.job.completedChunks} of ${transcription.job.totalChunks}…`
+                        : "Preparing audio for transcription…"}
+                    </ShimmerText>
+                    <Button size="sm" variant="quiet" onPress={() => void transcribeStore.cancel(material.id)}>Cancel</Button>
+                  </div>
+                ) : material.media?.transcriptOrigin === "absent" ? (
+                  <div role="status" className="mb-6 grid gap-2 rounded-card bg-fill px-3.5 py-2.5 text-[12.5px] text-label-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span>No publisher transcript came with this episode. Listen below while reading the show notes.</span>
+                      <Button size="sm" onPress={() => void transcribeStore.start(material.id)}>Transcribe</Button>
+                    </div>
+                    {transcription.error ? (
+                      <div role="alert" className="flex flex-wrap items-center gap-2 text-red-text">
+                        <span>{transcription.error}</span>
+                        {onOpenSettings ? <Button size="sm" variant="quiet" onPress={onOpenSettings}>Settings…</Button> : null}
+                      </div>
+                    ) : null}
+                  </div>
+                ) : material.media?.transcriptOrigin === "auto_captions" || material.media?.transcriptOrigin === "local_asr" || material.media?.transcriptOrigin === "cloud_asr" ? (
+                  <div role="status" className="mb-6 grid gap-2 rounded-card bg-fill px-3.5 py-2.5 text-[12.5px] text-label-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span>Machine-generated transcript — punctuation and speaker turns can be refined without changing timestamps.</span>
+                      <Button size="sm" isDisabled={rebuild === "running"} onPress={() => void startCleanupTranscript()}>Clean up with the agent</Button>
+                    </div>
+                    {cleanupError ? <p role="alert" className="m-0 text-red-text">{cleanupError}</p> : null}
                   </div>
                 ) : null}
                 <QualityBanner material={material} low={quality.low} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onReport={reportFromChrome} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError} />

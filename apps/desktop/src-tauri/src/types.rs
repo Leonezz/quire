@@ -98,6 +98,69 @@ pub struct MediaCacheProgress {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct TranscribeJobSnapshot {
+    pub job_id: String,
+    pub material_id: String,
+    pub provider: String,
+    pub phase: String,
+    pub completed_chunks: u32,
+    pub total_chunks: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum TranscribeEvent {
+    Preparing {
+        #[serde(rename = "jobId")]
+        job_id: String,
+        #[serde(rename = "materialId")]
+        material_id: String,
+    },
+    Progress {
+        #[serde(rename = "jobId")]
+        job_id: String,
+        #[serde(rename = "materialId")]
+        material_id: String,
+        #[serde(rename = "completedChunks")]
+        completed_chunks: u32,
+        #[serde(rename = "totalChunks")]
+        total_chunks: u32,
+    },
+    Completed {
+        #[serde(rename = "jobId")]
+        job_id: String,
+        #[serde(rename = "materialId")]
+        material_id: String,
+    },
+    Failed {
+        #[serde(rename = "jobId")]
+        job_id: String,
+        #[serde(rename = "materialId")]
+        material_id: String,
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AsrModelStatus {
+    pub model: String,
+    pub downloaded: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub size_bytes: Option<u64>,
+    pub local_runtime_ready: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AsrConnectionTestResult {
+    pub latency_ms: u64,
+    pub supports_verbose_json: bool,
+    pub model: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct MediaChapter {
     pub start_sec: f64,
     pub title: String,
@@ -746,6 +809,12 @@ pub struct Settings {
     pub check_updates_automatically: bool,
     pub reflow_judge: String,
     pub typesafe_api_key_set: bool,
+    pub asr_provider: String,
+    pub asr_base_url: String,
+    pub asr_model: String,
+    pub asr_api_key_set: bool,
+    pub local_whisper_model: String,
+    pub remove_cached_media_after_finish: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -762,6 +831,10 @@ pub struct StorageUsage {
     pub images: u64,
     pub figures: u64,
     pub database: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub models: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

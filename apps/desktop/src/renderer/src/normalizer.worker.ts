@@ -3,6 +3,7 @@ import {
   normalizeTranscript,
   parseTranscriptCues,
   sha256Hex,
+  validateRefinedTranscript,
   type TranscriptChapter,
   type TranscriptCue,
   type TranscriptKeyframe,
@@ -272,6 +273,31 @@ async function runJob(op: string, payload: Record<string, unknown>): Promise<unk
     } finally {
       bitmap.close();
     }
+  }
+
+  if (op === "refineTranscript") {
+    const markdown = String(payload.markdown ?? "");
+    const rawCues = Array.isArray(payload.rawCues) ? (payload.rawCues as TranscriptCue[]) : [];
+    const keyframes = Array.isArray(payload.keyframes) ? (payload.keyframes as TranscriptKeyframe[]) : undefined;
+    const title = typeof payload.title === "string" ? payload.title : undefined;
+
+    const checked = validateRefinedTranscript(markdown, rawCues);
+    if (!checked.ok) {
+      throw new Error(`Refined transcript validation failed:\n- ${checked.issues.join("\n- ")}`);
+    }
+    const normalized = normalizeTranscript(checked.cues, {
+      chapters: checked.chapters,
+      ...(keyframes ? { keyframes } : {}),
+      ...(title ? { title } : {}),
+    });
+    return {
+      reader: normalized.reader,
+      markdown: normalized.markdown,
+      plain: normalized.plain,
+      readingMinutes: readingMinutes(normalized.plain),
+      timeAnchors: normalized.anchors,
+      cues: checked.cues,
+    };
   }
 
   throw new Error(`Unknown normalizer operation: ${op}`);

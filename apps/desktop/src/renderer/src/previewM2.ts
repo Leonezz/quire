@@ -74,6 +74,7 @@ const taskIntro: Record<AgentTask, string> = {
   summary: "## Summary",
   synthesis: "## Synthesis",
   rebuild: "## Rebuilt",
+  cleanup_transcript: "## Transcript refined",
 };
 
 /**

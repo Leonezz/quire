@@ -32,6 +32,36 @@ export interface MediaCacheProgress {
   error?: string;
 }
 
+export type AsrProvider = "local" | "openai_compatible";
+
+export interface TranscribeJobSnapshot {
+  jobId: string;
+  materialId: string;
+  provider: AsrProvider;
+  phase: "preparing" | "transcribing";
+  completedChunks: number;
+  totalChunks: number;
+}
+
+export type TranscribeEvent =
+  | { type: "preparing"; jobId: string; materialId: string }
+  | { type: "progress"; jobId: string; materialId: string; completedChunks: number; totalChunks: number }
+  | { type: "completed"; jobId: string; materialId: string }
+  | { type: "failed"; jobId: string; materialId: string; message: string };
+
+export interface AsrModelStatus {
+  model: string;
+  downloaded: boolean;
+  sizeBytes?: number;
+  localRuntimeReady: boolean;
+}
+
+export interface AsrConnectionTestResult {
+  latencyMs: number;
+  supportsVerboseJson: boolean;
+  model: string;
+}
+
 export interface ReadApiMedia {
   getMediaState: (materialId: string) => Promise<MediaState | undefined>;
   saveMediaState: (state: Omit<MediaState, "updatedAt"> & { updatedAt?: string }) => Promise<void>;
@@ -39,6 +69,13 @@ export interface ReadApiMedia {
   removeMediaCache: (materialId: string) => Promise<MaterialRecord>;
   clearMediaCache: () => Promise<number>;
   onMediaCacheProgress: (listener: (progress: MediaCacheProgress) => void) => () => void;
+  startTranscription: (materialId: string, provider?: AsrProvider) => Promise<TranscribeJobSnapshot>;
+  cancelTranscription: (materialId: string) => Promise<void>;
+  listTranscriptionJobs: () => Promise<TranscribeJobSnapshot[]>;
+  onTranscribeEvent: (listener: (event: TranscribeEvent) => void) => () => void;
+  asrModelStatus: () => Promise<AsrModelStatus>;
+  downloadAsrModel: (model: string) => Promise<AsrModelStatus>;
+  testAsrConnection: () => Promise<AsrConnectionTestResult>;
 }
 
 export interface MediaInfo {
@@ -394,7 +431,7 @@ export type AgentContext =
   | { kind: "selection"; materialId: string; quote: string; locator: string };
 
 /** Canned intents map to prompt templates; "ask" sends the text as written. */
-export type AgentTask = "ask" | "explain" | "verify" | "related" | "summary" | "synthesis" | "rebuild";
+export type AgentTask = "ask" | "explain" | "verify" | "related" | "summary" | "synthesis" | "rebuild" | "cleanup_transcript";
 
 export interface AgentRequest {
   context: AgentContext;
@@ -588,10 +625,25 @@ export interface Settings {
   reflowJudge: "rules" | "jev";
   /** Whether a TypeSafe API key is stored (the key itself is never returned; it is kept encrypted). */
   typesafeApiKeySet: boolean;
+  /** Speech-to-text backend for podcasts & videos without publisher transcripts. */
+  asrProvider?: AsrProvider;
+  /** OpenAI-compatible `/audio/transcriptions` base URL (HTTPS remote or `http://localhost`). */
+  asrBaseUrl?: string;
+  /** Model identifier sent to the ASR endpoint (e.g. `whisper-large-v3-turbo` or `FunAudioLLM/SenseVoiceSmall`). */
+  asrModel?: string;
+  /** Whether an ASR API key is stored in the system Keychain. */
+  asrApiKeySet?: boolean;
+  /** Local Whisper GGUF model tier (`base` | `small` | `large-v3-turbo`). */
+  localWhisperModel?: string;
+  /** Automatically remove downloaded offline audio/video files once an episode is marked finished. */
+  removeCachedMediaAfterFinish?: boolean;
 }
 
-/** What updateSettings accepts: every editable field, plus the write-only key ("" removes it). */
-export type SettingsPatch = Partial<Omit<Settings, "dataDirectory" | "typesafeApiKeySet">> & { typesafeApiKey?: string };
+/** What updateSettings accepts: every editable field, plus the write-only keys ("" removes them). */
+export type SettingsPatch = Partial<Omit<Settings, "dataDirectory" | "typesafeApiKeySet" | "asrApiKeySet">> & {
+  typesafeApiKey?: string;
+  asrApiKey?: string;
+};
 
 /** A delete that went through. `picturesKept`: the cached pictures of the deleted materials could not be forgotten, and why. */
 export interface DeleteMaterialsResult {
@@ -604,10 +656,14 @@ export interface StorageUsage {
   materials: number;
   /** Pictures cached for reading without the network (images/). */
   images: number;
-  /** Figure crops of PDF text views (figures/). */
+  /** Figure crops of PDF text views and video storyboards (figures/). */
   figures: number;
   /** Sources, items, reading events, metadata overrides and agent sessions (quire.sqlite with its WAL files). */
   database: number;
+  /** Downloaded audio/video files kept for offline playback (media/). */
+  media?: number;
+  /** Local speech-to-text model weights (models/). */
+  models?: number;
 }
 
 export interface AgentTurnRecord {

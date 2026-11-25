@@ -144,6 +144,13 @@ const browserPreview: ReadApi = {
   removeMediaCache: async (id) => requirePreviewMaterial(id),
   clearMediaCache: async () => 0,
   onMediaCacheProgress: () => () => undefined,
+  startTranscription: async () => { throw new Error("Speech-to-text transcription requires the desktop app."); },
+  cancelTranscription: async () => undefined,
+  listTranscriptionJobs: async () => [],
+  onTranscribeEvent: () => () => undefined,
+  asrModelStatus: async () => ({ model: "base", downloaded: false, localRuntimeReady: false }),
+  downloadAsrModel: async () => { throw new Error("Downloading local Whisper models requires the desktop app."); },
+  testAsrConnection: async () => { throw new Error("Testing ASR endpoints requires the desktop app."); },
 };
 
 export const read: ReadApi = typeof window !== "undefined" && "read" in window && window.read ? window.read : browserPreview;

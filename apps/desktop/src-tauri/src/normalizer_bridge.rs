@@ -146,6 +146,17 @@ pub struct NormalizedTranscriptResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct RefineTranscriptInput {
+    pub markdown: String,
+    pub raw_cues: Vec<TranscriptCueDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keyframes: Option<Vec<TranscriptKeyframeDto>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct StoryboardCropInputRegion {
     pub index: u32,
     pub x: u32,
@@ -246,6 +257,13 @@ pub trait Normalizer: Send + Sync {
         _regions: &'a [StoryboardCropInputRegion],
     ) -> BoxFuture<'a, Result<Vec<CroppedStoryboardFrame>, String>> {
         Box::pin(async move { Ok(Vec::new()) })
+    }
+
+    fn refine_transcript<'a>(
+        &'a self,
+        _input: RefineTranscriptInput,
+    ) -> BoxFuture<'a, Result<NormalizedTranscriptResult, String>> {
+        Box::pin(async move { Err("refine_transcript not implemented on mock normalizer.".into()) })
     }
 }
 
@@ -484,5 +502,13 @@ impl Normalizer for TauriNormalizerBridge {
             "regions": regions,
         });
         Box::pin(async move { self.call("cropStoryboardSheet", payload, 25).await })
+    }
+
+    fn refine_transcript<'a>(
+        &'a self,
+        input: RefineTranscriptInput,
+    ) -> BoxFuture<'a, Result<NormalizedTranscriptResult, String>> {
+        let payload = serde_json::to_value(&input).unwrap_or(serde_json::Value::Null);
+        Box::pin(async move { self.call("refineTranscript", payload, 30).await })
     }
 }

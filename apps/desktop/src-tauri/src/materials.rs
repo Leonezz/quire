@@ -6,8 +6,8 @@ use crate::http::{
 };
 use crate::media::{cached_media_info, remove_cached_media_files};
 use crate::normalizer_bridge::{
-    ExtractMetaInput, NormalizeTranscriptInput, Normalizer, StoryboardCropInputRegion,
-    TranscriptKeyframeDto,
+    ExtractMetaInput, NormalizeTranscriptInput, NormalizedTranscriptResult, Normalizer,
+    RefineTranscriptInput, StoryboardCropInputRegion, TranscriptCueDto, TranscriptKeyframeDto,
 };
 use crate::sqlite_stores::{now_iso, sha256_hex, ItemContent, ItemStore, MetaStore};
 use crate::types::{
@@ -3240,6 +3240,103 @@ impl MaterialStore {
         }
     }
 
+    pub fn read_raw_transcript(&self, id: &str) -> Result<Option<Vec<TranscriptCueDto>>, String> {
+        if !valid_hex_16(id) {
+            return Ok(None);
+        }
+        let path = self.dir().join(format!("{id}.transcript.raw.json"));
+        let Some(bytes) = self.read_optional(&path)? else {
+            return Ok(None);
+        };
+        serde_json::from_slice(&bytes).map(Some).map_err(|e| e.to_string())
+    }
+
+    pub fn save_transcribed_view(
+        &self,
+        id: &str,
+        tx: NormalizedTranscriptResult,
+        origin: &str,
+        overwrite_raw: bool,
+    ) -> Result<MaterialRecord, String> {
+        let mut record = self.require_stored(id)?;
+        fs::create_dir_all(self.dir()).map_err(|e| e.to_string())?;
+        if overwrite_raw {
+            if let Ok(raw_json) = serde_json::to_string(&tx.cues) {
+                let _ = fs::write(self.dir().join(format!("{id}.transcript.raw.json")), raw_json);
+            }
+        }
+        let tx_content = MaterialViewContent {
+            view: "transcript".into(),
+            media_type: TRANSCRIPT_VIEW_MEDIA_TYPE.into(),
+            pdf: None,
+            reader: Some(tx.reader.clone()),
+            markdown: Some(tx.markdown.clone()),
+            plain: Some(tx.plain.clone()),
+            reading_minutes: tx.reading_minutes,
+            quality: ContentNormalizationQuality::default(),
+            problems: Vec::new(),
+            anchors: None,
+            time_anchors: Some(tx.time_anchors.clone()),
+            artifact_body: None,
+            report: None,
+        };
+        let tx_len = serde_json::to_string(&tx_content)
+            .map(|s| s.len() as u64)
+            .unwrap_or(0);
+        self.write_view_content(id, &tx_content, None)?;
+
+        let tx_view = MaterialView {
+            id: "transcript".into(),
+            label: view_label("transcript").into(),
+            url: record.url.clone(),
+            media_type: TRANSCRIPT_VIEW_MEDIA_TYPE.into(),
+            status: "ready".into(),
+            fetched_at: Some(now_iso()),
+            byte_length: Some(tx_len),
+            pdf: None,
+            error: None,
+        };
+
+        let existing_views = views_of(&record);
+        record.views = Some(upsert_view(&existing_views, tx_view));
+        record.primary_view = Some("transcript".into());
+        record.media_type = TRANSCRIPT_VIEW_MEDIA_TYPE.into();
+        record.reader = Some(tx.reader);
+        record.markdown = Some(tx.markdown);
+        record.plain = Some(tx.plain);
+        record.time_anchors = Some(tx.time_anchors);
+        record.reading_minutes = tx.reading_minutes;
+        if let Some(ref mut media) = record.media {
+            media.transcript_origin = origin.to_string();
+        }
+        let saved = self.save_stored(record)?;
+        self.decorate(&saved)
+    }
+
+    pub async fn refine_material_transcript(
+        &self,
+        id: &str,
+        refined_markdown: &str,
+    ) -> Result<MaterialRecord, String> {
+        let record = self.require_stored(id)?;
+        let raw_cues = self.read_raw_transcript(id)?.ok_or_else(|| {
+            format!(
+                "Material {id} ({}) has no raw transcript cues stored (`{id}.transcript.raw.json`).",
+                record.title
+            )
+        })?;
+        let tx = self
+            .normalizer
+            .refine_transcript(RefineTranscriptInput {
+                markdown: refined_markdown.to_string(),
+                raw_cues,
+                keyframes: None,
+                title: Some(record.title.clone()),
+            })
+            .await?;
+        self.save_transcribed_view(id, tx, "agent_refined", false)
+    }
+
     pub async fn import_snapshots(&self, corpus_dir: &Path) -> Result<CorpusImportResult, String> {
         let mut result = CorpusImportResult {
             imported: 0,
@@ -3664,11 +3761,15 @@ pub fn storage_usage(data_dir: &Path) -> StorageUsage {
         .iter()
         .map(|name| fs::metadata(data_dir.join(name)).map(|m| m.len()).unwrap_or(0))
         .sum();
+    let media = dir_bytes(&data_dir.join("media"));
+    let models = dir_bytes(&data_dir.join("models"));
     StorageUsage {
         materials: dir_bytes(&data_dir.join("materials")),
         images: dir_bytes(&data_dir.join("images")),
         figures: dir_bytes(&data_dir.join("figures")),
         database,
+        media: (media > 0).then_some(media),
+        models: (models > 0).then_some(models),
     }
 }
 

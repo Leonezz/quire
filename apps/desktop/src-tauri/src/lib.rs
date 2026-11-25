@@ -12,6 +12,7 @@ pub mod protocols;
 pub mod settings;
 pub mod sqlite_stores;
 pub mod sync;
+pub mod transcribe;
 pub mod types;
 pub mod updates;
 pub mod youtube;
@@ -32,6 +33,7 @@ use sqlite_stores::{EventStore, ItemStore, MediaStateStore, MetaStore, SessionSt
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use sync::SyncCoordinator;
+use transcribe::TranscriptionService;
 use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::window::{Effect, EffectState, EffectsBuilder};
 use tauri::{Emitter, Manager, RunEvent};
@@ -250,6 +252,22 @@ pub fn run() {
                 Arc::new(open_external_url),
             ));
 
+            let handle_asr_ev = handle.clone();
+            let handle_asr_lib = handle.clone();
+            let transcribe = Arc::new(TranscriptionService::new(
+                &data_dir,
+                store.clone(),
+                media_cache.clone(),
+                normalizer.clone(),
+                settings.clone(),
+                Arc::new(move |ev| {
+                    let _ = handle_asr_ev.emit("transcribe:event", &ev);
+                }),
+                Arc::new(move || {
+                    let _ = handle_asr_lib.emit("library:changed", ());
+                }),
+            ));
+
             let settings_upd = settings.clone();
             let handle_upd = handle.clone();
             let updates = Arc::new(UpdateService::new(
@@ -393,6 +411,7 @@ pub fn run() {
                 sync_coord,
                 codex,
                 agent,
+                transcribe,
                 updates,
                 feedback,
             });
@@ -449,6 +468,12 @@ pub fn run() {
             commands::media_cache_download,
             commands::media_cache_remove,
             commands::media_cache_clear_all,
+            commands::transcribe_start,
+            commands::transcribe_cancel,
+            commands::transcribe_jobs,
+            commands::asr_model_status,
+            commands::asr_model_download,
+            commands::asr_test_connection,
             commands::agent_sessions_list,
             commands::agent_sessions_get,
             commands::agent_sessions_delete,
