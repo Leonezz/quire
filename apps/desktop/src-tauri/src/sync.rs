@@ -39,10 +39,17 @@ pub async fn sync_source(
             let page = fetch_page(http, &url, FEED_ACCEPT)
                 .await
                 .map_err(|e| (e.code, e.message))?;
-            let parsed = normalizer
+            let mut parsed = normalizer
                 .parse_feed(&page.bytes, &page.media_type, &source.locator, false)
                 .await
                 .map_err(|e| ("SYNC_FAILED".into(), e))?;
+            if source.kind == "youtube"
+                && source.config.as_ref().and_then(|c| c.ignore_shorts) != Some(false)
+            {
+                parsed.items.retain(|it| {
+                    !crate::youtube::is_youtube_short_item(&it.link, &it.title, it.signals.duration_sec)
+                });
+            }
             Ok((parsed.title, parsed.site_url, parsed.items))
         }
     }
@@ -364,6 +371,9 @@ async fn material_of_item(
     let meta = items.meta(&item.id).ok().flatten();
     let res = if item.source_kind == "arxiv" {
         materialize_arxiv(item, store, meta).await
+    } else if item.source_kind == "youtube" || item.signals.video_id.is_some() {
+        let content = items.content(&item.id).ok().flatten();
+        store.materialize_youtube_item(item, content, meta).await
     } else if item.signals.enclosure_url.is_some() && item.signals.media.as_deref() == Some("audio") {
         let content = items.content(&item.id).ok().flatten();
         store.materialize_podcast_item(item, content, meta).await

@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 import { useState } from "react";
-import { CompanionPlayer, NowPlayingBar } from "../primitives/MediaPlayer";
+import { CompanionPlayer, NowPlayingBar, VideoDockFrame } from "../primitives/MediaPlayer";
 
 const meta = {
   title: "Primitives/MediaPlayer",
@@ -17,10 +17,16 @@ function PlayerHarness() {
   const [speed, setSpeed] = useState(1);
   const [following, setFollowing] = useState(true);
   const [drifted, setDrifted] = useState(true);
+  const [videoOpen, setVideoOpen] = useState(false);
   const [cached, setCached] = useState(false);
 
   return (
     <div className="grid w-[620px] gap-4">
+      {videoOpen ? (
+        <VideoDockFrame title="Why Pre-training Scaling Changed Shape" onClose={() => setVideoOpen(false)}>
+          <div className="flex h-full items-center justify-center text-[12px] text-white/80">16:9 synced stage</div>
+        </VideoDockFrame>
+      ) : null}
       <CompanionPlayer
         playing={playing}
         positionSec={position}
@@ -29,6 +35,8 @@ function PlayerHarness() {
         chapterTitle="Why Pre-training Scaling Changed Shape"
         following={following}
         drifted={drifted}
+        hasVideo
+        videoOpen={videoOpen}
         cacheState={cached ? { status: "cached" } : { status: "none" }}
         onTogglePlay={() => setPlaying((p) => !p)}
         onSeek={setPosition}
@@ -39,6 +47,7 @@ function PlayerHarness() {
           setFollowing((f) => !f);
         }}
         onJumpToCurrent={() => setDrifted(false)}
+        onToggleVideo={() => setVideoOpen((v) => !v)}
         onToggleCache={() => setCached((c) => !c)}
       />
       <div className="w-[220px]">
@@ -88,5 +97,12 @@ export const ControlsAndKeyboard: Story = {
     await userEvent.click(within(menu).getByRole("menuitemradio", { name: "1.5×" }));
     await waitFor(() => expect(body.queryByRole("menu")).toBeNull());
     await expect(within(player).getByRole("button", { name: "Playback speed: 1.5×" })).toBeInTheDocument();
+
+    // Collapsible video dock toggle
+    await userEvent.click(within(player).getByRole("button", { name: "Show video (m)" }));
+    const dock = canvas.getByRole("region", { name: "Companion video" });
+    await expect(dock).toBeInTheDocument();
+    await userEvent.click(within(dock).getByRole("button", { name: "Hide video (m)" }));
+    await expect(canvas.queryByRole("region", { name: "Companion video" })).toBeNull();
   },
 };

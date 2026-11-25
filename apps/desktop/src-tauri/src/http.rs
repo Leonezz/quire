@@ -642,12 +642,18 @@ async fn detect_apple_podcast(
             .filter(|&ms| ms > 0)
             .map(|ms| (ms / 1000) as u32);
         let feed = feed_url.and_then(|f| assert_public_http_url(f).ok().map(|u| u.to_string()));
+        let feed_title = show
+            .and_then(|s| s.collection_name.as_deref())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from);
         return Ok(SourceDetection::Episode {
             url: page_url.to_string(),
             media_kind: "audio".into(),
             title,
             duration_sec,
             feed,
+            feed_title,
         });
     }
 
@@ -690,6 +696,9 @@ pub async fn detect_source(client: &reqwest::Client, input: &str) -> Result<Sour
     if let Some(apple) = parse_apple_podcast_url(url.as_str()) {
         return detect_apple_podcast(client, &apple, url.as_str()).await;
     }
+    if let Some(yt_target) = crate::youtube::classify_youtube_url(&url) {
+        return crate::youtube::detect_youtube_target(client, yt_target).await;
+    }
     if is_audio_stream_url(&url) {
         let seg_title = url
             .path_segments()
@@ -702,6 +711,7 @@ pub async fn detect_source(client: &reqwest::Client, input: &str) -> Result<Sour
             title: seg_title,
             duration_sec: None,
             feed: None,
+            feed_title: None,
         });
     }
     let page = fetch_page(client, &url, FEED_ACCEPT).await?;
@@ -782,7 +792,12 @@ pub fn subscription_of(detection: &SourceDetection) -> Option<(String, String, S
             let fallback = Url::parse(feed).ok().and_then(|u| u.host_str().map(String::from)).unwrap_or_else(|| feed.clone());
             Some(("feed".into(), feed.clone(), fallback))
         }
-        SourceDetection::Episode { media_kind, feed: Some(feed), .. } => {
+        SourceDetection::Episode {
+            media_kind,
+            feed: Some(feed),
+            feed_title,
+            ..
+        } => {
             let fallback = Url::parse(feed).ok().and_then(|u| u.host_str().map(String::from)).unwrap_or_else(|| feed.clone());
             let kind = if media_kind == "audio" {
                 "podcast"
@@ -791,7 +806,8 @@ pub fn subscription_of(detection: &SourceDetection) -> Option<(String, String, S
             } else {
                 "feed"
             };
-            Some((kind.into(), feed.clone(), fallback))
+            let title = feed_title.clone().filter(|s| !s.trim().is_empty()).unwrap_or(fallback);
+            Some((kind.into(), feed.clone(), title))
         }
         SourceDetection::Page { feed: None, .. } | SourceDetection::Episode { feed: None, .. } => None,
     }

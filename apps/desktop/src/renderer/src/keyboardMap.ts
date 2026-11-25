@@ -51,6 +51,7 @@ export const KEYBOARD_MAP: ShortcutGroup[] = [
     { keys: "n", action: "Notes panel; n again closes it" },
     { keys: "k · j · l", action: "Play or pause · Skip back · Skip forward (podcasts and videos; Space stays page-down)" },
     { keys: "[ · ]", action: "Slower · Faster playback speed (±0.25×)" },
+    { keys: "m", action: "Show or hide the companion video stage" },
     { keys: "⌘F", action: "Find in page" },
     { keys: "⌘J", action: "Agent panel: ask about this material" },
     { keys: REPORT_SHORTCUT, action: "Report a rendering problem; the selected passage, if any, is attached" },

@@ -18,6 +18,13 @@ const CONCURRENCY = 2;
 
 interface Fetched { title: string; siteUrl?: string; items: ItemInput[] }
 
+export function isYoutubeShortItem(item: Pick<ItemInput, "link" | "title" | "signals">): boolean {
+  if (item.link.toLowerCase().includes("/shorts/")) return true;
+  if (item.signals.durationSec !== undefined && item.signals.durationSec > 0 && item.signals.durationSec <= 60) return true;
+  const lower = item.title.toLowerCase();
+  return lower.includes("#shorts") || lower.endsWith("#short");
+}
+
 async function fetchEntries(source: SourceRecord, deps: SyncDeps): Promise<Fetched> {
   const now = deps.now ?? (() => new Date());
   if (source.kind === "arxiv") {
@@ -28,7 +35,10 @@ async function fetchEntries(source: SourceRecord, deps: SyncDeps): Promise<Fetch
   }
   const page = await deps.fetch(assertPublicHttpUrl(source.locator), FEED_ACCEPT);
   const feed = parseFeed(page.bytes, page.mediaType, source.locator, now);
-  return { title: feed.title, ...(feed.siteUrl ? { siteUrl: feed.siteUrl } : {}), items: feed.items };
+  const items = source.kind === "youtube" && source.config?.ignoreShorts !== false
+    ? feed.items.filter((item) => !isYoutubeShortItem(item))
+    : feed.items;
+  return { title: feed.title, ...(feed.siteUrl ? { siteUrl: feed.siteUrl } : {}), items };
 }
 
 /** Fetches, parses and upserts one source, then writes its health. A failure is stored on the source and returned, never dropped. */

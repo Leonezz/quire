@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { CompanionPlayer, Presence, SplitGroup, SplitPanel, TocRail, useSplitSizes, type MediaCacheBadgeState } from "@read/ui";
+import { CompanionPlayer, Presence, SplitGroup, SplitPanel, TocRail, VideoDockFrame, useSplitSizes, type MediaCacheBadgeState } from "@read/ui";
 import { ColumnSeparator, PAGE_MIN, PANEL_DEFAULT, PANEL_MAX, PANEL_MIN } from "./ContentPane";
 import { ReaderToolbar } from "./ReaderToolbar";
 import { installTextAnnotationHighlights, renderedTextQuoteSelection, resolveTextQuoteAnchor, resolveTextQuoteRange, textAnnotationHighlightStyles, useDocumentReadingPosition, type TextAnnotationPlacement } from "@read/reader";
@@ -20,6 +20,7 @@ import { read } from "./api";
 import type { MaterialRecord, MaterialViewContent } from "../../shared/contracts";
 import { durationLabel } from "./format";
 import { activeChapterOf, mediaStore, useMediaPlayback } from "./mediaStore";
+import { VIDEO_DOCK_SLOT_ID } from "./YoutubeBridgeHost";
 import { mirroredViews, resolveViewAnnotations } from "./mirroredAnnotations";
 import { TextViewBanner } from "./TextViewBanner";
 import { activeParagraphForTime, timeRangeForQuote } from "./transcriptAnchors";
@@ -365,19 +366,31 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
       if (event.key === "t" && !event.metaKey && !event.ctrlKey && !event.altKey) { event.preventDefault(); setTocPinned((pinned) => !pinned); }
       if (event.key === "n" && !event.metaKey && !event.ctrlKey && !event.altKey) { event.preventDefault(); setPanel((open) => (open === "notes" ? null : "notes")); }
       if (event.key === "i" && !event.metaKey && !event.ctrlKey && !event.altKey) { event.preventDefault(); setPanel((open) => (open === "info" ? null : "info")); }
+      if (event.key === "v" && !event.metaKey && !event.ctrlKey && !event.altKey && views.views.length > 1) {
+        event.preventDefault();
+        const idx = views.views.findIndex((entry) => entry.id === view);
+        const next = views.views[(idx + 1) % views.views.length];
+        if (next) views.select(next.id);
+        return;
+      }
       if (hasMedia && !event.metaKey && !event.ctrlKey && !event.altKey) {
         if (event.key === "k") { event.preventDefault(); void mediaStore.togglePlay(material); return; }
         if (event.key === "j") { event.preventDefault(); mediaStore.skip(material.media?.kind === "video" ? -10 : -15, material); return; }
         if (event.key === "l") { event.preventDefault(); mediaStore.skip(material.media?.kind === "video" ? 10 : 30, material); return; }
         if (event.key === "[") { event.preventDefault(); mediaStore.stepPlaybackSpeed(-0.25); return; }
         if (event.key === "]") { event.preventDefault(); mediaStore.stepPlaybackSpeed(0.25); return; }
+        if (event.key === "m" && material.media?.kind === "video") {
+          event.preventDefault();
+          void mediaStore.hydrateMaterial(material).then(() => mediaStore.toggleVideoOpen());
+          return;
+        }
       }
       if ((event.metaKey || event.ctrlKey) && event.key === "j") { event.preventDefault(); setPanel((open) => (open === "agent" ? null : "agent")); }
       if ((event.metaKey || event.ctrlKey) && event.key === "f") { event.preventDefault(); setFindOpen(true); }
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [panel, onBack, report, captureSelection, hasMedia, material]);
+  }, [panel, onBack, report, captureSelection, hasMedia, material, view, views]);
 
   // A stable resolver: the surface keys its image cache by resolver identity, so a new function per render
   // would re-request every image on each scroll tick (flicker and layout jumps).
@@ -410,14 +423,33 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
     void op.then(onMaterialSaved).catch(() => undefined);
   }, [material.id, material.media, onMaterialSaved]);
 
+  const isVideo = material.media?.kind === "video";
+  const videoOpen = isVideo && isCurrentMedia && playback.videoOpen;
+  const openVideoAt = useCallback((seconds: number) => {
+    setDrifted(false);
+    void mediaStore.seekTo(seconds, material, true).then(() => {
+      mediaStore.setVideoOpen(true);
+    });
+  }, [material]);
+
   return (
     <div className="grid h-full grid-cols-[minmax(0,1fr)] grid-rows-[52px_minmax(0,1fr)]">
       <ReaderToolbar title={material.title} subtitle={subtitle} badge={quality} onReport={reportFromChrome} onRebuild={onRebuild} tocPinned={tocPinned} onTocChange={setTocPinned} panel={panel} onPanelChange={setPanel} prefs={prefs} onPrefsChange={setPrefs} trailing={trailing} views={viewSwitch} />
 
       <SplitGroup id="reader" aria-label="Reader and panel" className="h-full">
       <SplitPanel id="page" minSize={PAGE_MIN}>
-      <main key={material.id} className="reader-enter relative grid h-full min-h-0 grid-rows-[2px_minmax(0,1fr)] overflow-hidden bg-content">
+      <main key={material.id} className="reader-enter relative grid h-full min-h-0 grid-rows-[2px_auto_minmax(0,1fr)] overflow-hidden bg-content">
         <div className="bg-separator-soft">{prefs.focus ? null : <i className="block h-full bg-accent opacity-80" style={{ width: `${progress}%` }} />}</div>
+        <Presence show={videoOpen}>
+          {videoOpen ? (
+            <VideoDockFrame
+              title={mediaChapter ?? material.title}
+              onClose={() => mediaStore.setVideoOpen(false)}
+            >
+              <div id={VIDEO_DOCK_SLOT_ID} className="h-full w-full" />
+            </VideoDockFrame>
+          ) : null}
+        </Presence>
         <Presence show={findOpen}>{findOpen ? <FindBar root={bodyRef.current} generation={bodyGeneration} onClose={() => setFindOpen(false)} /> : null}</Presence>
         <SelectionToolbar root={bodyRef.current} viewport={viewportRef.current} capture={captureSelection} onHighlight={onHighlight} onNote={(capture) => void onNote(capture)} onCopy={onCopyCapture} onAsk={(capture) => { setAsked(capture); setPanel("agent"); }} onReport={(capture, rect) => report(reportSelectionOf(capture, rect))} onListen={onListenCapture} />
         {outline.length > 1 ? (
@@ -426,7 +458,7 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
           </div>
         ) : null}
         <ReaderArticle material={material} content={artifactVersions.content} prefs={prefs} resolveImage={resolveImage} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} viewportRef={viewportRef} bodyRef={bodyRef} onShowSources={() => setPanel("info")} onFixArtifact={material.origin === "agent" ? fixArtifact : undefined}
-          activeParagraphIndex={activeParagraphIndex} onSeekTime={hasMedia ? seekAndPlay : undefined}
+          activeParagraphIndex={activeParagraphIndex} onSeekTime={hasMedia ? seekAndPlay : undefined} onSelectKeyframeTime={isVideo ? openVideoAt : undefined}
           bylineExtra={material.origin === "agent" ? null : <a href={material.finalUrl} onClick={(event) => { event.preventDefault(); onOpenLink(material.finalUrl); }}>Open original ↗</a>}
           banner={content.view === "text" && content.report
             ? <TextViewBanner report={content.report} onOpenPdf={() => views.select("pdf")} />
@@ -452,6 +484,8 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
               chapterTitle={mediaChapter}
               following={isCurrentMedia ? playback.following : true}
               drifted={drifted}
+              hasVideo={isVideo}
+              videoOpen={videoOpen}
               cacheState={cacheState}
               onTogglePlay={() => void mediaStore.togglePlay(material)}
               onSeek={(sec) => { setDrifted(false); void mediaStore.seekTo(sec, material, false); }}
@@ -465,6 +499,9 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
                 }
               } : undefined}
               onJumpToCurrent={transcriptContent?.timeAnchors?.length ? jumpToCurrentMedia : undefined}
+              onToggleVideo={isVideo ? () => {
+                void mediaStore.hydrateMaterial(material).then(() => mediaStore.toggleVideoOpen());
+              } : undefined}
               onToggleCache={toggleMediaCache}
             />
           </div>

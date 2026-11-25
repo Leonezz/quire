@@ -8,6 +8,7 @@ import {
   ArrowDownToLine,
   Check,
   LocateFixed,
+  MonitorPlay,
   Pause,
   Play,
   RotateCcw,
@@ -49,6 +50,9 @@ export interface CompanionPlayerProps {
   following?: boolean | undefined;
   /** True when the reader manually scrolled away during playback; reveals the return button. */
   drifted?: boolean | undefined;
+  /** Video materials: shows the toggle for the collapsible companion video dock (`m`). */
+  hasVideo?: boolean | undefined;
+  videoOpen?: boolean | undefined;
   cacheState?: MediaCacheBadgeState | undefined;
   onTogglePlay: () => void;
   onSeek: (seconds: number) => void;
@@ -56,6 +60,7 @@ export interface CompanionPlayerProps {
   onSpeedChange: (speed: number) => void;
   onToggleFollow?: (() => void) | undefined;
   onJumpToCurrent?: (() => void) | undefined;
+  onToggleVideo?: (() => void) | undefined;
   onToggleCache?: (() => void) | undefined;
   className?: string | undefined;
 }
@@ -74,6 +79,8 @@ export function CompanionPlayer({
   chapterTitle,
   following = true,
   drifted = false,
+  hasVideo = false,
+  videoOpen = false,
   cacheState,
   onTogglePlay,
   onSeek,
@@ -81,6 +88,7 @@ export function CompanionPlayer({
   onSpeedChange,
   onToggleFollow,
   onJumpToCurrent,
+  onToggleVideo,
   onToggleCache,
   className,
 }: CompanionPlayerProps) {
@@ -199,6 +207,22 @@ export function CompanionPlayer({
             )}
           </Menu>
         </MenuTrigger>
+
+        {hasVideo && onToggleVideo ? (
+          <ToggleButton
+            aria-label={videoOpen ? "Hide video (m)" : "Show video (m)"}
+            isSelected={videoOpen}
+            onChange={() => onToggleVideo()}
+            className={cx(
+              "inline-flex h-7 min-w-7 items-center justify-center rounded-pill px-2 text-[11.5px] font-medium outline-none transition-colors duration-100",
+              "text-label-2 data-[hovered]:bg-fill data-[hovered]:text-label",
+              "data-[selected]:bg-accent-soft data-[selected]:text-accent-text",
+              "data-[focus-visible]:ring-[3px] data-[focus-visible]:ring-accent-ring",
+            )}
+          >
+            <Icon of={MonitorPlay} size="sm" />
+          </ToggleButton>
+        ) : null}
 
         {onToggleFollow ? (
           <ToggleButton
@@ -320,6 +344,52 @@ export function NowPlayingBar({
           <div className="h-full bg-accent" style={{ width: `${progress}%` }} />
         </div>
       ) : null}
+    </div>
+  );
+}
+
+export interface VideoDockFrameProps {
+  title?: string | undefined;
+  onClose: () => void;
+  children?: React.ReactNode;
+  className?: string | undefined;
+}
+
+/**
+ * Collapsible top video stage (`m`) for video materials. Bounded in height so the transcript
+ * stays the primary reading surface rather than turning the page into a full-screen theater.
+ */
+export function VideoDockFrame({
+  title,
+  onClose,
+  children,
+  className,
+}: VideoDockFrameProps) {
+  return (
+    <div
+      role="region"
+      aria-label="Companion video"
+      className={cx(
+        "border-b border-separator-soft bg-surface px-6 py-2.5",
+        className,
+      )}
+    >
+      <div className="mx-auto flex max-w-[680px] flex-col gap-1.5">
+        <div className="flex items-center justify-between gap-2 text-[11.5px] text-label-2">
+          <span className="min-w-0 truncate font-medium">{title ?? "Video"}</span>
+          <Button
+            variant="quiet"
+            size="sm"
+            aria-label="Hide video (m)"
+            onPress={onClose}
+          >
+            <Icon of={X} size="sm" />
+          </Button>
+        </div>
+        <div className="mx-auto aspect-video max-h-[240px] w-full max-w-[426px] overflow-hidden rounded-control bg-[#0b0c0f] shadow-sm">
+          {children}
+        </div>
+      </div>
     </div>
   );
 }

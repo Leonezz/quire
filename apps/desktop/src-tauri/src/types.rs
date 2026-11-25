@@ -4,6 +4,7 @@ use std::collections::HashMap;
 pub const IMAGE_SCHEME: &str = "quire-image";
 pub const ARTIFACT_SCHEME: &str = "quire-artifact";
 pub const MEDIA_SCHEME: &str = "quire-media";
+pub const PLAYER_SCHEME: &str = "quire-player";
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -378,6 +379,13 @@ pub struct CorpusImportResult {
     pub failed: Vec<CorpusFailure>,
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceConfig {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ignore_shorts: Option<bool>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SourceRecord {
@@ -387,6 +395,8 @@ pub struct SourceRecord {
     pub title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub site_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<SourceConfig>,
     pub added_at: String,
     pub interval_minutes: u32,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -510,6 +520,8 @@ pub enum SourceDetection {
         duration_sec: Option<u32>,
         #[serde(skip_serializing_if = "Option::is_none")]
         feed: Option<String>,
+        #[serde(rename = "feedTitle", skip_serializing_if = "Option::is_none")]
+        feed_title: Option<String>,
     },
 }
 

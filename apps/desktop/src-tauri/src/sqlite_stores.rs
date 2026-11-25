@@ -2,7 +2,7 @@ use crate::db::Db;
 use crate::types::{
     AgentContext, AgentSession, AgentSessionSummary, AgentToolRow, AgentTurnRecord, Creator,
     ItemRecord, ItemSignals, MaterialMeta, MediaState, ReaderPayload, ReadingEvent, ReadingStats,
-    SourceRecord, TagCount,
+    SourceConfig, SourceRecord, TagCount,
 };
 use chrono::{Datelike, Duration, Local, TimeZone, Utc};
 use rand::RngCore;
@@ -472,7 +472,7 @@ pub struct SourceStore {
     db: Arc<Db>,
 }
 
-const SOURCE_COLS: &str = "id, kind, locator, title, site_url, added_at, interval_minutes, last_sync_at, last_success_at, last_error, failure_count, paused_at";
+const SOURCE_COLS: &str = "id, kind, locator, title, site_url, added_at, interval_minutes, last_sync_at, last_success_at, last_error, failure_count, paused_at, config";
 
 fn health_of_conn(conn: &rusqlite::Connection, source_id: &str) -> Result<(u32, u32, f64), String> {
     let since = (Utc::now() - Duration::days(28)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
@@ -489,13 +489,28 @@ fn health_of_conn(conn: &rusqlite::Connection, source_id: &str) -> Result<(u32, 
 
 fn row_to_source(conn: &rusqlite::Connection, row: &rusqlite::Row<'_>) -> Result<SourceRecord, String> {
     let id: String = row.get(0).map_err(|e| e.to_string())?;
+    let kind: String = row.get(1).map_err(|e| e.to_string())?;
+    let config_raw: Option<String> = row.get(12).ok();
+    let mut parsed_cfg: SourceConfig = config_raw
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default();
+    if kind == "youtube" && parsed_cfg.ignore_shorts.is_none() {
+        parsed_cfg.ignore_shorts = Some(true);
+    }
+    let config = if parsed_cfg.ignore_shorts.is_some() {
+        Some(parsed_cfg)
+    } else {
+        None
+    };
     let (item_count, kept_count, weekly_rate) = health_of_conn(conn, &id)?;
     Ok(SourceRecord {
         id,
-        kind: row.get(1).map_err(|e| e.to_string())?,
+        kind,
         locator: row.get(2).map_err(|e| e.to_string())?,
         title: row.get(3).map_err(|e| e.to_string())?,
         site_url: row.get(4).map_err(|e| e.to_string())?,
+        config,
         added_at: row.get(5).map_err(|e| e.to_string())?,
         interval_minutes: row.get::<_, i64>(6).map_err(|e| e.to_string())?.max(1) as u32,
         last_sync_at: row.get(7).map_err(|e| e.to_string())?,
@@ -521,10 +536,15 @@ impl SourceStore {
         }
         let id = random_hex_16();
         let added_at = now_iso();
+        let default_cfg = if kind == "youtube" {
+            r#"{"ignoreShorts":true}"#
+        } else {
+            "{}"
+        };
         self.db.with_conn(|conn| {
             conn.execute(
-                &format!("INSERT INTO sources ({SOURCE_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 30, NULL, NULL, NULL, 0, NULL)"),
-                params![id, kind, locator, title, site_url, added_at],
+                &format!("INSERT INTO sources ({SOURCE_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 30, NULL, NULL, NULL, 0, NULL, ?7)"),
+                params![id, kind, locator, title, site_url, added_at, default_cfg],
             )
             .map_err(|e| e.to_string())?;
             conn.query_row(&format!("SELECT {SOURCE_COLS} FROM sources WHERE id = ?1"), params![id], |r| Ok(row_to_source(conn, r)))

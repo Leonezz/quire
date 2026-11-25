@@ -187,6 +187,8 @@ export interface CorpusImportResult {
 export const IMAGE_SCHEME = "quire-image";
 /** The scheme companion audio/video streams from, proxied with Range support by main. */
 export const MEDIA_SCHEME = "quire-media";
+/** The scheme sandboxed companion video embeds run under (`quire-player://youtube/<videoId>`). */
+export const PLAYER_SCHEME = "quire-player";
 
 export interface ReadApi extends ReadApiM1, ReadApiM2, ReadApiM3, ReadApiViews, ReadApiUpdates, ReadApiFeedback, ReadApiMedia {
   version: string;
@@ -221,6 +223,11 @@ export interface ReadApi extends ReadApiM1, ReadApiM2, ReadApiM3, ReadApiViews, 
 
 export type SourceKind = "feed" | "arxiv" | "podcast" | "youtube";
 
+export interface SourceConfig {
+  /** YouTube channels & playlists: skip Shorts (`<= 60s` or `/shorts/`) during sync (default `true`). */
+  ignoreShorts?: boolean;
+}
+
 /** A subscription. `locator` is the feed URL, or the arXiv category (e.g. "cs.CL") for kind "arxiv". */
 export interface SourceRecord {
   id: string;
@@ -229,6 +236,7 @@ export interface SourceRecord {
   title: string;
   /** The site the feed belongs to, when the feed declares one. */
   siteUrl?: string;
+  config?: SourceConfig;
   addedAt: string;
   /** Refresh cadence; the scheduler skips a source whose last sync is younger than this. */
   intervalMinutes: number;
@@ -305,7 +313,7 @@ export type SourceDetection =
   /** A page to read; `feed` is the feed it declares, offered as a subscription beside reading. */
   | { kind: "page"; url: string; feed?: string }
   /** A single podcast episode or video to read now, with its show or channel feed offered alongside when known. */
-  | { kind: "episode"; url: string; mediaKind: "audio" | "video"; title?: string; durationSec?: number; feed?: string };
+  | { kind: "episode"; url: string; mediaKind: "audio" | "video"; title?: string; durationSec?: number; feed?: string; feedTitle?: string };
 
 export type AddSourceResult =
   | { ok: true; source: SourceRecord; added: number }

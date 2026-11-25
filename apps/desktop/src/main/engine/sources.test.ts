@@ -155,6 +155,51 @@ describe("detectSource", () => {
     });
   });
 
+  it("recognises YouTube channels, playlists, and single video links with channel subscription offer", async () => {
+    const channelHtml = `<!doctype html><html><head><title>Andrej Karpathy - YouTube</title>
+      <link rel="alternate" type="application/rss+xml" title="RSS" href="https://www.youtube.com/feeds/videos.xml?channel_id=UCXUPKJO5MZQN11PqgIvyuvQ">
+      </head><body></body></html>`;
+    const watchHtml = `<!doctype html><html><head><title>Intro to LLMs - YouTube</title></head><body>
+      <script>var ytInitialPlayerResponse = {"videoDetails":{"videoId":"zjkBMFhNj_g","title":"Intro to Large Language Models","lengthSeconds":"3600","channelId":"UCXUPKJO5MZQN11PqgIvyuvQ","author":"Andrej Karpathy"}};</script>
+      </body></html>`;
+    const atomXml = `<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom"><title>Deep Learning Lectures</title></feed>`;
+
+    const fetch = answering({
+      "https://www.youtube.com/@AndrejKarpathy": { bytes: channelHtml, mediaType: "text/html" },
+      "https://www.youtube.com/watch?v=zjkBMFhNj_g": { bytes: watchHtml, mediaType: "text/html" },
+      "https://www.youtube.com/feeds/videos.xml?playlist_id=PLAqhIrjkxbuWI23v9cThsA9GvCAUhRvKZ": { bytes: atomXml, mediaType: "application/atom+xml" },
+    });
+
+    expect(await detectSource("https://www.youtube.com/@AndrejKarpathy", fetch)).toEqual({
+      kind: "youtube",
+      url: "https://www.youtube.com/feeds/videos.xml?channel_id=UCXUPKJO5MZQN11PqgIvyuvQ",
+      channelId: "UCXUPKJO5MZQN11PqgIvyuvQ",
+      title: "Andrej Karpathy",
+    });
+
+    expect(await detectSource("https://www.youtube.com/playlist?list=PLAqhIrjkxbuWI23v9cThsA9GvCAUhRvKZ", fetch)).toEqual({
+      kind: "youtube",
+      url: "https://www.youtube.com/feeds/videos.xml?playlist_id=PLAqhIrjkxbuWI23v9cThsA9GvCAUhRvKZ",
+      title: "Deep Learning Lectures",
+    });
+
+    const videoDet = await detectSource("https://youtu.be/zjkBMFhNj_g?si=xyz", fetch);
+    expect(videoDet).toEqual({
+      kind: "episode",
+      url: "https://www.youtube.com/watch?v=zjkBMFhNj_g",
+      mediaKind: "video",
+      title: "Intro to Large Language Models",
+      durationSec: 3600,
+      feed: "https://www.youtube.com/feeds/videos.xml?channel_id=UCXUPKJO5MZQN11PqgIvyuvQ",
+      feedTitle: "Andrej Karpathy",
+    });
+    expect(subscriptionOf(videoDet)).toEqual({
+      kind: "youtube",
+      locator: "https://www.youtube.com/feeds/videos.xml?channel_id=UCXUPKJO5MZQN11PqgIvyuvQ",
+      title: "Andrej Karpathy",
+    });
+  });
+
   it("reports a plain page and refuses private hosts", async () => {
     const fetch = answering({ "https://example.test/post": { bytes: "<!doctype html><html><head><title>A post</title></head><body>hi</body></html>", mediaType: "text/html" } });
     expect(await detectSource("https://example.test/post", fetch)).toEqual({ kind: "page", url: "https://example.test/post" });

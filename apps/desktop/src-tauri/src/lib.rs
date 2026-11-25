@@ -14,6 +14,7 @@ pub mod sqlite_stores;
 pub mod sync;
 pub mod types;
 pub mod updates;
+pub mod youtube;
 
 use agent::AgentService;
 use codex::CodexClient;
@@ -34,8 +35,9 @@ use sync::SyncCoordinator;
 use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::window::{Effect, EffectState, EffectsBuilder};
 use tauri::{Emitter, Manager, RunEvent};
-use types::{AgentEvent, FeedbackAppInfo, ARTIFACT_SCHEME, IMAGE_SCHEME, MEDIA_SCHEME};
+use types::{AgentEvent, FeedbackAppInfo, ARTIFACT_SCHEME, IMAGE_SCHEME, MEDIA_SCHEME, PLAYER_SCHEME};
 use updates::UpdateService;
+use youtube::player_protocol_response;
 
 fn default_data_dir(home: &str) -> PathBuf {
     if let Ok(custom) = std::env::var("QUIRE_DATA_DIR") {
@@ -140,6 +142,10 @@ pub fn run() {
                 let resp = media_protocol_response(&request, &store, &media_cache).await;
                 responder.respond(resp);
             });
+        })
+        .register_asynchronous_uri_scheme_protocol(PLAYER_SCHEME, |_ctx, request, responder| {
+            let url = request.uri().to_string();
+            responder.respond(player_protocol_response(&url));
         })
         .setup(|app| {
             let handle = app.handle().clone();

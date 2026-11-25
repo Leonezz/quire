@@ -13,6 +13,7 @@ import { QueueView } from "./QueueView";
 import { SearchPalette } from "./SearchPalette";
 import { SettingsSheet, type SettingsSection } from "./SettingsSheet";
 import { SourcesView } from "./SourcesView";
+import { YoutubeBridgeHost } from "./YoutubeBridgeHost";
 import { agentStore, onAgentOpenSession, useAgentRunning } from "./agentStore";
 import { updateStore } from "./updateStore";
 import { read } from "./api";
@@ -282,6 +283,7 @@ export function App() {
       <SearchPalette open={searchOpen} onOpenChange={setSearchOpen} onOpenMaterial={showMaterial} onOpenItem={(id) => void openItemHit(id)} />
       <SettingsSheet open={settings.open} section={settings.section} onClose={() => setSettings({ open: false })} onOpenLink={openLink} />
     </SplitGroup>
+    <YoutubeBridgeHost />
     </div>
   );
 }

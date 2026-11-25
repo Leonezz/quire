@@ -1,8 +1,8 @@
 import { randomBytes } from "node:crypto";
-import type { SourceDetection, SourceKind, SourceRecord } from "../../shared/contracts";
+import type { SourceConfig, SourceDetection, SourceKind, SourceRecord } from "../../shared/contracts";
 import { arxivCategoryFromInput, arxivSourceTitle } from "./arxiv";
 import type { Database } from "./db";
-import { FEED_ACCEPT, FetchError, assertPublicHttpUrl, type Fetcher } from "./fetch";
+import { FEED_ACCEPT, FetchError, PAGE_ACCEPT, assertPublicHttpUrl, type Fetcher } from "./fetch";
 import type { ItemStore } from "./items";
 
 export const DEFAULT_INTERVAL_MINUTES = 30;
@@ -14,6 +14,7 @@ export interface SourceInput {
   locator: string;
   title: string;
   siteUrl?: string;
+  config?: SourceConfig;
 }
 
 export interface SourceHealthUpdate {
@@ -25,7 +26,18 @@ export interface SourceHealthUpdate {
   siteUrl?: string;
 }
 
-const COLUMNS = "id, kind, locator, title, site_url, added_at, interval_minutes, last_sync_at, last_success_at, last_error, failure_count, paused_at";
+const COLUMNS = "id, kind, locator, title, site_url, added_at, interval_minutes, last_sync_at, last_success_at, last_error, failure_count, paused_at, config";
+
+function parseSourceConfig(kind: SourceKind, raw: unknown): SourceConfig | undefined {
+  let cfg: SourceConfig = {};
+  if (typeof raw === "string" && raw.trim()) {
+    try { cfg = JSON.parse(raw) as SourceConfig; } catch { cfg = {}; }
+  }
+  if (kind === "youtube" && cfg.ignoreShorts === undefined) {
+    cfg = { ...cfg, ignoreShorts: true };
+  }
+  return cfg.ignoreShorts !== undefined ? cfg : undefined;
+}
 
 /** Subscriptions. Item counts are read live from the item store so a record is never stale. */
 export class SourceStore {
@@ -33,9 +45,12 @@ export class SourceStore {
 
   private toRecord(row: Row): SourceRecord {
     const optional = (column: string, key: keyof SourceRecord) => (typeof row[column] === "string" ? { [key]: row[column] } : {});
+    const kind = row.kind as SourceKind;
+    const config = parseSourceConfig(kind, row.config);
     return {
-      id: row.id as string, kind: row.kind as SourceKind, locator: row.locator as string, title: row.title as string,
+      id: row.id as string, kind, locator: row.locator as string, title: row.title as string,
       addedAt: row.added_at as string, intervalMinutes: row.interval_minutes as number, failureCount: row.failure_count as number,
+      ...(config ? { config } : {}),
       ...optional("site_url", "siteUrl"), ...optional("last_sync_at", "lastSyncAt"), ...optional("last_success_at", "lastSuccessAt"),
       ...optional("last_error", "lastError"), ...optional("paused_at", "pausedAt"),
       ...this.items.healthOf(row.id as string),
@@ -46,8 +61,9 @@ export class SourceStore {
   add(input: SourceInput): SourceRecord {
     if (this.byLocator(input.locator)) throw new Error(`Already subscribed to ${input.title || input.locator}.`);
     const id = randomBytes(8).toString("hex");
-    this.db.prepare(`INSERT INTO sources (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 0, NULL)`)
-      .run(id, input.kind, input.locator, input.title, input.siteUrl ?? null, this.now().toISOString(), DEFAULT_INTERVAL_MINUTES);
+    const defaultCfg = input.config ?? (input.kind === "youtube" ? { ignoreShorts: true } : {});
+    this.db.prepare(`INSERT INTO sources (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, 0, NULL, ?)`)
+      .run(id, input.kind, input.locator, input.title, input.siteUrl ?? null, this.now().toISOString(), DEFAULT_INTERVAL_MINUTES, JSON.stringify(defaultCfg));
     return this.get(id) as SourceRecord;
   }
 
@@ -222,6 +238,121 @@ function offeredFeed(url: string): string | undefined {
   }
 }
 
+const YT_VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
+
+function isYoutubeHost(hostname: string): boolean {
+  const h = hostname.toLowerCase();
+  return h === "youtu.be" || h === "youtube.com" || h.endsWith(".youtube.com");
+}
+
+export function parseYoutubeVideoId(raw: string): string | undefined {
+  let u: URL;
+  try { u = new URL(raw.trim()); } catch { return undefined; }
+  if (!isYoutubeHost(u.hostname)) return undefined;
+  if (u.hostname.toLowerCase() === "youtu.be") {
+    const seg = u.pathname.split("/").filter(Boolean)[0];
+    return seg && YT_VIDEO_ID.test(seg) ? seg : undefined;
+  }
+  if (u.pathname === "/watch") {
+    const v = u.searchParams.get("v");
+    return v && YT_VIDEO_ID.test(v) ? v : undefined;
+  }
+  for (const prefix of ["/live/", "/shorts/", "/embed/", "/v/"]) {
+    if (u.pathname.startsWith(prefix)) {
+      const seg = u.pathname.slice(prefix.length).split("/")[0];
+      if (seg && YT_VIDEO_ID.test(seg)) return seg;
+    }
+  }
+  return undefined;
+}
+
+async function detectYoutubeUrl(url: URL, fetch: Fetcher): Promise<SourceDetection | undefined> {
+  if (!isYoutubeHost(url.hostname)) return undefined;
+  const videoId = parseYoutubeVideoId(url.toString());
+  if (videoId) {
+    const watchUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    try {
+      const page = await fetch(new URL(watchUrl), PAGE_ACCEPT);
+      const html = decodeHead(page.bytes, 512 * 1024);
+      const rawTitle = /"videoDetails"\s*:\s*\{[\s\S]*?"title"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/.exec(html)?.[1]
+        ?.replace(/\\"/g, '"')
+        ?? htmlTitleOf(html)?.replace(/\s*-\s*YouTube$/i, "");
+      const author = /"videoDetails"\s*:\s*\{[\s\S]*?"author"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"/.exec(html)?.[1]?.replace(/\\"/g, '"');
+      const channelId = /"channelId"\s*:\s*"(UC[A-Za-z0-9_-]{16,})"/.exec(html)?.[1];
+      const lenRaw = /"lengthSeconds"\s*:\s*"(\d+)"/.exec(html)?.[1];
+      const durationSec = lenRaw && Number(lenRaw) > 0 ? Number(lenRaw) : undefined;
+      const feed = channelId ? `https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}` : undefined;
+      return {
+        kind: "episode",
+        url: watchUrl,
+        mediaKind: "video",
+        ...(rawTitle ? { title: rawTitle.trim() } : {}),
+        ...(durationSec !== undefined ? { durationSec } : {}),
+        ...(feed ? { feed } : {}),
+        ...(author ? { feedTitle: author.trim() } : {}),
+      };
+    } catch {
+      return { kind: "episode", url: watchUrl, mediaKind: "video" };
+    }
+  }
+  if (url.hostname.toLowerCase() === "youtu.be") return undefined;
+
+  if (url.pathname === "/feeds/videos.xml") {
+    const cid = url.searchParams.get("channel_id") ?? undefined;
+    const pid = url.searchParams.get("playlist_id") ?? undefined;
+    if (cid || pid) {
+      let title: string | undefined;
+      try {
+        const resp = await fetch(url, FEED_ACCEPT);
+        title = feedTitleOf(resp.bytes);
+      } catch { /* keep bare feed URL */ }
+      return { kind: "youtube", url: url.toString(), ...(cid ? { channelId: cid } : {}), ...(title ? { title } : {}) };
+    }
+  }
+
+  if (url.pathname === "/playlist") {
+    const listId = url.searchParams.get("list");
+    if (listId && /^[A-Za-z0-9_-]{10,}$/.test(listId)) {
+      const feedUrl = `https://www.youtube.com/feeds/videos.xml?playlist_id=${listId}`;
+      let title: string | undefined;
+      try {
+        const resp = await fetch(new URL(feedUrl), FEED_ACCEPT);
+        title = feedTitleOf(resp.bytes);
+      } catch { /* keep bare feed URL */ }
+      return { kind: "youtube", url: feedUrl, ...(title ? { title } : {}) };
+    }
+  }
+
+  const chanMatch = /^\/channel\/(UC[A-Za-z0-9_-]{16,})/.exec(url.pathname);
+  if (chanMatch) {
+    const cid = chanMatch[1]!;
+    const feedUrl = `https://www.youtube.com/feeds/videos.xml?channel_id=${cid}`;
+    let title: string | undefined;
+    try {
+      const resp = await fetch(new URL(feedUrl), FEED_ACCEPT);
+      title = feedTitleOf(resp.bytes);
+    } catch { /* keep bare feed URL */ }
+    return { kind: "youtube", url: feedUrl, channelId: cid, ...(title ? { title } : {}) };
+  }
+
+  if (/^\/(?:@[^/]+|c\/[^/]+|user\/[^/]+)/.test(url.pathname)) {
+    const page = await fetch(url, PAGE_ACCEPT);
+    const html = decodeHead(page.bytes, 512 * 1024);
+    const cid = /https:\/\/www\.youtube\.com\/feeds\/videos\.xml\?channel_id=(UC[A-Za-z0-9_-]{16,})/.exec(html)?.[1]
+      ?? /"(?:externalId|channelId|browseId)"\s*:\s*"(UC[A-Za-z0-9_-]{16,})"/.exec(html)?.[1];
+    if (!cid) throw new FetchError("YOUTUBE_CHANNEL_NOT_FOUND", "Could not resolve a YouTube channel feed from that URL.");
+    const ogTitle = /<meta\s+property=["']og:title["']\s+content=["']([^"']+)["']/i.exec(html)?.[1];
+    const title = (ogTitle ?? htmlTitleOf(html))?.replace(/\s*-\s*YouTube$/i, "").trim() || undefined;
+    return {
+      kind: "youtube",
+      url: `https://www.youtube.com/feeds/videos.xml?channel_id=${cid}`,
+      channelId: cid,
+      ...(title ? { title } : {}),
+    };
+  }
+  return undefined;
+}
+
 /**
  * What a pasted string is. arXiv categories never touch the network; URLs are fetched once
  * with a feed-first accept header, and an HTML page is searched for its declared feed.
@@ -234,6 +365,8 @@ export async function detectSource(input: string, fetch: Fetcher): Promise<Sourc
   const url = assertPublicHttpUrl(normalized);
   const apple = parseApplePodcastUrl(url.toString());
   if (apple) return detectApplePodcast(apple, url.toString(), fetch);
+  const yt = await detectYoutubeUrl(url, fetch);
+  if (yt) return yt;
   const page = await fetch(url, FEED_ACCEPT);
   const head = decodeHead(page.bytes);
   if (XML_TYPES.test(page.mediaType) || FEED_ROOT.test(head)) {
@@ -274,7 +407,7 @@ export function subscriptionOf(detection: SourceDetection): SourceInput | undefi
         : detection.feed.includes("youtube.com/feeds/videos.xml")
           ? "youtube"
           : "feed";
-      return { kind, locator: detection.feed, title: new URL(detection.feed).hostname };
+      return { kind, locator: detection.feed, title: detection.feedTitle?.trim() || new URL(detection.feed).hostname };
     }
   }
 }

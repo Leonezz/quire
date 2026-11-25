@@ -3,6 +3,13 @@ import { MEDIA_SCHEME, type MaterialRecord, type MediaCacheProgress, type Normal
 import { isPreview, read } from "./api";
 import { hostLabel } from "./ArtifactLineage";
 
+export interface ExternalMediaController {
+  play: () => void;
+  pause: () => void;
+  seekTo: (seconds: number) => void;
+  setPlaybackRate: (speed: number) => void;
+}
+
 export interface MediaPlaybackSnapshot {
   materialId: string | undefined;
   mountedReaderId: string | undefined;
@@ -10,6 +17,9 @@ export interface MediaPlaybackSnapshot {
   subtitle: string;
   mediaKind: "audio" | "video";
   provider: "podcast" | "youtube" | "web";
+  videoId: string | undefined;
+  cachedVideo: boolean;
+  videoOpen: boolean;
   playing: boolean;
   positionSec: number;
   durationSec: number;
@@ -28,6 +38,9 @@ const INITIAL_STATE: MediaPlaybackSnapshot = {
   subtitle: "",
   mediaKind: "audio",
   provider: "podcast",
+  videoId: undefined,
+  cachedVideo: false,
+  videoOpen: false,
   playing: false,
   positionSec: 0,
   durationSec: 0,
@@ -60,6 +73,7 @@ export function createMediaStore() {
   let state: MediaPlaybackSnapshot = INITIAL_STATE;
   const listeners = new Set<() => void>();
   let audio: HTMLAudioElement | undefined;
+  let externalCtrl: ExternalMediaController | undefined;
   let previewTimer: ReturnType<typeof setInterval> | undefined;
   let lastSavedAt = 0;
   let unsubscribeCache: (() => void) | undefined;
@@ -74,6 +88,8 @@ export function createMediaStore() {
     state = { ...state, ...patch };
     emit();
   };
+
+  const usesExternalBridge = (): boolean => !isPreview && state.provider === "youtube" && !state.cachedVideo;
 
   const persistNow = (force = false) => {
     const id = state.materialId;
@@ -137,7 +153,10 @@ export function createMediaStore() {
     if (unsubscribeCache) return;
     unsubscribeCache = read.onMediaCacheProgress((progress) => {
       if (progress.materialId === state.materialId) {
-        setState({ cacheProgress: progress });
+        setState({
+          cacheProgress: progress,
+          ...(progress.phase === "done" && state.mediaKind === "video" ? { cachedVideo: true } : {}),
+        });
       }
     });
   };
@@ -148,12 +167,13 @@ export function createMediaStore() {
     const el = document.createElement("audio");
     el.preload = "metadata";
     el.addEventListener("loadedmetadata", () => {
+      if (usesExternalBridge()) return;
       if (Number.isFinite(el.duration) && el.duration > 0) {
         setState({ durationSec: el.duration });
       }
     });
     el.addEventListener("timeupdate", () => {
-      if (!state.materialId) return;
+      if (!state.materialId || usesExternalBridge()) return;
       const pos = el.currentTime;
       const dur = Number.isFinite(el.duration) && el.duration > 0 ? el.duration : state.durationSec;
       if (state.snippetEndSec !== undefined && pos >= state.snippetEndSec) {
@@ -166,12 +186,17 @@ export function createMediaStore() {
       maybeRecordFinished(state.materialId, pos, dur);
       persistNow(false);
     });
-    el.addEventListener("play", () => setState({ playing: true, error: undefined }));
+    el.addEventListener("play", () => {
+      if (!usesExternalBridge()) setState({ playing: true, error: undefined });
+    });
     el.addEventListener("pause", () => {
-      setState({ playing: false });
-      persistNow(true);
+      if (!usesExternalBridge()) {
+        setState({ playing: false });
+        persistNow(true);
+      }
     });
     el.addEventListener("ended", () => {
+      if (usesExternalBridge()) return;
       if (state.materialId && state.durationSec > 0) {
         maybeRecordFinished(state.materialId, state.durationSec, state.durationSec);
       }
@@ -179,7 +204,7 @@ export function createMediaStore() {
       persistNow(true);
     });
     el.addEventListener("error", () => {
-      if (!isPreview) {
+      if (!isPreview && !usesExternalBridge()) {
         setState({ playing: false, error: "Could not play this media stream." });
       }
     });
@@ -196,20 +221,23 @@ export function createMediaStore() {
   const hydrateMaterial = async (material: MaterialRecord): Promise<void> => {
     if (!material.media) return;
     ensureSubscriptions();
+    const isCachedVideo = material.media.kind === "video" && (material.media.cachedBytes ?? 0) > 0;
     if (state.materialId === material.id) {
       setState({
         title: material.title,
         subtitle: material.publication ?? hostLabel(material),
+        videoId: material.media.videoId,
+        cachedVideo: isCachedVideo,
         chapters: material.media.chapters ?? [],
         ...(material.media.durationSec && state.durationSec === 0 ? { durationSec: material.media.durationSec } : {}),
       });
       return;
     }
 
-    // Persist outgoing material before switching
     if (state.materialId) {
       persistNow(true);
       audio?.pause();
+      externalCtrl?.pause();
       stopPreviewTicker();
     }
 
@@ -225,6 +253,9 @@ export function createMediaStore() {
       subtitle: pubKey,
       mediaKind: material.media.kind,
       provider: material.media.provider,
+      videoId: material.media.videoId,
+      cachedVideo: isCachedVideo,
+      videoOpen: false,
       playing: false,
       positionSec,
       durationSec,
@@ -236,7 +267,10 @@ export function createMediaStore() {
       error: undefined,
     });
 
-    if (!isPreview || (material.media.streamUrl.startsWith("data:") || material.media.streamUrl.startsWith("blob:"))) {
+    if (
+      material.media.provider !== "youtube" &&
+      (!isPreview || material.media.streamUrl.startsWith("data:") || material.media.streamUrl.startsWith("blob:"))
+    ) {
       const el = ensureAudio();
       if (el) {
         el.src = streamSrcFor(material);
@@ -260,6 +294,16 @@ export function createMediaStore() {
     if (isPreview) {
       setState({ playing: true });
       startPreviewTicker();
+      return;
+    }
+
+    if (usesExternalBridge()) {
+      setState({ playing: true });
+      if (externalCtrl) {
+        externalCtrl.setPlaybackRate(state.playbackSpeed);
+        externalCtrl.seekTo(state.positionSec);
+        externalCtrl.play();
+      }
       return;
     }
 
@@ -290,6 +334,7 @@ export function createMediaStore() {
   const pause = (): void => {
     stopPreviewTicker();
     audio?.pause();
+    externalCtrl?.pause();
     setState({ playing: false, snippetEndSec: undefined });
     persistNow(true);
   };
@@ -311,11 +356,15 @@ export function createMediaStore() {
     const max = state.durationSec > 0 ? state.durationSec : Number.POSITIVE_INFINITY;
     const clamped = Math.min(max, Math.max(0, seconds));
     setState({ positionSec: clamped, snippetEndSec: undefined });
-    if (!isPreview && audio) {
-      try {
-        audio.currentTime = clamped;
-      } catch {
-        // Ignore if not seekable yet
+    if (!isPreview) {
+      if (usesExternalBridge()) {
+        externalCtrl?.seekTo(clamped);
+      } else if (audio) {
+        try {
+          audio.currentTime = clamped;
+        } catch {
+          // Ignore if not seekable yet
+        }
       }
     }
     persistNow(true);
@@ -332,6 +381,7 @@ export function createMediaStore() {
     const clamped = Math.min(3, Math.max(0.5, Math.round(speed * 100) / 100));
     if (state.subtitle) hydratedSpeeds.set(state.subtitle, clamped);
     if (audio) audio.playbackRate = clamped;
+    externalCtrl?.setPlaybackRate(clamped);
     setState({ playbackSpeed: clamped });
     persistNow(true);
   };
@@ -344,6 +394,46 @@ export function createMediaStore() {
     setState({ following });
   };
 
+  const setVideoOpen = (videoOpen: boolean): void => {
+    if (state.videoOpen === videoOpen) return;
+    setState({ videoOpen });
+  };
+
+  const toggleVideoOpen = (): void => {
+    setState({ videoOpen: !state.videoOpen });
+  };
+
+  const bindExternalController = (ctrl: ExternalMediaController | undefined): void => {
+    externalCtrl = ctrl;
+    if (ctrl && usesExternalBridge()) {
+      ctrl.setPlaybackRate(state.playbackSpeed);
+      if (state.positionSec > 0) ctrl.seekTo(state.positionSec);
+      if (state.playing) ctrl.play();
+    }
+  };
+
+  const reportExternalProgress = (pos: number, dur?: number): void => {
+    if (!state.materialId) return;
+    const effDur = dur && dur > 0 ? dur : state.durationSec;
+    if (state.snippetEndSec !== undefined && pos >= state.snippetEndSec) {
+      externalCtrl?.pause();
+      setState({ positionSec: state.snippetEndSec, playing: false, snippetEndSec: undefined });
+      persistNow(true);
+      return;
+    }
+    setState({ positionSec: pos, ...(effDur > 0 ? { durationSec: effDur } : {}) });
+    maybeRecordFinished(state.materialId, pos, effDur);
+    persistNow(false);
+  };
+
+  const reportExternalState = (playing: boolean, ended = false): void => {
+    if (ended && state.materialId && state.durationSec > 0) {
+      maybeRecordFinished(state.materialId, state.durationSec, state.durationSec);
+    }
+    setState({ playing, ...(ended ? { snippetEndSec: undefined } : {}) });
+    if (!playing) persistNow(true);
+  };
+
   const playSnippet = async (material: MaterialRecord, startSec: number, endSec: number): Promise<void> => {
     await seekTo(startSec, material, false);
     setState({ snippetEndSec: Math.max(startSec + 0.5, endSec) });
@@ -353,6 +443,7 @@ export function createMediaStore() {
   const stop = (): void => {
     persistNow(true);
     stopPreviewTicker();
+    externalCtrl?.pause();
     if (audio) {
       audio.pause();
       audio.removeAttribute("src");
@@ -384,6 +475,11 @@ export function createMediaStore() {
     setPlaybackSpeed,
     stepPlaybackSpeed,
     setFollowing,
+    setVideoOpen,
+    toggleVideoOpen,
+    bindExternalController,
+    reportExternalProgress,
+    reportExternalState,
     playSnippet,
     stop,
   };

@@ -224,7 +224,25 @@ impl MediaCache {
             });
             return Ok(bytes);
         }
-        let valid_url = assert_public_http_url(stream_url).map_err(|e| e.message)?;
+        let resolved_stream = if let Some(vid) = crate::youtube::parse_youtube_video_id(stream_url) {
+            match crate::youtube::resolve_ytdlp_stream(&vid, None).await {
+                Some(direct) => direct,
+                None => {
+                    let msg = "Install yt-dlp (e.g. brew install yt-dlp) to save YouTube videos for offline playback.".to_string();
+                    on_progress(MediaCacheProgress {
+                        material_id: material_id.to_string(),
+                        downloaded_bytes: 0,
+                        total_bytes: None,
+                        phase: "error".into(),
+                        error: Some(msg.clone()),
+                    });
+                    return Err(msg);
+                }
+            }
+        } else {
+            stream_url.to_string()
+        };
+        let valid_url = assert_public_http_url(&resolved_stream).map_err(|e| e.message)?;
         fs::create_dir_all(self.dir()).map_err(|e| e.to_string())?;
 
         let resp = self
@@ -437,7 +455,27 @@ pub async fn media_protocol_response<T>(
     let Some(media) = record.media else {
         return plain_response(StatusCode::NOT_FOUND, "Material has no media stream");
     };
-    let Ok(upstream_url) = assert_public_http_url(&media.stream_url) else {
+    let effective_stream_url = if media.provider == "youtube" {
+        let vid = media
+            .video_id
+            .clone()
+            .or_else(|| crate::youtube::parse_youtube_video_id(&media.stream_url));
+        match vid {
+            Some(v) => match crate::youtube::resolve_ytdlp_stream(&v, None).await {
+                Some(u) => u,
+                None => {
+                    return plain_response(
+                        StatusCode::NOT_FOUND,
+                        "Direct YouTube stream requires local yt-dlp; use quire-player://youtube/<videoId>.",
+                    );
+                }
+            },
+            None => media.stream_url.clone(),
+        }
+    } else {
+        media.stream_url.clone()
+    };
+    let Ok(upstream_url) = assert_public_http_url(&effective_stream_url) else {
         return plain_response(StatusCode::FORBIDDEN, "Refusing private or invalid media stream");
     };
 

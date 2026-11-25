@@ -241,6 +241,39 @@ async function runJob(op: string, payload: Record<string, unknown>): Promise<unk
     };
   }
 
+  if (op === "cropStoryboardSheet") {
+    const bytes = fromBase64(String(payload.bytesBase64 ?? ""));
+    const mediaType = String(payload.mediaType ?? "image/jpeg");
+    const regions = Array.isArray(payload.regions)
+      ? (payload.regions as { index: number; x: number; y: number; width: number; height: number }[])
+      : [];
+    if (regions.length === 0 || typeof OffscreenCanvas === "undefined" || typeof createImageBitmap === "undefined") {
+      return [];
+    }
+    const copy = new Uint8Array(bytes.byteLength);
+    copy.set(bytes);
+    const bitmap = await createImageBitmap(new Blob([copy], { type: mediaType }));
+    try {
+      const crops: { index: number; pngBase64: string; width: number; height: number }[] = [];
+      for (const r of regions) {
+        if (r.width <= 0 || r.height <= 0 || r.x >= bitmap.width || r.y >= bitmap.height) continue;
+        const w = Math.min(r.width, bitmap.width - r.x);
+        const h = Math.min(r.height, bitmap.height - r.y);
+        if (w <= 0 || h <= 0) continue;
+        const canvas = new OffscreenCanvas(w, h);
+        const ctx = canvas.getContext("2d");
+        if (!ctx) continue;
+        ctx.drawImage(bitmap, r.x, r.y, w, h, 0, 0, w, h);
+        const blob = await canvas.convertToBlob({ type: "image/png" });
+        const pngBytes = new Uint8Array(await blob.arrayBuffer());
+        crops.push({ index: r.index, pngBase64: toBase64(pngBytes), width: w, height: h });
+      }
+      return crops;
+    } finally {
+      bitmap.close();
+    }
+  }
+
   throw new Error(`Unknown normalizer operation: ${op}`);
 }
 

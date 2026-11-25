@@ -146,6 +146,25 @@ pub struct NormalizedTranscriptResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct StoryboardCropInputRegion {
+    pub index: u32,
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CroppedStoryboardFrame {
+    pub index: u32,
+    pub png_base64: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CompiledReact {
     pub code: String,
     pub files: Vec<String>,
@@ -219,6 +238,15 @@ pub trait Normalizer: Send + Sync {
         &'a self,
         input: NormalizeTranscriptInput,
     ) -> BoxFuture<'a, Result<NormalizedTranscriptResult, String>>;
+
+    fn crop_storyboard_sheet<'a>(
+        &'a self,
+        _bytes: &'a [u8],
+        _media_type: &'a str,
+        _regions: &'a [StoryboardCropInputRegion],
+    ) -> BoxFuture<'a, Result<Vec<CroppedStoryboardFrame>, String>> {
+        Box::pin(async move { Ok(Vec::new()) })
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -441,5 +469,20 @@ impl Normalizer for TauriNormalizerBridge {
     ) -> BoxFuture<'a, Result<NormalizedTranscriptResult, String>> {
         let payload = serde_json::to_value(&input).unwrap_or(serde_json::Value::Null);
         Box::pin(async move { self.call("normalizeTranscript", payload, 30).await })
+    }
+
+    fn crop_storyboard_sheet<'a>(
+        &'a self,
+        bytes: &'a [u8],
+        media_type: &'a str,
+        regions: &'a [StoryboardCropInputRegion],
+    ) -> BoxFuture<'a, Result<Vec<CroppedStoryboardFrame>, String>> {
+        use base64::Engine;
+        let payload = serde_json::json!({
+            "bytesBase64": base64::engine::general_purpose::STANDARD.encode(bytes),
+            "mediaType": media_type,
+            "regions": regions,
+        });
+        Box::pin(async move { self.call("cropStoryboardSheet", payload, 25).await })
     }
 }

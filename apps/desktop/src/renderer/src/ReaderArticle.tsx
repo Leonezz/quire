@@ -54,6 +54,8 @@ export interface ReaderArticleProps {
   activeParagraphIndex?: number | undefined;
   /** Transcript view: seeks and plays from a clicked margin timestamp. */
   onSeekTime?: ((seconds: number) => void) | undefined;
+  /** Video materials: clicking an inline keyframe `<figure>` expands the top video stage at that timestamp. */
+  onSelectKeyframeTime?: ((seconds: number) => void) | undefined;
 }
 
 interface MarginStamp {
@@ -68,11 +70,20 @@ function assignRef<T>(ref: Ref<T> | undefined, value: T | null): void {
   else (ref as { current: T | null }).current = value;
 }
 
+function parseCaptionTimestamp(text: string): number | undefined {
+  const m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?\b/.exec(text.trim());
+  if (!m) return undefined;
+  if (m[3] !== undefined) {
+    return Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]);
+  }
+  return Number(m[1]) * 60 + Number(m[2]);
+}
+
 /**
  * The article column as a reader sees it: host, title, byline and the document surface, laid out with the reading prefs.
  * ReaderView wraps it with the reader's chrome; RenderHarness.tsx renders it alone for the eval capture, so the two never drift.
  */
-export function ReaderArticle({ material, content, prefs, resolveImage, onOpenLink, onOpenMaterial, scrolls = true, viewportRef, bodyRef, onShowSources, bylineExtra, banner, onFixArtifact, activeParagraphIndex, onSeekTime }: ReaderArticleProps) {
+export function ReaderArticle({ material, content, prefs, resolveImage, onOpenLink, onOpenMaterial, scrolls = true, viewportRef, bodyRef, onShowSources, bylineExtra, banner, onFixArtifact, activeParagraphIndex, onSeekTime, onSelectKeyframeTime }: ReaderArticleProps) {
   const articleRef = useRef<HTMLElement | null>(null);
   const setBodyRefs = useCallback((node: HTMLElement | null) => {
     articleRef.current = node;
@@ -137,9 +148,21 @@ export function ReaderArticle({ material, content, prefs, resolveImage, onOpenLi
   const surface = { schema: content.reader?.schema ?? "none", payload: content.reader?.payload ?? "", fallback, onOpenLink, hostImageSchemes: HOST_IMAGE_SCHEMES, resolveImageSource: resolveImage, resolveRemoteImageSource: resolveImage, showFallbackNotice: false };
   const host = hostLabel(material);
   const lineageCount = material.origin === "agent" ? (material.lineage?.length ?? 0) : 0;
+  const handleArticleClick = useCallback((event: React.MouseEvent<HTMLElement>) => {
+    if (!onSelectKeyframeTime || !(event.target instanceof Element)) return;
+    if (event.target.closest("a, button")) return;
+    const figure = event.target.closest(".reader-document figure");
+    if (!figure) return;
+    const caption = figure.querySelector("figcaption")?.textContent ?? "";
+    const sec = parseCaptionTimestamp(caption);
+    if (sec !== undefined) {
+      onSelectKeyframeTime(sec);
+    }
+  }, [onSelectKeyframeTime]);
+
   return (
     <div ref={viewportRef} className={`reader-viewport px-14 ${material.media ? "pb-[156px]" : "pb-[120px]"} pt-12${scrolls ? " overflow-auto" : ""}`} style={prefsStyle(prefs)}>
-      <article ref={setBodyRefs} className="reader-body relative" style={{ textAlign: prefs.justify ? "justify" : "start" }}>
+      <article ref={setBodyRefs} onClick={onSelectKeyframeTime ? handleArticleClick : undefined} data-video-figures={onSelectKeyframeTime ? "true" : undefined} className="reader-body relative" style={{ textAlign: prefs.justify ? "justify" : "start" }}>
         {stamps.length > 0 ? (
           <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 -left-13 w-11 select-none">
             {stamps.map((stamp) => {

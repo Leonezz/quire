@@ -133,4 +133,39 @@ describe("syncDue", () => {
     expect(sources.list().map((s) => s.failureCount)).toEqual([1, 1]);
     db.close();
   });
+
+  it("filters YouTube Shorts by default during YouTube Atom sync while keeping long-form talks", async () => {
+    const { items, sources, db, now } = setup(() => new Date("2026-11-25T10:00:00Z"));
+    const ytAtom = new TextEncoder().encode(`<?xml version="1.0" encoding="UTF-8"?>
+<feed xmlns:yt="http://www.youtube.com/xml/schemas/2015" xmlns:media="http://search.yahoo.com/mrss/" xmlns="http://www.w3.org/2005/Atom">
+  <title>Andrej Karpathy</title>
+  <entry>
+    <id>yt:video:zjkBMFhNj_g</id>
+    <yt:videoId>zjkBMFhNj_g</yt:videoId>
+    <title>Deep Dive into LLMs like ChatGPT</title>
+    <link rel="alternate" href="https://www.youtube.com/watch?v=zjkBMFhNj_g"/>
+    <published>2026-11-20T10:00:00+00:00</published>
+    <media:group>
+      <media:description>00:00 Intro\n12:00 Tokenization</media:description>
+    </media:group>
+  </entry>
+  <entry>
+    <id>yt:video:short123456</id>
+    <yt:videoId>short123456</yt:videoId>
+    <title>Quick 30s tip</title>
+    <link rel="alternate" href="https://www.youtube.com/shorts/short123456"/>
+    <published>2026-11-21T10:00:00+00:00</published>
+    <media:group>
+      <media:description>Short clip</media:description>
+    </media:group>
+  </entry>
+</feed>`);
+    const fetch = fetcherOf(async (url) => ({ bytes: ytAtom, mediaType: "application/atom+xml", finalUrl: url.toString() }));
+    const ytSource = sources.add({ kind: "youtube", locator: "https://www.youtube.com/feeds/videos.xml?channel_id=UCXUPKJO5MZQN11PqgIvyuvQ", title: "Andrej Karpathy" });
+    expect(ytSource.config?.ignoreShorts).toBe(true);
+    const res = await syncSource(ytSource, { fetch, sources, items, now });
+    expect(res).toMatchObject({ ok: true, added: 1 });
+    expect(items.inbox().map((i) => i.title)).toEqual(["Deep Dive into LLMs like ChatGPT"]);
+    db.close();
+  });
 });

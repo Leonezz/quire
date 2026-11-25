@@ -5,7 +5,10 @@ use crate::http::{
     stored_ids_of, FEED_ACCEPT, PAGE_ACCEPT,
 };
 use crate::media::{cached_media_info, remove_cached_media_files};
-use crate::normalizer_bridge::{ExtractMetaInput, NormalizeTranscriptInput, Normalizer};
+use crate::normalizer_bridge::{
+    ExtractMetaInput, NormalizeTranscriptInput, Normalizer, StoryboardCropInputRegion,
+    TranscriptKeyframeDto,
+};
 use crate::sqlite_stores::{now_iso, sha256_hex, ItemContent, ItemStore, MetaStore};
 use crate::types::{
     Annotation, ArtifactBody, ArtifactInfo, CaptureInfo, ContentNormalizationQuality,
@@ -1331,6 +1334,9 @@ impl MaterialStore {
             .map_err(|e| (e.code, e.message))?
         {
             return self.open_apple_episode(apple_ep, origin, item).await;
+        }
+        if let Some(video_id) = crate::youtube::parse_youtube_video_id(url.as_str()) {
+            return self.open_youtube_video(&video_id, raw, origin, None, item).await;
         }
         if is_audio_stream_url(&url) {
             let id = material_id_of(&url);
@@ -2877,6 +2883,359 @@ impl MaterialStore {
                 Ok(mat) => OpenUrlResult::success(mat, false),
                 Err(e) => OpenUrlResult::failure("NORMALIZE_FAILED", e),
             },
+            Err((code, msg)) => OpenUrlResult::failure(code, msg),
+        }
+    }
+
+    pub async fn open_youtube_video(
+        &self,
+        video_id: &str,
+        requested_url: &str,
+        origin: &str,
+        fallback_content: Option<ItemContent>,
+        override_meta: Option<MaterialMeta>,
+    ) -> Result<OpenUrlResult, (String, String)> {
+        let watch_url = crate::youtube::canonical_youtube_watch_url(video_id);
+        let parsed_watch = Url::parse(&watch_url).map_err(|_| ("URL_INVALID".into(), "Invalid YouTube URL.".into()))?;
+        if let Some(existing) = self.find_by_url(&parsed_watch).map_err(|e| ("NORMALIZE_FAILED".into(), e))? {
+            if existing.media.is_some() {
+                return self
+                    .existing_result(existing, override_meta.as_ref(), &[requested_url.to_string(), watch_url])
+                    .await
+                    .map_err(|e| ("NORMALIZE_FAILED".into(), e));
+            }
+        }
+
+        let id = material_id_of(&parsed_watch);
+        let fetched_at = now_iso();
+        let watch_page = fetch_page(&self.http, &parsed_watch, PAGE_ACCEPT)
+            .await
+            .map_err(|e| (e.code, e.message))?;
+        let html = String::from_utf8_lossy(&watch_page.bytes);
+        let yt = crate::youtube::parse_youtube_watch_html(&html, video_id);
+
+        // 1. Build video Show notes view from video description (or Atom feed content)
+        let mut notes_reader: Option<ReaderPayload> = None;
+        let mut notes_md: Option<String> = None;
+        let mut notes_plain: Option<String> = None;
+
+        if let Some(ref desc) = yt.description {
+            let md = desc
+                .lines()
+                .map(str::trim_end)
+                .collect::<Vec<_>>()
+                .join("\n\n");
+            if let Ok(parts) = self.normalizer.normalize_markdown(&md, &watch_url).await {
+                notes_reader = parts.reader;
+            }
+            notes_plain = Some(desc.clone());
+            notes_md = Some(md);
+        } else if let Some(fc) = fallback_content {
+            notes_reader = fc.reader;
+            notes_md = fc.markdown;
+            notes_plain = fc.plain;
+        }
+
+        if notes_plain.as_deref().unwrap_or("").trim().is_empty() {
+            let fallback = "No video description was provided.".to_string();
+            if let Ok(parts) = self.normalizer.normalize_markdown(&fallback, &watch_url).await {
+                notes_reader = parts.reader;
+            }
+            notes_md = Some(fallback.clone());
+            notes_plain = Some(fallback);
+        }
+
+        let notes_mins = yt
+            .duration_sec
+            .filter(|&d| d > 0)
+            .map(|d| ((d as f64) / 60.0).round().max(1.0) as u32)
+            .unwrap_or_else(|| reading_minutes(notes_plain.as_deref().unwrap_or("")));
+
+        let shownotes_content = MaterialViewContent {
+            view: "shownotes".into(),
+            media_type: SHOWNOTES_VIEW_MEDIA_TYPE.into(),
+            pdf: None,
+            reader: notes_reader,
+            markdown: notes_md,
+            plain: notes_plain,
+            reading_minutes: notes_mins,
+            quality: ContentNormalizationQuality::default(),
+            problems: Vec::new(),
+            anchors: None,
+            time_anchors: None,
+            artifact_body: None,
+            report: None,
+        };
+        let shownotes_bytes = serde_json::to_string(&shownotes_content)
+            .map(|s| s.len() as u64)
+            .unwrap_or(0);
+        self.write_view_content(&id, &shownotes_content, None)
+            .map_err(|e| ("NORMALIZE_FAILED".into(), e))?;
+        let shownotes_view = MaterialView {
+            id: "shownotes".into(),
+            label: view_label("shownotes").into(),
+            url: watch_url.clone(),
+            media_type: SHOWNOTES_VIEW_MEDIA_TYPE.into(),
+            status: "ready".into(),
+            fetched_at: Some(fetched_at.clone()),
+            byte_length: Some(shownotes_bytes),
+            pdf: None,
+            error: None,
+        };
+
+        // 2. Crop Storyboard keyframes into `figures/<id>/<index>.png` -> `quire-figure://<id>/<index>.png`
+        let mut keyframes: Vec<TranscriptKeyframeDto> = Vec::new();
+        if let Some(ref sb) = yt.storyboard {
+            let batches = crate::youtube::plan_storyboard_crops(sb, &yt.chapters, yt.duration_sec);
+            for batch in batches {
+                let Ok(sheet_u) = assert_public_http_url(&batch.sheet_url) else {
+                    continue;
+                };
+                let Ok(sheet_page) = fetch_page(&self.http, &sheet_u, "image/jpeg,image/webp,image/*,*/*;q=0.5").await else {
+                    continue;
+                };
+                let req_regions: Vec<StoryboardCropInputRegion> = batch
+                    .regions
+                    .iter()
+                    .map(|r| StoryboardCropInputRegion {
+                        index: r.index,
+                        x: r.x,
+                        y: r.y,
+                        width: r.width,
+                        height: r.height,
+                    })
+                    .collect();
+                let Ok(cropped) = self
+                    .normalizer
+                    .crop_storyboard_sheet(&sheet_page.bytes, &sheet_page.media_type, &req_regions)
+                    .await
+                else {
+                    continue;
+                };
+                for frame in cropped {
+                    let Some(meta_region) = batch.regions.iter().find(|r| r.index == frame.index) else {
+                        continue;
+                    };
+                    let Ok(png_bytes) = base64::engine::general_purpose::STANDARD.decode(&frame.png_base64) else {
+                        continue;
+                    };
+                    if let Ok(fig_url) = self.figures.write(&id, frame.index, &png_bytes) {
+                        keyframes.push(TranscriptKeyframeDto {
+                            time_sec: meta_region.time_sec,
+                            url: fig_url,
+                            caption: Some(meta_region.caption.clone()),
+                            width: Some(frame.width),
+                            height: Some(frame.height),
+                        });
+                    }
+                }
+            }
+            keyframes.sort_by(|a, b| a.time_sec.partial_cmp(&b.time_sec).unwrap_or(std::cmp::Ordering::Equal));
+        }
+
+        // 3. Fetch ranked caption track (`srv3` preferred, raw XML/VTT fallback)
+        let mut normalized_tx = None;
+        let mut transcript_origin = "absent".to_string();
+        let mut caption_url_used = watch_url.clone();
+
+        for track in &yt.captions {
+            let sep = if track.base_url.contains('?') { '&' } else { '?' };
+            let srv3_url = format!("{}{}fmt=srv3", track.base_url, sep);
+            for candidate_url in [srv3_url.as_str(), track.base_url.as_str()] {
+                let Ok(cu) = assert_public_http_url(candidate_url) else {
+                    continue;
+                };
+                let Ok(cap_page) = fetch_page(&self.http, &cu, "*/*").await else {
+                    continue;
+                };
+                let raw_text = String::from_utf8_lossy(&cap_page.bytes).to_string();
+                if raw_text.trim().is_empty() {
+                    continue;
+                }
+                if let Ok(tx) = self
+                    .normalizer
+                    .normalize_transcript(NormalizeTranscriptInput {
+                        raw_text: Some(raw_text),
+                        media_type: Some(cap_page.media_type),
+                        cues: None,
+                        chapters: if yt.chapters.is_empty() { None } else { Some(yt.chapters.clone()) },
+                        keyframes: if keyframes.is_empty() { None } else { Some(keyframes.clone()) },
+                        title: Some(yt.title.clone()),
+                    })
+                    .await
+                {
+                    if !tx.time_anchors.is_empty() {
+                        caption_url_used = candidate_url.to_string();
+                        transcript_origin = if track.is_auto {
+                            "auto_captions".into()
+                        } else {
+                            "captions".into()
+                        };
+                        normalized_tx = Some(tx);
+                        break;
+                    }
+                }
+            }
+            if normalized_tx.is_some() {
+                break;
+            }
+        }
+
+        let (
+            primary_view,
+            media_type,
+            reader,
+            markdown,
+            plain,
+            time_anchors,
+            reading_mins,
+            views,
+        ) = if let Some(tx) = normalized_tx {
+            fs::create_dir_all(self.dir()).map_err(|e| ("NORMALIZE_FAILED".into(), e.to_string()))?;
+            if let Ok(raw_json) = serde_json::to_string(&tx.cues) {
+                let _ = fs::write(self.dir().join(format!("{id}.transcript.raw.json")), raw_json);
+            }
+            let tx_content = MaterialViewContent {
+                view: "transcript".into(),
+                media_type: TRANSCRIPT_VIEW_MEDIA_TYPE.into(),
+                pdf: None,
+                reader: Some(tx.reader.clone()),
+                markdown: Some(tx.markdown.clone()),
+                plain: Some(tx.plain.clone()),
+                reading_minutes: tx.reading_minutes,
+                quality: ContentNormalizationQuality::default(),
+                problems: Vec::new(),
+                anchors: None,
+                time_anchors: Some(tx.time_anchors.clone()),
+                artifact_body: None,
+                report: None,
+            };
+            let tx_len = serde_json::to_string(&tx_content)
+                .map(|s| s.len() as u64)
+                .unwrap_or(0);
+            self.write_view_content(&id, &tx_content, None)
+                .map_err(|e| ("NORMALIZE_FAILED".into(), e))?;
+            let tx_view = MaterialView {
+                id: "transcript".into(),
+                label: view_label("transcript").into(),
+                url: caption_url_used,
+                media_type: TRANSCRIPT_VIEW_MEDIA_TYPE.into(),
+                status: "ready".into(),
+                fetched_at: Some(fetched_at.clone()),
+                byte_length: Some(tx_len),
+                pdf: None,
+                error: None,
+            };
+            (
+                "transcript".to_string(),
+                TRANSCRIPT_VIEW_MEDIA_TYPE.to_string(),
+                Some(tx.reader),
+                Some(tx.markdown),
+                Some(tx.plain),
+                Some(tx.time_anchors),
+                tx.reading_minutes,
+                vec![tx_view, shownotes_view],
+            )
+        } else {
+            (
+                "shownotes".to_string(),
+                SHOWNOTES_VIEW_MEDIA_TYPE.to_string(),
+                shownotes_content.reader,
+                shownotes_content.markdown,
+                shownotes_content.plain,
+                None,
+                shownotes_content.reading_minutes,
+                vec![shownotes_view],
+            )
+        };
+
+        let mut base_meta = MaterialMeta {
+            kind: Some("videoRecording".into()),
+            title: Some(yt.title.clone()),
+            publication: yt.author.clone(),
+            date: yt.published_at.clone(),
+            creators: yt.author.map(|name| {
+                vec![Creator {
+                    role: "author".into(),
+                    name,
+                    given: None,
+                    family: None,
+                }]
+            }),
+            ..Default::default()
+        };
+        if let Some(ref ov) = override_meta {
+            base_meta = apply_overrides(&base_meta, Some(ov));
+        }
+
+        let mut rec = StoredRecord {
+            id,
+            url: watch_url.clone(),
+            final_url: watch_url.clone(),
+            title: yt.title,
+            byline: byline_of(base_meta.creators.as_deref()),
+            published_at: yt.published_at,
+            fetched_at,
+            reading_minutes: reading_mins,
+            origin: origin.to_string(),
+            media_type,
+            quality: ContentNormalizationQuality::default(),
+            lineage: None,
+            rebuilt_as: None,
+            artifact: None,
+            aliases: None,
+            canonical_url: None,
+            pdf: None,
+            media: Some(MediaInfo {
+                kind: "video".into(),
+                provider: "youtube".into(),
+                stream_url: watch_url,
+                video_id: Some(yt.video_id),
+                duration_sec: yt.duration_sec,
+                cached_bytes: None,
+                transcript_origin,
+                chapters: if yt.chapters.is_empty() { None } else { Some(yt.chapters) },
+            }),
+            capture: None,
+            arxiv_version: None,
+            extracted: None,
+            item_meta: Some(base_meta),
+            views: Some(views),
+            primary_view: Some(primary_view),
+            lang: yt.captions.first().map(|c| c.language_code.clone()),
+            dir: None,
+            reader,
+            markdown,
+            plain,
+            time_anchors,
+            problems: Vec::new(),
+            artifact_source: None,
+        };
+        rec.extracted = Some(fallback_extracted_for(&rec));
+        rec = with_aliases(rec, &[requested_url.to_string()]);
+        let saved = self.save_stored(rec).map_err(|e| ("NORMALIZE_FAILED".into(), e))?;
+        Ok(OpenUrlResult::success(
+            self.decorate(&saved).map_err(|e| ("NORMALIZE_FAILED".into(), e))?,
+            false,
+        ))
+    }
+
+    pub async fn materialize_youtube_item(
+        &self,
+        item: &ItemRecord,
+        content: Option<ItemContent>,
+        meta: Option<MaterialMeta>,
+    ) -> OpenUrlResult {
+        let video_id = item
+            .signals
+            .video_id
+            .clone()
+            .or_else(|| crate::youtube::parse_youtube_video_id(&item.link));
+        let Some(vid) = video_id else {
+            return OpenUrlResult::failure("YOUTUBE_ID_INVALID", format!("Not a YouTube video link: {}", item.link));
+        };
+        match self.open_youtube_video(&vid, &item.link, "feed", content, meta).await {
+            Ok(res) => res,
             Err((code, msg)) => OpenUrlResult::failure(code, msg),
         }
     }

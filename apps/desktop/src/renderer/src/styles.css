@@ -36,6 +36,7 @@ html[data-render] body { overflow: visible; }
 .reader-body p[data-active-turn="true"] {
   box-shadow: -10px 0 0 0 var(--content), -12px 0 0 0 var(--accent);
 }
+.reader-body[data-video-figures="true"] .reader-document figure { cursor: pointer; }
 /* An agent artifact's lead: the paragraph before its first heading states the answer, a size up. */
 .artifact-surface .reader-document > p:first-child { margin-bottom: 1.4em; color: var(--label-2); font-size: 1.12em; line-height: 1.55; letter-spacing: -.008em; }
 

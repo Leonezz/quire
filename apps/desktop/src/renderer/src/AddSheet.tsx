@@ -73,6 +73,7 @@ export function AddSheet({ open, busy, error, onClose, onSubmit, onSubscribed }:
 
   const label = phase === "detecting" ? "Checking…" : phase === "subscribing" ? "Subscribing…" : busy ? "Fetching…" : known ? describe(known).action : "Add";
   const pageFeed = known?.kind === "page" || known?.kind === "episode" ? known.feed : undefined;
+  const pageFeedLabel = known?.kind === "episode" && known.feedTitle ? known.feedTitle : pageFeed ? hostOf(pageFeed) : "";
   return (
     <Sheet isOpen={open} onOpenChange={(next) => { if (!next) close(); }}>
       <SheetDialog title="Add">
@@ -83,7 +84,7 @@ export function AddSheet({ open, busy, error, onClose, onSubmit, onSubscribed }:
           {known ? <p role="status" className="t-text-in m-0 -mt-2 text-[12.5px] text-label-2"><span className="rounded-pill bg-accent-soft px-2 py-px text-[11.5px] font-medium text-accent-text">recognised</span> <span className="ml-1">{describe(known).line}</span></p> : null}
           <SheetFooter>
             <Button variant="quiet" onPress={close} isDisabled={working}>Cancel</Button>
-            {pageFeed ? <Button variant="plain" onPress={() => void subscribe(pageFeed)} isDisabled={working}>Subscribe to {hostOf(pageFeed)}</Button> : null}
+            {pageFeed ? <Button variant="plain" onPress={() => void subscribe(pageFeed)} isDisabled={working}>Subscribe to {pageFeedLabel}</Button> : null}
             <Button variant="primary" type="submit" isDisabled={working || !input}>{label}</Button>
           </SheetFooter>
         </form>
