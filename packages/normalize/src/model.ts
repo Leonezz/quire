@@ -61,11 +61,41 @@ export type ContentMaterialization = {
   sourceIdentity: Sha256Identity;
 };
 
+export type NormalizedFeedTranscriptRef = {
+  lang?: string;
+  mediaType: string;
+  rel?: string;
+  url: string;
+};
+
+export type NormalizedMediaChapter = {
+  startSec: number;
+  title: string;
+};
+
+export type NormalizedFeedMedia = {
+  author?: string;
+  byteLength?: number;
+  chapters?: NormalizedMediaChapter[];
+  chaptersUrl?: string;
+  durationSec?: number;
+  episode?: number;
+  imageUrl?: string;
+  kind: "audio" | "video";
+  mediaType: string;
+  provider: "podcast" | "youtube";
+  season?: number;
+  streamUrl: string;
+  transcripts?: NormalizedFeedTranscriptRef[];
+  videoId?: string;
+};
+
 export type NormalizedFeedEntry = {
   externalId: string;
   legacyExternalIds: string[];
   link: string;
   materialization: ContentMaterialization;
+  media?: NormalizedFeedMedia;
   publishedAt?: string;
   sourceFingerprint: Sha256Identity;
   sourceIdentity: Sha256Identity;

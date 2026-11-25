@@ -518,11 +518,18 @@ pub fn subscription_of(detection: &SourceDetection) -> Option<(String, String, S
             let fallback = Url::parse(url).ok().and_then(|u| u.host_str().map(String::from)).unwrap_or_else(|| url.clone());
             Some(("feed".into(), url.clone(), title.clone().unwrap_or(fallback)))
         }
-        SourceDetection::Page { feed: Some(feed), .. } => {
+        SourceDetection::Podcast { url, title, .. } => {
+            let fallback = Url::parse(url).ok().and_then(|u| u.host_str().map(String::from)).unwrap_or_else(|| url.clone());
+            Some(("podcast".into(), url.clone(), title.clone().unwrap_or(fallback)))
+        }
+        SourceDetection::Youtube { url, title, .. } => {
+            Some(("youtube".into(), url.clone(), title.clone().unwrap_or_else(|| "YouTube channel".into())))
+        }
+        SourceDetection::Page { feed: Some(feed), .. } | SourceDetection::Episode { feed: Some(feed), .. } => {
             let fallback = Url::parse(feed).ok().and_then(|u| u.host_str().map(String::from)).unwrap_or_else(|| feed.clone());
             Some(("feed".into(), feed.clone(), fallback))
         }
-        SourceDetection::Page { feed: None, .. } => None,
+        SourceDetection::Page { feed: None, .. } | SourceDetection::Episode { feed: None, .. } => None,
     }
 }
 

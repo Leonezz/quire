@@ -35,6 +35,7 @@ export function dayLabel(iso: string, now = Date.now()): string {
 
 export function signalsOf(signals: ItemSignals): string[] {
   const out: string[] = [];
+  if (signals.media) out.push(signals.media);
   if (signals.code) out.push("code");
   if (signals.math) out.push("math");
   if (signals.figures) out.push("figures");
@@ -42,7 +43,14 @@ export function signalsOf(signals: ItemSignals): string[] {
   return out;
 }
 
-export function sourceKindLabel(kind: SourceRecord["kind"]): string { return kind === "arxiv" ? "arXiv" : "feed"; }
+export function sourceKindLabel(kind: SourceRecord["kind"]): string {
+  switch (kind) {
+    case "arxiv": return "arXiv";
+    case "podcast": return "podcast";
+    case "youtube": return "YouTube";
+    default: return "feed";
+  }
+}
 
 /** The host of a feed URL, or the arXiv category. */
 export function sourceLocatorLabel(source: SourceRecord): string {

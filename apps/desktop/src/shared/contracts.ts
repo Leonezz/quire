@@ -1,5 +1,25 @@
 // The only vocabulary that crosses the preload bridge. Types only.
-import type { ContentNormalizationQuality, NormalizationProblem } from "@read/normalize/contract";
+import type {
+  ContentNormalizationQuality,
+  NormalizationProblem,
+  NormalizedMediaChapter,
+  TranscriptAnchor,
+  TranscriptOrigin,
+} from "@read/normalize/contract";
+
+export type { NormalizedMediaChapter, TranscriptAnchor, TranscriptOrigin };
+
+export interface MediaInfo {
+  kind: "audio" | "video";
+  provider: "podcast" | "youtube" | "web";
+  streamUrl: string;
+  videoId?: string;
+  durationSec?: number;
+  /** Bytes stored on disk under `<dataDir>/media/<id>.<ext>` when cached for offline playback. */
+  cachedBytes?: number;
+  transcriptOrigin: TranscriptOrigin;
+  chapters?: NormalizedMediaChapter[];
+}
 
 export interface MaterialSummary {
   id: string;
@@ -58,6 +78,8 @@ export interface MaterialRecord extends MaterialSummary {
   /** The page's <link rel="canonical"> when it names another page of the same site (never the site's home page). */
   canonicalUrl?: string;
   pdf?: PdfInfo;
+  /** Present when the material carries spoken audio or video (a podcast episode, a YouTube video, or an article with an episode). */
+  media?: MediaInfo;
   /**
    * The raw page as captured (kept next to the record as <id>.html) so the agent can rebuild from it.
    * `sha256` (the normalizer's contentIdentity) and `fetchedAt` say which bytes, read when; captures
@@ -112,6 +134,8 @@ export interface Annotation {
   kind: AnnotationKind;
   /** The view the locator belongs to ("web" text-quote, "pdf" regions); absent means the material's primary view. */
   view?: MaterialViewId;
+  /** Media materials: `[startSec, endSec]` window of the quoted passage so highlights survive transcript re-punctuation and jump to audio. */
+  timeRange?: [startSec: number, endSec: number];
   color: AnnotationColor;
   createdAt: string;
   updatedAt: string;
@@ -159,7 +183,7 @@ export interface ReadApi extends ReadApiM1, ReadApiM2, ReadApiM3, ReadApiViews, 
 // M1: sources, the Inbox / Queue loop, reading events, search.
 // ---------------------------------------------------------------------------
 
-export type SourceKind = "feed" | "arxiv";
+export type SourceKind = "feed" | "arxiv" | "podcast" | "youtube";
 
 /** A subscription. `locator` is the feed URL, or the arXiv category (e.g. "cs.CL") for kind "arxiv". */
 export interface SourceRecord {
@@ -190,6 +214,10 @@ export interface ItemSignals {
   math?: boolean;
   figures?: boolean;
   lang?: string;
+  media?: "audio" | "video";
+  durationSec?: number;
+  hasTranscript?: boolean;
+  chapters?: NormalizedMediaChapter[];
 }
 
 /**
@@ -229,9 +257,13 @@ export type ItemDecision = "queue" | "dismiss" | "unqueue" | "undismiss";
 
 export type SourceDetection =
   | { kind: "feed"; url: string; title?: string }
+  | { kind: "podcast"; url: string; title?: string; siteUrl?: string }
+  | { kind: "youtube"; url: string; channelId?: string; title?: string }
   | { kind: "arxiv"; category: string; title: string }
   /** A page to read; `feed` is the feed it declares, offered as a subscription beside reading. */
-  | { kind: "page"; url: string; feed?: string };
+  | { kind: "page"; url: string; feed?: string }
+  /** A single podcast episode or video to read now, with its show or channel feed offered alongside when known. */
+  | { kind: "episode"; url: string; mediaKind: "audio" | "video"; title?: string; durationSec?: number; feed?: string };
 
 export type AddSourceResult =
   | { ok: true; source: SourceRecord; added: number }
@@ -404,10 +436,11 @@ export type MaterialKind =
   | "webpage" | "blogPost" | "newsletter" | "newsArticle"
   | "journalArticle" | "preprint" | "conferencePaper"
   | "book" | "bookSection" | "report" | "thesis" | "document"
+  | "podcastEpisode" | "videoRecording"
   /** Written inside Quire (an agent artifact). */
   | "note";
 
-export type CreatorRole = "author" | "editor" | "translator" | "contributor";
+export type CreatorRole = "author" | "editor" | "translator" | "contributor" | "host" | "guest";
 
 export interface Creator {
   role: CreatorRole;
@@ -465,6 +498,8 @@ export const MATERIAL_KIND_FIELDS: Record<MaterialKind, readonly (keyof Material
   report: ["publisher", "place", "series", "doi"],
   thesis: ["publisher", "place"],
   document: ["publisher", "accessed"],
+  podcastEpisode: ["publication", "series", "issue", "accessed"],
+  videoRecording: ["publication", "series", "accessed"],
   note: [],
 };
 
@@ -587,7 +622,7 @@ export interface ReadApiM3 {
  * never fetched. It exists only for materials that have a pdf view. "artifact" is an agent artifact
  * that is not a text document (HTML, SVG): it renders from its source, not through the reader.
  */
-export type MaterialViewId = "web" | "pdf" | "markdown" | "text" | "artifact";
+export type MaterialViewId = "web" | "pdf" | "markdown" | "text" | "artifact" | "transcript" | "shownotes";
 
 /** A way to read the material. Only `ready` views have content stored; `available` ones are fetched on demand. */
 export interface MaterialView {
@@ -645,6 +680,8 @@ export interface MaterialViewContent {
   problems: NormalizationProblem[];
   /** text view only: line anchors back into the PDF, in `plain` order. */
   anchors?: TextViewAnchor[];
+  /** transcript view only: paragraph anchors mapping `plain` character spans to `[startSec, endSec]` media timestamps. */
+  timeAnchors?: TranscriptAnchor[];
   /** artifact view only: the artifact's type, source and revision, rendered in a sandbox (HTML) or as an image (SVG). */
   artifactBody?: { type: CanvasArtifactType; source: string; version: number };
   report?: TextViewReport;

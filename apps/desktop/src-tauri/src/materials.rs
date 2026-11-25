@@ -8,7 +8,7 @@ use crate::sqlite_stores::{now_iso, sha256_hex, ItemContent, ItemStore, MetaStor
 use crate::types::{
     Annotation, ArtifactBody, ArtifactInfo, CaptureInfo, ContentNormalizationQuality,
     CorpusFailure, CorpusImportResult, Creator, DeleteMaterialsResult, ItemRecord, LibraryFilter,
-    MaterialMeta, MaterialRecord, MaterialSummary, MaterialView, MaterialViewContent,
+    MaterialMeta, MaterialRecord, MaterialSummary, MaterialView, MaterialViewContent, MediaInfo,
     NormalizationProblem, OpenUrlResult, PdfInfo, ReaderPayload, SearchHit, StorageUsage,
 };
 use base64::Engine;
@@ -22,8 +22,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use url::Url;
 
-pub const MATERIAL_VIEW_IDS: &[&str] = &["web", "pdf", "markdown", "text", "artifact"];
+pub const MATERIAL_VIEW_IDS: &[&str] = &["web", "pdf", "markdown", "text", "artifact", "transcript", "shownotes"];
 pub const TEXT_VIEW_MEDIA_TYPE: &str = "text/x-quire-reflow";
+pub const TRANSCRIPT_VIEW_MEDIA_TYPE: &str = "text/x-quire-transcript";
+pub const SHOWNOTES_VIEW_MEDIA_TYPE: &str = "text/x-quire-shownotes";
 pub const ARTIFACT_TYPES: &[&str] = &["markdown", "code", "html", "svg", "react", "mermaid"];
 pub const MAX_ARTIFACT_SOURCE: usize = 400_000;
 
@@ -37,6 +39,8 @@ pub fn view_label(id: &str) -> &'static str {
         "markdown" => "Markdown",
         "text" => "Text",
         "artifact" => "Artifact",
+        "transcript" => "Transcript",
+        "shownotes" => "Show notes",
         _ => "Web page",
     }
 }
@@ -66,6 +70,10 @@ pub fn view_id_for_media_type(media_type: &str) -> &'static str {
         "pdf"
     } else if media_type == TEXT_VIEW_MEDIA_TYPE {
         "text"
+    } else if media_type == TRANSCRIPT_VIEW_MEDIA_TYPE {
+        "transcript"
+    } else if media_type == SHOWNOTES_VIEW_MEDIA_TYPE {
+        "shownotes"
     } else if matches!(media_type, "text/markdown" | "text/x-markdown" | "text/plain") {
         "markdown"
     } else if is_artifact_media_type(media_type) {
@@ -170,6 +178,8 @@ pub struct StoredRecord {
     pub canonical_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pdf: Option<PdfInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media: Option<MediaInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub capture: Option<CaptureInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -461,6 +471,7 @@ pub fn primary_content_of(record: &StoredRecord) -> MaterialViewContent {
         quality: record.quality.clone(),
         problems: record.problems.clone(),
         anchors: None,
+        time_anchors: None,
         artifact_body,
         report: None,
     }
@@ -505,6 +516,7 @@ pub fn effective_of(record: &StoredRecord, overrides: Option<MaterialMeta>) -> M
         aliases: record.aliases.clone(),
         canonical_url: record.canonical_url.clone(),
         pdf: record.pdf.clone(),
+        media: record.media.clone(),
         capture: record.capture.clone(),
         arxiv_version: record.arxiv_version,
         extracted,
@@ -1473,6 +1485,7 @@ impl MaterialStore {
                     byte_length: bytes.len() as u64,
                     text_layer: inspection.text_layer,
                 }),
+                media: None,
                 capture: None,
                 arxiv_version: None,
                 extracted: None,
@@ -1530,6 +1543,7 @@ impl MaterialStore {
                 aliases: None,
                 canonical_url: normalized.canonical_url,
                 pdf: None,
+                media: None,
                 capture,
                 arxiv_version: None,
                 extracted: Some(normalized.extracted),
@@ -1582,6 +1596,7 @@ impl MaterialStore {
                 aliases: None,
                 canonical_url: None,
                 pdf: None,
+                media: None,
                 capture: None,
                 arxiv_version: None,
                 extracted: None,
@@ -1731,6 +1746,7 @@ impl MaterialStore {
             aliases: None,
             canonical_url: None,
             pdf: None,
+            media: None,
             capture: None,
             arxiv_version: None,
             extracted: None,
@@ -2084,6 +2100,7 @@ impl MaterialStore {
                 },
                 problems: Vec::new(),
                 anchors: None,
+                time_anchors: None,
                 artifact_body: None,
                 report: None,
             };
@@ -2248,6 +2265,7 @@ impl MaterialStore {
             aliases: None,
             canonical_url: None,
             pdf: None,
+            media: None,
             capture: None,
             arxiv_version: None,
             extracted: None,
@@ -2987,6 +3005,7 @@ mod tests {
                 note: Some("note".into()),
                 kind: "highlight".into(),
                 view: Some("web".into()),
+                time_range: None,
                 color: "#ffd400".into(),
                 created_at: String::new(),
                 updated_at: String::new(),

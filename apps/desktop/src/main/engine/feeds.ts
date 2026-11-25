@@ -1,5 +1,11 @@
 import { readingMinutes, wordCount } from "./reading-time";
-import { normalizeFeedCapture, sha256Hex, type NormalizedFeedEntry } from "@read/normalize";
+import {
+  normalizeFeedCapture,
+  sha256Hex,
+  stripShowNotesBoilerplate,
+  type NormalizedFeedEntry,
+  type NormalizedFeedMedia,
+} from "@read/normalize";
 import type { ItemSignals, MaterialMeta } from "../../shared/contracts";
 
 /** Full content a feed entry carried, kept on the item so Read can fall back to it when the page cannot be fetched. */
@@ -100,12 +106,21 @@ function scanReader(payload: string | undefined): ReaderScan {
   return found;
 }
 
-export function signalsOf(content: ItemContent, lang: string | undefined): ItemSignals {
+export function signalsOf(content: ItemContent, lang: string | undefined, media?: NormalizedFeedMedia): ItemSignals {
   const scan = scanReader(content.reader?.payload);
   const text = content.plain ?? "";
   const code = scan.code || /```/.test(content.markdown ?? "");
   const math = scan.math || /\$[^$\n]{1,200}\$/.test(text) || /\\\(/.test(text);
-  return { ...(code ? { code } : {}), ...(math ? { math } : {}), ...(scan.figures ? { figures: true } : {}), ...(lang ? { lang } : {}) };
+  return {
+    ...(code ? { code } : {}),
+    ...(math ? { math } : {}),
+    ...(scan.figures ? { figures: true } : {}),
+    ...(lang ? { lang } : {}),
+    ...(media ? { media: media.kind } : {}),
+    ...(media?.durationSec !== undefined ? { durationSec: media.durationSec } : {}),
+    ...(media?.transcripts?.length ? { hasTranscript: true } : {}),
+    ...(media?.chapters?.length ? { chapters: media.chapters } : {}),
+  };
 }
 
 function contentOf(entry: NormalizedFeedEntry): ItemContent {
@@ -119,17 +134,21 @@ function contentOf(entry: NormalizedFeedEntry): ItemContent {
 export function itemOf(entry: NormalizedFeedEntry, lang: string | undefined, now: () => Date): ItemInput {
   const content = contentOf(entry);
   const plain = content.plain ?? content.markdown ?? "";
+  // `selection.text.v1` concatenates paragraphs without newlines; `agent.gfm.v1` preserves line breaks for chapter/sponsor stripping.
+  const gistSource = entry.media ? stripShowNotesBoilerplate(content.markdown ?? plain) || plain : plain;
   const completeness = entry.materialization.quality.completeness;
   const carriesFullText = completeness === "declared_full" || completeness === "ambiguous";
-  const summaryOnly = !carriesFullText || wordCount(plain) < SUMMARY_WORDS;
+  const summaryOnly = entry.media
+    ? !entry.media.transcripts?.length && wordCount(plain) < SUMMARY_WORDS
+    : !carriesFullText || wordCount(plain) < SUMMARY_WORDS;
   return {
     externalId: entry.externalId,
     title: collapse(entry.title) || "Untitled",
     link: entry.link,
     publishedAt: entry.publishedAt ?? now().toISOString(),
-    gist: gistOf(plain),
+    gist: gistOf(gistSource),
     readingMinutes: readingMinutes(plain),
-    signals: signalsOf(content, lang),
+    signals: signalsOf(content, lang, entry.media),
     summaryOnly,
     ...(summaryOnly ? {} : { content }),
   };
@@ -137,8 +156,17 @@ export function itemOf(entry: NormalizedFeedEntry, lang: string | undefined, now
 
 const NEWSLETTER_WORDS = /newsletter|weekly|周刊|digest/i;
 
-/** What the feed itself says about every entry: where it appeared and, from the feed's name, whether it is a newsletter or a blog. The normalizer exposes no per-entry author. */
-export function feedItemMeta(sourceTitle: string, publishedAt: string): MaterialMeta {
+/** What the feed itself says about every entry: where it appeared and whether it is a podcast episode, video, newsletter or blog. */
+export function feedItemMeta(sourceTitle: string, publishedAt: string, media?: NormalizedFeedMedia): MaterialMeta {
+  if (media) {
+    return {
+      kind: media.kind === "video" ? "videoRecording" : "podcastEpisode",
+      publication: sourceTitle,
+      date: publishedAt,
+      ...(media.episode !== undefined ? { issue: String(media.episode) } : {}),
+      ...(media.author ? { creators: [{ role: media.kind === "video" ? "author" : "host", name: media.author }] } : {}),
+    };
+  }
   return { kind: NEWSLETTER_WORDS.test(sourceTitle) ? "newsletter" : "blogPost", publication: sourceTitle, date: publishedAt };
 }
 
@@ -161,6 +189,9 @@ export function parseFeed(bytes: Uint8Array, mediaType: string, url: string, now
     title,
     ...(siteUrl ? { siteUrl } : {}),
     ...(lang ? { lang } : {}),
-    items: outcome.feed.entries.map((entry) => { const item = itemOf(entry, lang, now); return { ...item, meta: feedItemMeta(title, item.publishedAt) }; }),
+    items: outcome.feed.entries.map((entry) => {
+      const item = itemOf(entry, lang, now);
+      return { ...item, meta: feedItemMeta(title, item.publishedAt, entry.media) };
+    }),
   };
 }

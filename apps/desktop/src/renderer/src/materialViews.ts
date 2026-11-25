@@ -3,8 +3,8 @@ import type { Annotation, MaterialRecord, MaterialView, MaterialViewContent, Mat
 // One material, several ways to read it: the pure helpers the reader, the Notes panel, the Info
 // panel and the Library rows share. The hook that chooses and loads a view is useMaterialView.ts.
 
-export const VIEW_LABELS: Record<MaterialViewId, string> = { web: "Web", pdf: "PDF", markdown: "Markdown", text: "Text", artifact: "Artifact" };
-const VIEW_IDS: readonly MaterialViewId[] = ["web", "pdf", "markdown", "text", "artifact"];
+export const VIEW_LABELS: Record<MaterialViewId, string> = { web: "Web", pdf: "PDF", markdown: "Markdown", text: "Text", artifact: "Artifact", transcript: "Transcript", shownotes: "Show notes" };
+const VIEW_IDS: readonly MaterialViewId[] = ["web", "pdf", "markdown", "text", "artifact", "transcript", "shownotes"];
 
 export function isMaterialViewId(value: unknown): value is MaterialViewId {
   return typeof value === "string" && (VIEW_IDS as readonly string[]).includes(value);

@@ -3,16 +3,17 @@ import type { Creator, CreatorRole, MaterialKind, MaterialMeta, MaterialSummary 
 // Pure helpers over the bibliographic model: labels, name and date handling, the citation line.
 // No React, no API — the Info panel, the readers, the Library and the preview all read from here.
 
-export const MATERIAL_KINDS: readonly MaterialKind[] = ["webpage", "blogPost", "newsletter", "newsArticle", "journalArticle", "preprint", "conferencePaper", "book", "bookSection", "report", "thesis", "document", "note"];
+export const MATERIAL_KINDS: readonly MaterialKind[] = ["webpage", "blogPost", "newsletter", "newsArticle", "journalArticle", "preprint", "conferencePaper", "book", "bookSection", "report", "thesis", "document", "podcastEpisode", "videoRecording", "note"];
 
 export const KIND_LABELS: Record<MaterialKind, string> = {
   webpage: "Web page", blogPost: "Blog post", newsletter: "Newsletter", newsArticle: "News article",
   journalArticle: "Journal article", preprint: "Preprint", conferencePaper: "Conference paper",
-  book: "Book", bookSection: "Book section", report: "Report", thesis: "Thesis", document: "Document", note: "Note",
+  book: "Book", bookSection: "Book section", report: "Report", thesis: "Thesis", document: "Document",
+  podcastEpisode: "Podcast episode", videoRecording: "Video", note: "Note",
 };
 
-export const CREATOR_ROLES: readonly CreatorRole[] = ["author", "editor", "translator", "contributor"];
-export const ROLE_LABELS: Record<CreatorRole, string> = { author: "Author", editor: "Editor", translator: "Translator", contributor: "Contributor" };
+export const CREATOR_ROLES: readonly CreatorRole[] = ["author", "editor", "translator", "contributor", "host", "guest"];
+export const ROLE_LABELS: Record<CreatorRole, string> = { author: "Author", editor: "Editor", translator: "Translator", contributor: "Contributor", host: "Host", guest: "Guest" };
 
 export function isMaterialKind(value: unknown): value is MaterialKind { return typeof value === "string" && (MATERIAL_KINDS as readonly string[]).includes(value); }
 export function isCreatorRole(value: unknown): value is CreatorRole { return typeof value === "string" && (CREATOR_ROLES as readonly string[]).includes(value); }
@@ -26,6 +27,8 @@ export function publicationLabel(kind: MaterialKind | undefined): string {
     case "newsletter": return "Newsletter";
     case "webpage": return "Site";
     case "bookSection": return "Book";
+    case "podcastEpisode": return "Podcast";
+    case "videoRecording": return "Channel";
     default: return "Publication";
   }
 }

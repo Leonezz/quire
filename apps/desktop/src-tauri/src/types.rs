@@ -60,6 +60,30 @@ pub struct PdfInfo {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct MediaChapter {
+    pub start_sec: f64,
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct MediaInfo {
+    pub kind: String,
+    pub provider: String,
+    pub stream_url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub video_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_sec: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cached_bytes: Option<u64>,
+    pub transcript_origin: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chapters: Option<Vec<MediaChapter>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct CaptureInfo {
     pub byte_length: u64,
     pub media_type: String,
@@ -222,6 +246,8 @@ pub struct MaterialRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pdf: Option<PdfInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub media: Option<MediaInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub capture: Option<CaptureInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arxiv_version: Option<u32>,
@@ -291,6 +317,8 @@ pub struct Annotation {
     pub kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub view: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_range: Option<[f64; 2]>,
     pub color: String,
     pub created_at: String,
     pub updated_at: String,
@@ -347,6 +375,14 @@ pub struct ItemSignals {
     pub figures: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lang: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub duration_sec: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub has_transcript: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chapters: Option<Vec<MediaChapter>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -390,12 +426,37 @@ pub enum SourceDetection {
         #[serde(skip_serializing_if = "Option::is_none")]
         title: Option<String>,
     },
+    Podcast {
+        url: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(rename = "siteUrl", skip_serializing_if = "Option::is_none")]
+        site_url: Option<String>,
+    },
+    Youtube {
+        url: String,
+        #[serde(rename = "channelId", skip_serializing_if = "Option::is_none")]
+        channel_id: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+    },
     Arxiv {
         category: String,
         title: String,
     },
     Page {
         url: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        feed: Option<String>,
+    },
+    Episode {
+        url: String,
+        #[serde(rename = "mediaKind")]
+        media_kind: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(rename = "durationSec", skip_serializing_if = "Option::is_none")]
+        duration_sec: Option<u32>,
         #[serde(skip_serializing_if = "Option::is_none")]
         feed: Option<String>,
     },
@@ -693,6 +754,18 @@ pub struct TextViewAnchor {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct TranscriptAnchor {
+    pub paragraph_index: u32,
+    pub start: u32,
+    pub end: u32,
+    pub start_sec: f64,
+    pub end_sec: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct TextViewJudged {
     pub provider: String,
     pub asked: u32,
@@ -742,6 +815,8 @@ pub struct MaterialViewContent {
     pub problems: Vec<NormalizationProblem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub anchors: Option<Vec<TextViewAnchor>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_anchors: Option<Vec<TranscriptAnchor>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub artifact_body: Option<ArtifactBody>,
     #[serde(skip_serializing_if = "Option::is_none")]

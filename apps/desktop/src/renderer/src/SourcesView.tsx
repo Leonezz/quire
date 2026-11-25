@@ -105,7 +105,7 @@ export function SourcesView({ sources, selectedId, onSelect, refresh, onOpenLink
                 </div>
                 {actionError ? <div className="mb-4 max-w-[560px]"><InlineError title="That did not go through." message={actionError} /></div> : null}
                 <dl className="m-0 grid max-w-[560px] gap-2">
-                  <Detail label="Locator">{current.kind === "feed" ? <a href={current.locator} className="text-accent-text" onClick={(event) => { event.preventDefault(); onOpenLink(current.locator); }}>{current.locator}</a> : current.locator}</Detail>
+                  <Detail label="Locator">{current.kind !== "arxiv" ? <a href={current.locator} className="text-accent-text" onClick={(event) => { event.preventDefault(); onOpenLink(current.locator); }}>{current.locator}</a> : current.locator}</Detail>
                   {current.siteUrl ? <Detail label="Site"><a href={current.siteUrl} className="text-accent-text" onClick={(event) => { event.preventDefault(); onOpenLink(current.siteUrl!); }}>{current.siteUrl}</a></Detail> : null}
                   <Detail label="Rate">{weeklyRateLabel(current.weeklyRate)}</Detail>
                   <Detail label="Items">{current.itemCount} received · {current.keptCount} kept</Detail>

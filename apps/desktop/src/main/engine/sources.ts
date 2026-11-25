@@ -173,6 +173,10 @@ export function subscriptionOf(detection: SourceDetection): SourceInput | undefi
   switch (detection.kind) {
     case "arxiv": return { kind: "arxiv", locator: detection.category, title: detection.title };
     case "feed": return { kind: "feed", locator: detection.url, title: detection.title ?? new URL(detection.url).hostname };
-    case "page": return detection.feed ? { kind: "feed", locator: detection.feed, title: new URL(detection.feed).hostname } : undefined;
+    case "podcast": return { kind: "podcast", locator: detection.url, title: detection.title ?? new URL(detection.url).hostname, ...(detection.siteUrl ? { siteUrl: detection.siteUrl } : {}) };
+    case "youtube": return { kind: "youtube", locator: detection.url, title: detection.title ?? "YouTube channel" };
+    case "page":
+    case "episode":
+      return detection.feed ? { kind: "feed", locator: detection.feed, title: new URL(detection.feed).hostname } : undefined;
   }
 }
