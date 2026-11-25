@@ -74,7 +74,7 @@ function parseTimestampLineSeconds(token: string): number | undefined {
 const LEADING_CHAPTER_LINE =
   /^(?:[-*•]\s*)?(?:\[|\()?(\d{1,2}:[0-5]\d(?::[0-5]\d)?)(?:\]|\))?(?:\s*[-–—:·|]\s*|\s+)(.+)$/u;
 const TRAILING_CHAPTER_LINE =
-  /^(?:[-*•]\s*)?(.+?)(?:\s*[-–—:·|]\s*|\s+)(?:\[|\()?(\d{1,2}:[0-5]\d(?::[0-5]\d)?)(?:\]|\))$/u;
+  /^(?:[-*•]\s*)?(.+?)(?:\s*[-–—:·|]\s*|\s+)(?:\[|\()?(\d{1,2}:[0-5]\d(?::[0-5]\d)?)(?:\]|\))?$/u;
 
 function decodeBasicHtmlToLines(input: string): string[] {
   const withBreaks = input
@@ -129,7 +129,8 @@ export function extractDescriptionChapters(source: string): NormalizedMediaChapt
   return candidates;
 }
 
-const SPONSOR_HEADING = /^(?:sponsors?|sponsored by|supported by|brought to you by|connect with|follow us|social links|赞助|本期赞助|关注我们)\b/iu;
+const SPONSOR_HEADING =
+  /^(?:sponsors?|sponsored by|supported by|brought to you by|connect with|follow us|social links|赞助商?|本期赞助|关注我们)(?:\b|(?=\s|[:：\-–—]|$))/iu;
 
 /**
  * Drops chapter timestamp tables and trailing sponsor/social link blocks when building a concise

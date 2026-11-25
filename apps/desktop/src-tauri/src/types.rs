@@ -890,6 +890,15 @@ pub struct TextViewAnchor {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct TranscriptSubSpan {
+    pub start: u32,
+    pub end: u32,
+    pub start_sec: f64,
+    pub end_sec: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct TranscriptAnchor {
     pub paragraph_index: u32,
     pub start: u32,
@@ -898,6 +907,8 @@ pub struct TranscriptAnchor {
     pub end_sec: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub speaker: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub segments: Option<Vec<TranscriptSubSpan>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -29,6 +29,13 @@ export type TranscriptKeyframe = {
   width?: number;
 };
 
+export type TranscriptSubSpan = {
+  end: number;
+  endSec: number;
+  start: number;
+  startSec: number;
+};
+
 /**
  * Maps one merged transcript paragraph in a `transcript` view to both its `[start, end)` character
  * span inside `view.plain` (matching PDF `TextViewAnchor`) and its `[startSec, endSec]` media window.
@@ -37,6 +44,7 @@ export type TranscriptAnchor = {
   end: number;
   endSec: number;
   paragraphIndex: number;
+  segments?: TranscriptSubSpan[];
   speaker?: string;
   start: number;
   startSec: number;

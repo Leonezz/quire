@@ -332,15 +332,6 @@ export function parseTranscriptCues(source: string, mediaType?: string): Transcr
   return parseSrtCues(trimmed);
 }
 
-function joinSegmentsText(left: string, right: string): string {
-  if (!left) return right;
-  if (!right) return left;
-  const leftLast = left.codePointAt(left.length - 1) ?? 0;
-  const rightFirst = right.codePointAt(0) ?? 0;
-  if (isCjk(leftLast) && isCjk(rightFirst)) return `${left}${right}`;
-  return `${left} ${right}`.replace(/\s+/gu, " ").trim();
-}
-
 function trimOverlappingPrefix(previous: string, current: string): string {
   const prevNorm = previous.trim();
   const currNorm = current.trim();
@@ -410,9 +401,17 @@ export function dedupeRollingCues(cues: readonly TranscriptCue[]): TranscriptCue
   return out;
 }
 
+type RelativeCueSpan = {
+  endSec: number;
+  relEnd: number;
+  relStart: number;
+  startSec: number;
+};
+
 type MergedParagraph = {
   cues: TranscriptCue[];
   endSec: number;
+  relSpans: RelativeCueSpan[];
   speaker?: string;
   startSec: number;
   text: string;
@@ -422,10 +421,36 @@ function flushCueBuffer(buffer: readonly TranscriptCue[]): MergedParagraph {
   const first = buffer[0]!;
   const last = buffer[buffer.length - 1]!;
   let combined = "";
-  for (const cue of buffer) combined = joinSegmentsText(combined, cue.text);
+  const relSpans: RelativeCueSpan[] = [];
+  for (const cue of buffer) {
+    const piece = cue.text.replace(/\s+/gu, " ").trim();
+    if (!piece) continue;
+    if (!combined) {
+      combined = piece;
+      relSpans.push({
+        endSec: cue.endSec,
+        relEnd: combined.length,
+        relStart: 0,
+        startSec: cue.startSec,
+      });
+    } else {
+      const leftLast = combined.codePointAt(combined.length - 1) ?? 0;
+      const rightFirst = piece.codePointAt(0) ?? 0;
+      const sep = isCjk(leftLast) && isCjk(rightFirst) ? "" : " ";
+      const relStart = combined.length + sep.length;
+      combined = `${combined}${sep}${piece}`;
+      relSpans.push({
+        endSec: cue.endSec,
+        relEnd: combined.length,
+        relStart,
+        startSec: cue.startSec,
+      });
+    }
+  }
   return {
     cues: [...buffer],
     endSec: Math.max(first.startSec + 0.1, last.endSec),
+    relSpans,
     startSec: first.startSec,
     text: combined,
     ...(first.speaker ? { speaker: first.speaker } : {}),
@@ -689,6 +714,16 @@ export function normalizeTranscript(
       start,
       startSec: Number(paragraph.startSec.toFixed(2)),
       ...(paragraph.speaker ? { speaker: paragraph.speaker } : {}),
+      ...(paragraph.relSpans.length > 1
+        ? {
+            segments: paragraph.relSpans.map((sp) => ({
+              end: start + sp.relEnd,
+              endSec: Number(sp.endSec.toFixed(2)),
+              start: start + sp.relStart,
+              startSec: Number(sp.startSec.toFixed(2)),
+            })),
+          }
+        : {}),
     });
     paragraphIndex += 1;
 
@@ -735,11 +770,22 @@ export function timeRangeForOffsets(
   end: number,
 ): [startSec: number, endSec: number] | undefined {
   if (end <= start || anchors.length === 0) return undefined;
-  const overlapping = anchors.filter((anchor) => anchor.start < end && anchor.end > start);
-  if (overlapping.length === 0) return undefined;
+  const fineSpans: { end: number; endSec: number; start: number; startSec: number }[] = [];
+  for (const anchor of anchors) {
+    if (anchor.end <= start || anchor.start >= end) continue;
+    if (anchor.segments && anchor.segments.length > 0) {
+      const sub = anchor.segments.filter((seg) => seg.start < end && seg.end > start);
+      if (sub.length > 0) {
+        fineSpans.push(...sub);
+        continue;
+      }
+    }
+    fineSpans.push(anchor);
+  }
+  if (fineSpans.length === 0) return undefined;
 
-  const first = overlapping[0]!;
-  const last = overlapping[overlapping.length - 1]!;
+  const first = fineSpans[0]!;
+  const last = fineSpans[fineSpans.length - 1]!;
   const firstLen = Math.max(1, first.end - first.start);
   const lastLen = Math.max(1, last.end - last.start);
   const firstRatio = Math.max(0, Math.min(1, (start - first.start) / firstLen));
