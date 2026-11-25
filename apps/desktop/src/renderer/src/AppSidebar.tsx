@@ -50,7 +50,7 @@ export function AppSidebar({ slideWidth, scope, onScope, inbox, queueCount, conv
   };
 
   return (
-    <div className="grid h-full w-full min-h-0 grid-rows-[52px_minmax(0,1fr)_auto] overflow-hidden" style={slideWidth === undefined ? undefined : { width: slideWidth }}>
+    <div className="grid h-full w-full min-h-0 min-w-0 grid-cols-[minmax(0,1fr)] grid-rows-[52px_minmax(0,1fr)_auto] overflow-hidden" style={slideWidth === undefined ? undefined : { width: slideWidth }}>
       <div className="titlebar-drag flex items-center justify-end pr-2">
         <ToolbarButton aria-label="Hide sidebar (⌘\\)" isSelected={false} onChange={onHide}><PanelLeft /></ToolbarButton>
       </div>
@@ -72,7 +72,7 @@ export function AppSidebar({ slideWidth, scope, onScope, inbox, queueCount, conv
           <SidebarItem id="sources" label="Manage sources…" quiet />
         </SidebarSection>
       </Sidebar>
-      <div className="pb-2.5 pt-1">
+      <div className="min-w-0 pb-2.5 pt-1">
         <UpdateBanner />
         <Button variant="quiet" size="sm" className="mx-2.5 w-[calc(100%-20px)] justify-start gap-2 px-2.5 text-[13px] font-medium text-label" onPress={onOpenSettings}><Icon of={SettingsIcon} size="md" className="text-label-2" />Settings</Button>
       </div>

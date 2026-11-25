@@ -71,4 +71,14 @@ describe("UpdateBanner", () => {
     await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Restart to update" })); await flush(); });
     expect(api.read.installUpdate).toHaveBeenCalledTimes(1);
   });
+
+  it("constrains its column width and wraps long prerelease progress instead of overflowing the sidebar", async () => {
+    await mount({ phase: "downloading", current: CURRENT, latest: "0.2.0-alpha.12", percent: 42 });
+    const notice = screen.getByRole("status", { name: "Update v0.2.0-alpha.12" });
+    expect(notice.className).toContain("grid-cols-[minmax(0,1fr)]");
+    const headline = screen.getByText("Downloading v0.2.0-alpha.12… 42%");
+    expect(headline.className).toContain("break-words");
+    expect(headline.className).not.toContain("truncate");
+    expect(screen.getByRole("button", { name: "Dismiss update notice" }).className).toContain("shrink-0");
+  });
 });

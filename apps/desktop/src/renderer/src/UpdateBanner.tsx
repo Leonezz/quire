@@ -40,12 +40,12 @@ function headline(state: NoticeState, latest: string): string {
 function UpdateNotice({ state, latest }: { state: NoticeState; latest: string }) {
   const step = nextStep(state);
   return (
-    <div role="status" aria-label={`Update v${latest}`} className="t-toast mx-2.5 mb-1 grid gap-1.5 rounded-card bg-accent-soft px-2.5 py-2 text-[12.5px] text-label">
-      <div className="flex items-center gap-1">
-        <span className="min-w-0 flex-1 truncate font-medium tabular-nums">{headline(state, latest)}</span>
-        <Button size="sm" variant="quiet" aria-label="Dismiss update notice" className="-mr-1.5" onPress={() => updateStore.dismiss()}><Icon of={X} size="sm" /></Button>
+    <div role="status" aria-label={`Update v${latest}`} className="t-toast mx-2.5 mb-1 grid min-w-0 grid-cols-[minmax(0,1fr)] gap-1.5 rounded-card bg-accent-soft px-2.5 py-2 text-[12.5px] leading-[17px] text-label">
+      <div className="flex min-w-0 items-start gap-1">
+        <span className="min-w-0 flex-1 self-center break-words font-medium tabular-nums">{headline(state, latest)}</span>
+        <Button size="sm" variant="quiet" aria-label="Dismiss update notice" className="-mr-1.5 shrink-0" onPress={() => updateStore.dismiss()}><Icon of={X} size="sm" /></Button>
       </div>
-      {step ? <Button size="sm" variant="primary" className="justify-self-start" onPress={() => { void step.run(); }}>{step.label}</Button> : null}
+      {step ? <Button size="sm" variant="primary" className="max-w-full justify-self-start" onPress={() => { void step.run(); }}>{step.label}</Button> : null}
     </div>
   );
 }
