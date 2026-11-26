@@ -114,16 +114,22 @@ export function ReaderArticle({ material, content, prefs, resolveImage, onOpenLi
       for (const anchor of timeAnchors) {
         const p = paragraphs[anchor.paragraphIndex];
         if (!p) continue;
-        if (anchor.speaker && anchor.speaker !== prevSpeaker) {
+        const hasSpeaker = Boolean(anchor.speaker && anchor.speaker !== prevSpeaker);
+        if (hasSpeaker && anchor.speaker) {
           p.setAttribute("data-speaker", anchor.speaker);
         }
         prevSpeaker = anchor.speaker;
         const pRect = p.getBoundingClientRect();
-        const top = artRect.height > 0 || pRect.height > 0 ? pRect.top - artRect.top : p.offsetTop;
+        const baseTop = artRect.height > 0 || pRect.height > 0 ? pRect.top - artRect.top : p.offsetTop;
+        let lineOffset = 0;
+        if (!hasSpeaker && typeof window !== "undefined") {
+          const lh = Number.parseFloat(window.getComputedStyle(p).lineHeight);
+          lineOffset = Number.isFinite(lh) && lh > 18 ? Math.round((lh - 18) / 2) : 4;
+        }
         measured.push({
           paragraphIndex: anchor.paragraphIndex,
           startSec: anchor.startSec,
-          top,
+          top: Math.round(baseTop) + lineOffset,
         });
       }
       setStamps(measured);
@@ -237,8 +243,8 @@ export function ReaderArticle({ material, content, prefs, resolveImage, onOpenLi
                   type="button"
                   tabIndex={-1}
                   onClick={() => onSeekTime?.(stamp.startSec)}
-                  style={{ top: stamp.top + 3 }}
-                  className={`pointer-events-auto absolute right-0 cursor-pointer rounded-control border-0 bg-transparent px-1 py-0.5 font-mono text-[11px] leading-[15px] tabular-nums transition-colors hover:bg-fill hover:text-label ${isActive ? "font-semibold text-accent-text" : "text-label-3"}`}
+                  style={{ top: stamp.top }}
+                  className={`pointer-events-auto absolute right-0 inline-flex h-[18px] cursor-pointer items-center rounded-control border-0 bg-transparent px-1 py-0 font-mono text-[11.5px] leading-[18px] tabular-nums transition-colors hover:bg-fill hover:text-label ${isActive ? "font-semibold text-accent-text" : "text-label-3"}`}
                 >
                   {formatMediaClock(stamp.startSec)}
                 </button>

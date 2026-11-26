@@ -373,9 +373,12 @@ describe("Podcast reading and companion player", () => {
       await flush();
     });
 
-    // Sectioned `<section> > <p>` paragraphs still receive both margin timestamps and `data-speaker` attributes
-    expect(screen.getByText("00:12")).toBeTruthy();
-    expect(screen.getByText("00:45")).toBeTruthy();
+    // Sectioned `<section> > <p>` paragraphs receive margin timestamps flush with speaker header (`0px` extra offset) and `data-speaker` attributes
+    const stamp0 = screen.getByText("00:12") as HTMLElement;
+    const stamp1 = screen.getByText("00:45") as HTMLElement;
+    expect(stamp0).toBeTruthy();
+    expect(stamp1).toBeTruthy();
+    expect(stamp0.style.top).toBe("0px");
     const speakerParas = container.querySelectorAll("p[data-speaker]");
     expect(speakerParas).toHaveLength(2);
     expect(speakerParas[0]?.getAttribute("data-speaker")).toBe("主持人");

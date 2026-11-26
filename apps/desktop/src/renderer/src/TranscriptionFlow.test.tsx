@@ -161,6 +161,19 @@ describe("Interactive ASR transcription & Agent transcript cleanup", () => {
 
     api.read = mockRead({
       getMaterial: vi.fn(async () => currentMaterial),
+      getMaterialView: vi.fn(async (_id, view) =>
+        view === "shownotes"
+          ? {
+              view: "shownotes" as const,
+              mediaType: "text/x-quire-shownotes",
+              markdown: "Original show notes body",
+              plain: "Original show notes body",
+              readingMinutes: 1,
+              quality: absentPodcast.quality,
+              problems: [],
+            }
+          : undefined,
+      ),
       listAnnotations: vi.fn(async () => []),
       resolveImage: vi.fn(async (u: string) => u),
       getMediaState: vi.fn(async () => undefined),
@@ -215,6 +228,16 @@ describe("Interactive ASR transcription & Agent transcript cleanup", () => {
 
     expect(screen.getByText(transcribedParagraph)).toBeTruthy();
     expect(screen.getByRole("button", { name: "Clean up with the agent" })).toBeTruthy();
+
+    // Switching back to Show notes after transcription completed must NOT bounce back to Transcript
+    const showNotesTab = screen.getByRole("radio", { name: "Show notes" });
+    await act(async () => {
+      fireEvent.click(showNotesTab);
+      await flush();
+      await flush();
+    });
+    expect(screen.getByRole("radio", { name: "Show notes" }).getAttribute("aria-checked")).toBe("true");
+    expect(screen.getByText("Original show notes body")).toBeTruthy();
   });
 
   it("opens the Agent panel and dispatches task cleanup_transcript when clicking Clean up with the agent", async () => {

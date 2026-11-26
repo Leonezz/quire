@@ -208,19 +208,43 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
       }
     }
   }, [material.id, onMaterialSaved, views]);
+  const viewsRef = useRef(views);
+  viewsRef.current = views;
+  const prevCompleteRef = useRef<{ id: string; nonce: number | undefined; chunks: number }>({
+    id: material.id,
+    nonce: transcription.completedNonce,
+    chunks: transcription.job?.completedChunks ?? 0,
+  });
   useEffect(() => {
     const completedChunks = transcription.job?.completedChunks ?? 0;
-    if (transcription.completedNonce === undefined && completedChunks === 0) return;
+    const prev = prevCompleteRef.current;
+    if (prev.id !== material.id) {
+      prevCompleteRef.current = {
+        id: material.id,
+        nonce: transcription.completedNonce,
+        chunks: completedChunks,
+      };
+      return;
+    }
+    const nonceAdvanced =
+      transcription.completedNonce !== undefined && transcription.completedNonce !== prev.nonce;
+    const chunksAdvanced = Boolean(transcription.job) && completedChunks > prev.chunks;
+    prevCompleteRef.current = {
+      id: material.id,
+      nonce: transcription.completedNonce,
+      chunks: completedChunks,
+    };
+    if (!nonceAdvanced && !chunksAdvanced) return;
     read.getMaterial(material.id)
       .then((rec) => {
         if (!rec) return;
         onMaterialSaved(rec);
-        if (rec.readyViews.includes("transcript") && views.view !== "transcript") {
-          views.select("transcript");
+        if (nonceAdvanced && rec.readyViews.includes("transcript") && viewsRef.current.view !== "transcript") {
+          viewsRef.current.select("transcript");
         }
       })
       .catch(() => undefined);
-  }, [material.id, onMaterialSaved, transcription.completedNonce, transcription.job?.completedChunks, views]);
+  }, [material.id, onMaterialSaved, transcription.completedNonce, transcription.job, transcription.job?.completedChunks]);
   const startCleanupTranscript = useCallback(async () => {
     setAsked(null); setPanel("agent"); setCleanupError(undefined);
     if (prefs.focus) setPrefs({ ...prefs, focus: false });
