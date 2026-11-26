@@ -96,8 +96,17 @@ pub fn encode_wav_pcm16_16k(samples: &[i16]) -> Vec<u8> {
     out.extend_from_slice(&16u16.to_le_bytes()); // bits per sample = 16
     out.extend_from_slice(b"data");
     out.extend_from_slice(&data_bytes.to_le_bytes());
-    for &sample in samples {
-        out.extend_from_slice(&sample.to_le_bytes());
+    #[cfg(target_endian = "little")]
+    {
+        // SAFETY: `i16` has no padding or invalid bit patterns and target is little-endian.
+        let raw_bytes = unsafe { std::slice::from_raw_parts(samples.as_ptr() as *const u8, samples.len() * 2) };
+        out.extend_from_slice(raw_bytes);
+    }
+    #[cfg(not(target_endian = "little"))]
+    {
+        for &sample in samples {
+            out.extend_from_slice(&sample.to_le_bytes());
+        }
     }
     out
 }
@@ -111,7 +120,7 @@ pub fn parse_wav_pcm16_to_16k_mono(bytes: &[u8]) -> Option<Vec<i16>> {
     let mut channels = 0u16;
     let mut sample_rate = 0u32;
     let mut bits_per_sample = 0u16;
-    let mut audio_format = 0u16;
+    let mut is_pcm = false;
     let mut pcm_slice: Option<&[u8]> = None;
 
     while pos + 8 <= bytes.len() {
@@ -121,10 +130,13 @@ pub fn parse_wav_pcm16_to_16k_mono(bytes: &[u8]) -> Option<Vec<i16>> {
         let body_end = body_start.saturating_add(chunk_len).min(bytes.len());
         if chunk_id == b"fmt " && body_end - body_start >= 16 {
             let fmt = &bytes[body_start..body_end];
-            audio_format = u16::from_le_bytes([fmt[0], fmt[1]]);
+            let audio_format = u16::from_le_bytes([fmt[0], fmt[1]]);
             channels = u16::from_le_bytes([fmt[2], fmt[3]]);
             sample_rate = u32::from_le_bytes([fmt[4], fmt[5], fmt[6], fmt[7]]);
             bits_per_sample = u16::from_le_bytes([fmt[14], fmt[15]]);
+            // Accept both classic WAVE_FORMAT_PCM (1) and macOS CoreAudio's WAVE_FORMAT_EXTENSIBLE (0xFFFE) with SubFormat PCM (1)
+            is_pcm = audio_format == 1
+                || (audio_format == 0xFFFE && fmt.len() >= 26 && u16::from_le_bytes([fmt[24], fmt[25]]) == 1);
         } else if chunk_id == b"data" {
             pcm_slice = Some(&bytes[body_start..body_end]);
             break;
@@ -136,7 +148,7 @@ pub fn parse_wav_pcm16_to_16k_mono(bytes: &[u8]) -> Option<Vec<i16>> {
     }
 
     let raw = pcm_slice?;
-    if audio_format != 1 || bits_per_sample != 16 || channels == 0 || sample_rate == 0 {
+    if !is_pcm || bits_per_sample != 16 || channels == 0 || sample_rate == 0 {
         return None;
     }
     let ch = channels as usize;
@@ -765,32 +777,60 @@ pub async fn download_asr_model(
 }
 
 #[cfg(target_os = "macos")]
-fn cached_whisper_context(model_path: &Path) -> Result<Arc<whisper_rs::WhisperContext>, String> {
+struct CachedWhisperEngine {
+    model_path: PathBuf,
+    _ctx: Arc<whisper_rs::WhisperContext>,
+    state: Arc<Mutex<whisper_rs::WhisperState>>,
+}
+
+#[cfg(target_os = "macos")]
+fn cached_whisper_state(model_path: &Path) -> Result<Arc<Mutex<whisper_rs::WhisperState>>, String> {
     use std::sync::OnceLock;
     static LOG_ONCE: OnceLock<()> = OnceLock::new();
-    static CTX_CACHE: OnceLock<Mutex<Option<(PathBuf, Arc<whisper_rs::WhisperContext>)>>> = OnceLock::new();
+    static ENGINE_CACHE: OnceLock<Mutex<Option<CachedWhisperEngine>>> = OnceLock::new();
 
     LOG_ONCE.get_or_init(|| {
         whisper_rs::install_logging_hooks();
     });
 
-    let cache = CTX_CACHE.get_or_init(|| Mutex::new(None));
+    let cache = ENGINE_CACHE.get_or_init(|| Mutex::new(None));
     let mut guard = cache
         .lock()
         .map_err(|_| "Whisper model cache lock poisoned.".to_string())?;
-    if let Some((ref cached_path, ref ctx)) = *guard {
-        if cached_path == model_path {
-            return Ok(ctx.clone());
+    if let Some(ref engine) = *guard {
+        if engine.model_path == model_path {
+            return Ok(engine.state.clone());
         }
     }
 
     let mut params = whisper_rs::WhisperContextParameters::default();
     params.flash_attn(true);
-    let ctx = whisper_rs::WhisperContext::new_with_params(model_path, params)
-        .map_err(|e| format!("Failed to load local Whisper model: {e}"))?;
-    let shared = Arc::new(ctx);
-    *guard = Some((model_path.to_path_buf(), shared.clone()));
-    Ok(shared)
+    let ctx = Arc::new(
+        whisper_rs::WhisperContext::new_with_params(model_path, params)
+            .map_err(|e| format!("Failed to load local Whisper model: {e}"))?,
+    );
+    let state = Arc::new(Mutex::new(
+        ctx.create_state()
+            .map_err(|e| format!("Failed to initialize Whisper Metal state: {e}"))?,
+    ));
+    *guard = Some(CachedWhisperEngine {
+        model_path: model_path.to_path_buf(),
+        _ctx: ctx,
+        state: state.clone(),
+    });
+    Ok(state)
+}
+
+#[cfg(target_os = "macos")]
+fn is_non_speech_hallucination(txt: &str) -> bool {
+    if txt.is_empty() {
+        return true;
+    }
+    let lower = txt.to_ascii_lowercase();
+    matches!(
+        lower.as_str(),
+        "[blank_audio]" | "(blank audio)" | "[music]" | "(music)" | "[applause]" | "(applause)" | "[silence]" | "(silence)"
+    )
 }
 
 async fn transcribe_chunk_local_whisper(
@@ -823,24 +863,29 @@ async fn transcribe_chunk_local_whisper(
         let chunk_end = chunk.end_sec;
 
         return tokio::task::spawn_blocking(move || {
-            let ctx = cached_whisper_context(&model_path)?;
-            let mut state = ctx
-                .create_state()
-                .map_err(|e| format!("Failed to initialize Whisper state: {e}"))?;
+            let state_arc = cached_whisper_state(&model_path)?;
+            let mut state = state_arc
+                .lock()
+                .map_err(|_| "Whisper state lock poisoned.".to_string())?;
 
             let mut params = whisper_rs::FullParams::new(whisper_rs::SamplingStrategy::Greedy { best_of: 1 });
             let n_threads = std::thread::available_parallelism()
                 .map(|n| n.get().clamp(2, 8) as i32)
                 .unwrap_or(4);
             params.set_n_threads(n_threads);
-            params.set_language(None);
-            params.set_detect_language(true);
+            // IMPORTANT: `language = Some("auto")` triggers language auto-detection AND continues to decode.
+            // Never set `detect_language(true)` here — in whisper.cpp `detect_language = true` means
+            // "detect language ONLY and return 0 immediately before decoding any segments"!
+            params.set_language(Some("auto"));
+            params.set_detect_language(false);
+            params.set_translate(false);
+            params.set_no_context(true);
             params.set_print_special(false);
             params.set_print_progress(false);
             params.set_print_realtime(false);
             params.set_print_timestamps(false);
             params.set_suppress_blank(true);
-            params.set_suppress_nst(true);
+            params.set_suppress_nst(false);
 
             state
                 .full(params, &pcm_f32)
@@ -850,10 +895,7 @@ async fn transcribe_chunk_local_whisper(
             for seg in state.as_iter() {
                 let raw = seg.to_str_lossy().unwrap_or_default();
                 let txt = raw.trim().to_string();
-                if txt.is_empty()
-                    || txt.eq_ignore_ascii_case("[BLANK_AUDIO]")
-                    || txt.eq_ignore_ascii_case("(blank audio)")
-                {
+                if is_non_speech_hallucination(&txt) {
                     continue;
                 }
                 let t0_sec = (seg.start_timestamp().max(0) as f64) / 100.0;
@@ -1172,14 +1214,16 @@ impl TranscriptionService {
                 .ok_or_else(|| "Material not found.".to_string())?;
             let media = record.media.clone().ok_or_else(|| "Material has no media.".to_string())?;
 
-            // 1. Acquire local media file (use existing offline cache or download temporary copy)
+            // 1. Acquire local media file (reuse existing offline cache, or download once into media cache
+            //    with its true audio container extension so CoreAudio `afconvert` and retries never re-fetch)
             let work_dir = self.data_dir.join("tmp-asr");
             fs::create_dir_all(&work_dir).map_err(|e| e.to_string())?;
             let mut temp_audio: Option<PathBuf> = None;
             let audio_path = if let Some((cached_path, _, _)) = self.media_cache.stored(&material_id) {
                 cached_path
             } else {
-                let stream_url = if media.provider == "youtube" {
+                let is_youtube = media.provider == "youtube";
+                let stream_url = if is_youtube {
                     let vid = media
                         .video_id
                         .clone()
@@ -1203,21 +1247,46 @@ impl TranscriptionService {
                 if !resp.status().is_success() {
                     return Err(format!("Media stream answered HTTP {}.", resp.status().as_u16()));
                 }
-                let p = work_dir.join(format!("src-{material_id}-{job_id}.bin"));
-                let mut f = File::create(&p).map_err(|e| e.to_string())?;
+                let content_type = resp
+                    .headers()
+                    .get(reqwest::header::CONTENT_TYPE)
+                    .and_then(|v| v.to_str().ok())
+                    .map(String::from);
+                let (ext, _) = crate::media::ext_and_mime_for(content_type.as_deref(), &stream_url);
+                let part_path = work_dir.join(format!("src-{material_id}-{job_id}.part"));
+                let mut f = File::create(&part_path).map_err(|e| e.to_string())?;
                 let mut stream = resp.bytes_stream();
                 while let Some(chunk) = stream.next().await {
                     if cancelled.load(Ordering::Relaxed) {
                         drop(f);
-                        let _ = fs::remove_file(&p);
+                        let _ = fs::remove_file(&part_path);
                         return Err("Cancelled.".into());
                     }
                     let data = chunk.map_err(|e| e.to_string())?;
                     f.write_all(&data).map_err(|e| e.to_string())?;
                 }
                 let _ = f.flush();
-                temp_audio = Some(p.clone());
-                p
+                drop(f);
+
+                if !is_youtube {
+                    let media_dir = self.media_cache.dir();
+                    let _ = fs::create_dir_all(&media_dir);
+                    let cached_dest = media_dir.join(format!("{material_id}.{ext}"));
+                    if fs::rename(&part_path, &cached_dest).is_ok() {
+                        (self.on_library_changed)();
+                        cached_dest
+                    } else {
+                        let fallback_path = work_dir.join(format!("src-{material_id}-{job_id}.{ext}"));
+                        fs::rename(&part_path, &fallback_path).map_err(|e| e.to_string())?;
+                        temp_audio = Some(fallback_path.clone());
+                        fallback_path
+                    }
+                } else {
+                    let fallback_path = work_dir.join(format!("src-{material_id}-{job_id}.{ext}"));
+                    fs::rename(&part_path, &fallback_path).map_err(|e| e.to_string())?;
+                    temp_audio = Some(fallback_path.clone());
+                    fallback_path
+                }
             };
 
             let decode_res = decode_file_to_pcm16_16k(&audio_path, &work_dir).await;
@@ -1430,5 +1499,31 @@ mod tests {
         assert_eq!(cues.len(), 2);
         assert!((cues[0].start_sec - chunks[1].start_sec).abs() < 0.05);
         assert!((cues[1].end_sec - chunks[1].end_sec).abs() < 0.05);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn decodes_aac_m4a_via_coreaudio_afconvert() {
+        let tmp = tempfile::tempdir().unwrap();
+        let sr = SAMPLE_RATE_HZ as usize;
+        let samples: Vec<i16> = (0..(sr * 2))
+            .map(|i| ((i as f64 * 440.0 * std::f64::consts::TAU / sr as f64).sin() * 6000.0) as i16)
+            .collect();
+        let wav_path = tmp.path().join("tone.wav");
+        let m4a_path = tmp.path().join("tone.m4a");
+        fs::write(&wav_path, encode_wav_pcm16_16k(&samples)).unwrap();
+
+        let status = Command::new("/usr/bin/afconvert")
+            .args(["-f", "m4af", "-d", "aac"])
+            .arg(&wav_path)
+            .arg(&m4a_path)
+            .status()
+            .await
+            .unwrap();
+        assert!(status.success());
+
+        let decoded = decode_file_to_pcm16_16k(&m4a_path, tmp.path()).await.unwrap();
+        // ~2s at 16 kHz mono (AAC encoder priming adds a few hundred frames)
+        assert!(decoded.len() >= sr && decoded.len() <= sr * 3);
     }
 }

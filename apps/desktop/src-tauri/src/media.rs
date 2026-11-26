@@ -94,7 +94,7 @@ pub fn parse_range_header(raw: Option<&str>) -> Option<(u64, Option<u64>)> {
     Some((start, end))
 }
 
-fn ext_and_mime_for(content_type: Option<&str>, stream_url: &str) -> (&'static str, &'static str) {
+pub fn ext_and_mime_for(content_type: Option<&str>, stream_url: &str) -> (&'static str, &'static str) {
     let ct = content_type
         .unwrap_or("")
         .split(';')
