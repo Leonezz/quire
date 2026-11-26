@@ -1,10 +1,20 @@
 import { useMemo, useRef, useState } from "react";
-import { BookOpen, FileText, Inbox as InboxIcon, ListOrdered, PanelLeft, Settings as SettingsIcon, Sparkles, Tag } from "lucide-react";
-import { Button, Icon, Popover, Sidebar, SidebarItem, SidebarSection, ToolbarButton, type SidebarHealth } from "@read/ui";
+import { BookOpen, FileText, Headphones, Inbox as InboxIcon, ListOrdered, PanelLeft, Settings as SettingsIcon, Sparkles, Tag, Video } from "lucide-react";
+import { Button, Icon, NowPlayingBar, Popover, Sidebar, SidebarItem, SidebarSection, ToolbarButton, type SidebarHealth } from "@read/ui";
 import type { ItemRecord, SourceRecord, TagCount } from "../../shared/contracts";
 import { sourceHealth } from "./format";
+import { mediaStore, useMediaPlayback } from "./mediaStore";
 import { UpdateBanner } from "./UpdateBanner";
-import { CUT_LABELS, LIBRARY_CUTS, scopeKey, scopeOfKey, type Scope } from "./useScope";
+import { CUT_LABELS, LIBRARY_CUTS, scopeKey, scopeOfKey, type LibraryCut, type Scope } from "./useScope";
+
+function cutIcon(cut: LibraryCut) {
+  switch (cut) {
+    case "all": return <BookOpen />;
+    case "podcasts": return <Headphones />;
+    case "videos": return <Video />;
+    default: return <FileText />;
+  }
+}
 
 const TOP_TAGS = 8;
 const ALL_TAGS_KEY = "tags:all";
@@ -23,6 +33,7 @@ export interface AppSidebarProps {
   sources: SourceRecord[];
   onHide: () => void;
   onOpenSettings: () => void;
+  onOpenMaterial?: ((id: string) => void) | undefined;
 }
 
 /** Undecided items per source, from the Inbox: the sidebar's per-source counts. */
@@ -37,10 +48,16 @@ export function undecidedBySource(inbox: readonly ItemRecord[]): Map<string, num
  * every scope in one list — Inbox · Queue · Agent, the Library's cuts, the most used tags, every
  * source with its health — and Settings pinned at the bottom, under the update notice when there is one.
  */
-export function AppSidebar({ slideWidth, scope, onScope, inbox, queueCount, conversationCount, runningCount, tags, sources, onHide, onOpenSettings }: AppSidebarProps) {
+export function AppSidebar({ slideWidth, scope, onScope, inbox, queueCount, conversationCount, runningCount, tags, sources, onHide, onOpenSettings, onOpenMaterial }: AppSidebarProps) {
   const [tagsOpen, setTagsOpen] = useState(false);
   const allTagsRef = useRef<HTMLDivElement>(null);
   const undecided = useMemo(() => undecidedBySource(inbox), [inbox]);
+  const playback = useMediaPlayback();
+  const showNowPlaying = Boolean(
+    playback.materialId &&
+      playback.materialId !== playback.mountedReaderId &&
+      (playback.playing || playback.positionSec > 0),
+  );
   const shownTags = tags.slice(0, TOP_TAGS);
   const selectedKey = scopeKey(scope);
   const choose = (key: string) => {
@@ -61,7 +78,7 @@ export function AppSidebar({ slideWidth, scope, onScope, inbox, queueCount, conv
           <SidebarItem id="agent" icon={<Sparkles />} label="Agent" count={runningCount > 0 ? runningCount : conversationCount} busy={runningCount > 0} />
         </SidebarSection>
         <SidebarSection title="Library">
-          {LIBRARY_CUTS.map((cut) => <SidebarItem key={cut} id={`library:${cut}`} icon={cut === "all" ? <BookOpen /> : <FileText />} label={cut === "all" ? "All" : CUT_LABELS[cut]} />)}
+          {LIBRARY_CUTS.map((cut) => <SidebarItem key={cut} id={`library:${cut}`} icon={cutIcon(cut)} label={cut === "all" ? "All" : CUT_LABELS[cut]} />)}
         </SidebarSection>
         <SidebarSection title="Tags">
           {shownTags.map((entry) => <SidebarItem key={entry.tag} id={`tag:${entry.tag}`} icon={<Tag />} label={entry.tag} count={entry.count} />)}
@@ -73,6 +90,18 @@ export function AppSidebar({ slideWidth, scope, onScope, inbox, queueCount, conv
         </SidebarSection>
       </Sidebar>
       <div className="min-w-0 pb-2.5 pt-1">
+        {showNowPlaying && playback.materialId ? (
+          <NowPlayingBar
+            title={playback.title}
+            subtitle={playback.subtitle}
+            playing={playback.playing}
+            positionSec={playback.positionSec}
+            durationSec={playback.durationSec}
+            onTogglePlay={() => void mediaStore.togglePlay()}
+            onOpen={() => onOpenMaterial?.(playback.materialId!)}
+            onClose={() => mediaStore.stop()}
+          />
+        ) : null}
         <UpdateBanner />
         <Button variant="quiet" size="sm" className="mx-2.5 w-[calc(100%-20px)] justify-start gap-2 px-2.5 text-[13px] font-medium text-label" onPress={onOpenSettings}><Icon of={SettingsIcon} size="md" className="text-label-2" />Settings</Button>
       </div>

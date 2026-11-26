@@ -30,6 +30,7 @@ describe("materialMeta", () => {
 
   it("builds the reader header from creators, publication and date", () => {
     expect(headerParts({ creators: [{ role: "author", name: "Ada" }, { role: "author", name: "Grace" }], publication: "Systems Weekly", date: "2024" })).toEqual(["Ada, Grace", "Systems Weekly", "2024"]);
+    expect(headerParts({ creators: [{ role: "host", name: "赛博对话" }], publication: "赛博对话", date: "2026" })).toEqual(["赛博对话", "2026"]);
     expect(headerParts({})).toEqual([]);
   });
 

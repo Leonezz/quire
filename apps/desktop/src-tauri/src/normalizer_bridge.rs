@@ -1,7 +1,7 @@
 use crate::sqlite_stores::ItemInput;
 use crate::types::{
-    ContentNormalizationQuality, MaterialMeta, MaterialViewContent, NormalizationProblem,
-    ReaderPayload,
+    ContentNormalizationQuality, MaterialMeta, MaterialViewContent, MediaChapter,
+    NormalizationProblem, ReaderPayload, TranscriptAnchor,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -54,7 +54,11 @@ pub struct ExtractedPageMeta {
 pub struct NormalizedMarkdown {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reader: Option<ReaderPayload>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub markdown: Option<String>,
     pub reading_minutes: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chapters: Option<Vec<MediaChapter>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,6 +95,89 @@ pub struct ParsedFeedResult {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub site_url: Option<String>,
     pub items: Vec<ItemInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptCueDto {
+    pub start_sec: f64,
+    pub end_sec: f64,
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speaker: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TranscriptKeyframeDto {
+    pub time_sec: f64,
+    pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub caption: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub width: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub height: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NormalizeTranscriptInput {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub raw_text: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub media_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cues: Option<Vec<TranscriptCueDto>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chapters: Option<Vec<MediaChapter>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keyframes: Option<Vec<TranscriptKeyframeDto>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NormalizedTranscriptResult {
+    pub reader: ReaderPayload,
+    pub markdown: String,
+    pub plain: String,
+    pub reading_minutes: u32,
+    pub time_anchors: Vec<TranscriptAnchor>,
+    pub cues: Vec<TranscriptCueDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chapters: Option<Vec<MediaChapter>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RefineTranscriptInput {
+    pub markdown: String,
+    pub raw_cues: Vec<TranscriptCueDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub keyframes: Option<Vec<TranscriptKeyframeDto>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StoryboardCropInputRegion {
+    pub index: u32,
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CroppedStoryboardFrame {
+    pub index: u32,
+    pub png_base64: String,
+    pub width: u32,
+    pub height: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -141,6 +228,14 @@ pub trait Normalizer: Send + Sync {
         base_uri: &'a str,
     ) -> BoxFuture<'a, Result<NormalizedMarkdown, String>>;
 
+    fn normalize_shownotes<'a>(
+        &'a self,
+        content: &'a str,
+        base_uri: &'a str,
+    ) -> BoxFuture<'a, Result<NormalizedMarkdown, String>> {
+        self.normalize_markdown(content, base_uri)
+    }
+
     fn inspect_pdf<'a>(&'a self, bytes: &'a [u8]) -> BoxFuture<'a, Result<PdfInspection, String>>;
 
     fn build_text_view<'a>(
@@ -163,6 +258,27 @@ pub trait Normalizer: Send + Sync {
     fn capture_text<'a>(&'a self, html: &'a str) -> BoxFuture<'a, Result<String, String>>;
 
     fn compile_react<'a>(&'a self, source: &'a str) -> BoxFuture<'a, Result<CompiledReact, String>>;
+
+    fn normalize_transcript<'a>(
+        &'a self,
+        input: NormalizeTranscriptInput,
+    ) -> BoxFuture<'a, Result<NormalizedTranscriptResult, String>>;
+
+    fn crop_storyboard_sheet<'a>(
+        &'a self,
+        _bytes: &'a [u8],
+        _media_type: &'a str,
+        _regions: &'a [StoryboardCropInputRegion],
+    ) -> BoxFuture<'a, Result<Vec<CroppedStoryboardFrame>, String>> {
+        Box::pin(async move { Ok(Vec::new()) })
+    }
+
+    fn refine_transcript<'a>(
+        &'a self,
+        _input: RefineTranscriptInput,
+    ) -> BoxFuture<'a, Result<NormalizedTranscriptResult, String>> {
+        Box::pin(async move { Err("refine_transcript not implemented on mock normalizer.".into()) })
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -312,6 +428,19 @@ impl Normalizer for TauriNormalizerBridge {
         Box::pin(async move { self.call("normalizeMarkdown", payload, 20).await })
     }
 
+    fn normalize_shownotes<'a>(
+        &'a self,
+        content: &'a str,
+        base_uri: &'a str,
+    ) -> BoxFuture<'a, Result<NormalizedMarkdown, String>> {
+        let payload = serde_json::json!({
+            "content": content,
+            "baseUri": base_uri,
+            "showNotes": true,
+        });
+        Box::pin(async move { self.call("normalizeMarkdown", payload, 20).await })
+    }
+
     fn inspect_pdf<'a>(&'a self, bytes: &'a [u8]) -> BoxFuture<'a, Result<PdfInspection, String>> {
         use base64::Engine;
         let payload = serde_json::json!({
@@ -377,5 +506,36 @@ impl Normalizer for TauriNormalizerBridge {
             }
             Ok(compiled)
         })
+    }
+
+    fn normalize_transcript<'a>(
+        &'a self,
+        input: NormalizeTranscriptInput,
+    ) -> BoxFuture<'a, Result<NormalizedTranscriptResult, String>> {
+        let payload = serde_json::to_value(&input).unwrap_or(serde_json::Value::Null);
+        Box::pin(async move { self.call("normalizeTranscript", payload, 30).await })
+    }
+
+    fn crop_storyboard_sheet<'a>(
+        &'a self,
+        bytes: &'a [u8],
+        media_type: &'a str,
+        regions: &'a [StoryboardCropInputRegion],
+    ) -> BoxFuture<'a, Result<Vec<CroppedStoryboardFrame>, String>> {
+        use base64::Engine;
+        let payload = serde_json::json!({
+            "bytesBase64": base64::engine::general_purpose::STANDARD.encode(bytes),
+            "mediaType": media_type,
+            "regions": regions,
+        });
+        Box::pin(async move { self.call("cropStoryboardSheet", payload, 25).await })
+    }
+
+    fn refine_transcript<'a>(
+        &'a self,
+        input: RefineTranscriptInput,
+    ) -> BoxFuture<'a, Result<NormalizedTranscriptResult, String>> {
+        let payload = serde_json::to_value(&input).unwrap_or(serde_json::Value::Null);
+        Box::pin(async move { self.call("refineTranscript", payload, 30).await })
     }
 }

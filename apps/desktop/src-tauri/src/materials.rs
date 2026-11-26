@@ -1,15 +1,21 @@
 use crate::db::DATABASE_FILE;
 use crate::http::{
     arxiv_id_of_url, arxiv_rendering_version, assert_public_http_url, canonical_url_of,
-    fetch_page, id_for, material_id_of, stored_ids_of, PAGE_ACCEPT,
+    fetch_page, id_for, is_audio_stream_url, material_id_of, resolve_apple_podcast_episode,
+    stored_ids_of, FEED_ACCEPT, PAGE_ACCEPT,
 };
-use crate::normalizer_bridge::{ExtractMetaInput, Normalizer};
+use crate::media::{cached_media_info, remove_cached_media_files};
+use crate::normalizer_bridge::{
+    ExtractMetaInput, NormalizeTranscriptInput, NormalizedTranscriptResult, Normalizer,
+    RefineTranscriptInput, StoryboardCropInputRegion, TranscriptCueDto, TranscriptKeyframeDto,
+};
 use crate::sqlite_stores::{now_iso, sha256_hex, ItemContent, ItemStore, MetaStore};
 use crate::types::{
     Annotation, ArtifactBody, ArtifactInfo, CaptureInfo, ContentNormalizationQuality,
     CorpusFailure, CorpusImportResult, Creator, DeleteMaterialsResult, ItemRecord, LibraryFilter,
-    MaterialMeta, MaterialRecord, MaterialSummary, MaterialView, MaterialViewContent,
-    NormalizationProblem, OpenUrlResult, PdfInfo, ReaderPayload, SearchHit, StorageUsage,
+    MaterialMeta, MaterialRecord, MaterialSummary, MaterialView, MaterialViewContent, MediaChapter,
+    MediaInfo, NormalizationProblem, OpenUrlResult, PdfInfo, ReaderPayload, SearchHit,
+    StorageUsage, TranscriptAnchor, TranscriptTrackRef,
 };
 use base64::Engine;
 use flate2::read::GzDecoder;
@@ -22,8 +28,10 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use url::Url;
 
-pub const MATERIAL_VIEW_IDS: &[&str] = &["web", "pdf", "markdown", "text", "artifact"];
+pub const MATERIAL_VIEW_IDS: &[&str] = &["web", "pdf", "markdown", "text", "artifact", "transcript", "shownotes"];
 pub const TEXT_VIEW_MEDIA_TYPE: &str = "text/x-quire-reflow";
+pub const TRANSCRIPT_VIEW_MEDIA_TYPE: &str = "text/x-quire-transcript";
+pub const SHOWNOTES_VIEW_MEDIA_TYPE: &str = "text/x-quire-shownotes";
 pub const ARTIFACT_TYPES: &[&str] = &["markdown", "code", "html", "svg", "react", "mermaid"];
 pub const MAX_ARTIFACT_SOURCE: usize = 400_000;
 
@@ -37,6 +45,8 @@ pub fn view_label(id: &str) -> &'static str {
         "markdown" => "Markdown",
         "text" => "Text",
         "artifact" => "Artifact",
+        "transcript" => "Transcript",
+        "shownotes" => "Show notes",
         _ => "Web page",
     }
 }
@@ -66,6 +76,10 @@ pub fn view_id_for_media_type(media_type: &str) -> &'static str {
         "pdf"
     } else if media_type == TEXT_VIEW_MEDIA_TYPE {
         "text"
+    } else if media_type == TRANSCRIPT_VIEW_MEDIA_TYPE {
+        "transcript"
+    } else if media_type == SHOWNOTES_VIEW_MEDIA_TYPE {
+        "shownotes"
     } else if matches!(media_type, "text/markdown" | "text/x-markdown" | "text/plain") {
         "markdown"
     } else if is_artifact_media_type(media_type) {
@@ -171,6 +185,8 @@ pub struct StoredRecord {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pdf: Option<PdfInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub media: Option<MediaInfo>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub capture: Option<CaptureInfo>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub arxiv_version: Option<u32>,
@@ -192,6 +208,8 @@ pub struct StoredRecord {
     pub markdown: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plain: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_anchors: Option<Vec<TranscriptAnchor>>,
     #[serde(default)]
     pub problems: Vec<NormalizationProblem>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -461,6 +479,7 @@ pub fn primary_content_of(record: &StoredRecord) -> MaterialViewContent {
         quality: record.quality.clone(),
         problems: record.problems.clone(),
         anchors: None,
+        time_anchors: record.time_anchors.clone(),
         artifact_body,
         report: None,
     }
@@ -505,6 +524,7 @@ pub fn effective_of(record: &StoredRecord, overrides: Option<MaterialMeta>) -> M
         aliases: record.aliases.clone(),
         canonical_url: record.canonical_url.clone(),
         pdf: record.pdf.clone(),
+        media: record.media.clone(),
         capture: record.capture.clone(),
         arxiv_version: record.arxiv_version,
         extracted,
@@ -517,6 +537,7 @@ pub fn effective_of(record: &StoredRecord, overrides: Option<MaterialMeta>) -> M
         reader: record.reader.clone(),
         markdown: record.markdown.clone(),
         plain: record.plain.clone(),
+        time_anchors: record.time_anchors.clone(),
         problems: record.problems.clone(),
         artifact_source: record.artifact_source.clone(),
     }
@@ -998,6 +1019,55 @@ pub struct FeedMaterialInput {
     pub content: ItemContent,
 }
 
+pub struct PodcastEpisodeInput {
+    pub id: String,
+    pub url: String,
+    pub page_url: Option<String>,
+    pub stream_url: String,
+    pub title: String,
+    pub published_at: Option<String>,
+    pub duration_sec: Option<u32>,
+    pub lang: Option<String>,
+    pub transcripts: Vec<TranscriptTrackRef>,
+    pub chapters_url: Option<String>,
+    pub chapters: Vec<MediaChapter>,
+    pub shownotes_content: Option<ItemContent>,
+    pub shownotes_markdown: Option<String>,
+    pub meta: Option<MaterialMeta>,
+}
+
+fn detect_html_audio_stream(bytes: &[u8]) -> Option<String> {
+    let head = String::from_utf8_lossy(&bytes[..bytes.len().min(512 * 1024)]);
+    let audio_tag = Regex::new(r#"(?i)<audio\b[^>]*\bsrc\s*=\s*["'](https?://[^"']+)["']"#).unwrap();
+    if let Some(m) = audio_tag.captures(&head).and_then(|c| c.get(1)) {
+        if let Ok(u) = assert_public_http_url(m.as_str()) {
+            return Some(u.to_string());
+        }
+    }
+    let source_tag = Regex::new(
+        r#"(?i)<source\b[^>]*?(?:\bsrc\s*=\s*["'](https?://[^"']+)["'][^>]*?\btype\s*=\s*["']audio/|\btype\s*=\s*["']audio/[^"']*["'][^>]*?\bsrc\s*=\s*["'](https?://[^"']+)["'])"#,
+    )
+    .unwrap();
+    if let Some(caps) = source_tag.captures(&head) {
+        if let Some(m) = caps.get(1).or_else(|| caps.get(2)) {
+            if let Ok(u) = assert_public_http_url(m.as_str()) {
+                return Some(u.to_string());
+            }
+        }
+    }
+    let json_audio = Regex::new(r#""audio_url"\s*:\s*"(https?:[^"]+)""#).unwrap();
+    if let Some(m) = json_audio.captures(&head).and_then(|c| c.get(1)) {
+        let unescaped = m
+            .as_str()
+            .replace("\\/", "/")
+            .replace("\\u0026", "&");
+        if let Ok(u) = assert_public_http_url(&unescaped) {
+            return Some(u.to_string());
+        }
+    }
+    None
+}
+
 pub struct MaterialStore {
     root: PathBuf,
     http: reqwest::Client,
@@ -1005,6 +1075,7 @@ pub struct MaterialStore {
     normalizer: Arc<dyn Normalizer>,
     keep_capture: Arc<dyn Fn() -> bool + Send + Sync>,
     reflow_judge: Arc<dyn Fn() -> Result<(String, Option<String>), String> + Send + Sync>,
+    youtube_cookies: Arc<dyn Fn() -> Option<String> + Send + Sync>,
     figures: FigureStore,
     identities: Mutex<IdentityIndex>,
 }
@@ -1019,6 +1090,180 @@ fn is_feed_copy(record: &StoredRecord) -> bool {
 
 fn is_fallback_copy(record: &StoredRecord) -> bool {
     is_unreadable_page(record) || is_feed_copy(record)
+}
+
+fn parse_caption_clock_sec(caption: &str) -> Option<f64> {
+    let token = caption.trim().split_whitespace().next()?;
+    let parts: Vec<&str> = token.split(':').collect();
+    match parts.as_slice() {
+        [m, s] => Some((m.parse::<u32>().ok()? * 60 + s.parse::<u32>().ok()?) as f64),
+        [h, m, s] => Some((h.parse::<u32>().ok()? * 3600 + m.parse::<u32>().ok()? * 60 + s.parse::<u32>().ok()?) as f64),
+        _ => None,
+    }
+}
+
+fn collect_keyframes_from_node(node: &serde_json::Value, out: &mut Vec<TranscriptKeyframeDto>) {
+    match node {
+        serde_json::Value::Array(arr) => {
+            for item in arr {
+                collect_keyframes_from_node(item, out);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            if map.get("type").and_then(|t| t.as_str()) == Some("figure") {
+                if let Some(img) = map
+                    .get("media")
+                    .and_then(|m| m.as_array())
+                    .and_then(|a| a.first())
+                {
+                    let url = img.get("url").and_then(|u| u.as_str()).unwrap_or("");
+                    if url.starts_with("quire-figure://") {
+                        let caption: String = map
+                            .get("caption")
+                            .and_then(|c| c.as_array())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|n| n.get("value").and_then(|v| v.as_str()))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        if let Some(time_sec) = parse_caption_clock_sec(&caption) {
+                            out.push(TranscriptKeyframeDto {
+                                time_sec,
+                                url: url.to_string(),
+                                caption: if caption.trim().is_empty() {
+                                    None
+                                } else {
+                                    Some(caption)
+                                },
+                                width: img.get("width").and_then(|w| w.as_u64()).map(|n| n as u32),
+                                height: img.get("height").and_then(|h| h.as_u64()).map(|n| n as u32),
+                            });
+                        }
+                    }
+                }
+            }
+            for v in map.values() {
+                collect_keyframes_from_node(v, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn extract_keyframes_from_reader(reader: Option<&ReaderPayload>) -> Vec<TranscriptKeyframeDto> {
+    let Some(rp) = reader else {
+        return Vec::new();
+    };
+    let Ok(val) = serde_json::from_str::<serde_json::Value>(&rp.payload) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    collect_keyframes_from_node(&val, &mut out);
+    out
+}
+
+fn is_single_paragraph_reader(reader: &Option<ReaderPayload>) -> bool {
+    let Some(ref rp) = reader else {
+        return true;
+    };
+    let Ok(val) = serde_json::from_str::<serde_json::Value>(&rp.payload) else {
+        return true;
+    };
+    let Some(children) = val.get("children").and_then(|c| c.as_array()) else {
+        return true;
+    };
+    if children.is_empty() {
+        return true;
+    }
+    let has_rich = children.iter().any(|c| {
+        matches!(
+            c.get("type").and_then(|t| t.as_str()),
+            Some("heading" | "list" | "blockquote" | "table")
+        )
+    });
+    !has_rich && children.len() <= 1
+}
+
+fn is_legacy_collapsed_shownotes(record: &StoredRecord) -> bool {
+    let is_absent_tx = record
+        .media
+        .as_ref()
+        .is_some_and(|m| m.transcript_origin == "absent");
+    if !is_absent_tx || primary_view_of(record) != "shownotes" {
+        return false;
+    }
+    let t = record.title.trim();
+    if t.eq_ignore_ascii_case("- youtube")
+        || t.eq_ignore_ascii_case("youtube")
+        || t.starts_with("YouTube video ")
+    {
+        return true;
+    }
+    if record.media.as_ref().is_some_and(|m| m.provider == "youtube")
+        && record.byline.is_none()
+        && record.plain.as_deref() == Some("No video description was provided.")
+    {
+        return true;
+    }
+    let text_len = record
+        .markdown
+        .as_deref()
+        .or(record.plain.as_deref())
+        .map_or(0, |s| s.chars().count());
+    text_len >= 80 && is_single_paragraph_reader(&record.reader)
+}
+
+fn normalize_episode_title_key(raw: &str) -> String {
+    raw.replace('｜', "|")
+        .replace('：', ":")
+        .replace('\u{00a0}', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn audio_asset_stem(url_str: &str) -> Option<String> {
+    let parsed = Url::parse(url_str).ok()?;
+    let last = parsed.path_segments()?.next_back()?;
+    let stem = last
+        .rsplit_once('.')
+        .map(|(s, _)| s)
+        .unwrap_or(last)
+        .trim()
+        .to_ascii_lowercase();
+    if stem.len() >= 12 {
+        Some(stem)
+    } else {
+        None
+    }
+}
+
+fn podcast_episode_matches(
+    item_enclosure: Option<&str>,
+    item_title: &str,
+    ep_stream: &str,
+    ep_title: &str,
+) -> bool {
+    if let Some(enc) = item_enclosure {
+        if enc == ep_stream {
+            return true;
+        }
+        if let (Ok(u1), Ok(u2)) = (Url::parse(enc), Url::parse(ep_stream)) {
+            if u1.host_str() == u2.host_str() && u1.path() == u2.path() {
+                return true;
+            }
+        }
+        if let (Some(s1), Some(s2)) = (audio_asset_stem(enc), audio_asset_stem(ep_stream)) {
+            if s1 == s2 {
+                return true;
+            }
+        }
+    }
+    let t1 = normalize_episode_title_key(item_title);
+    let t2 = normalize_episode_title_key(ep_title);
+    !t1.is_empty() && t1 == t2
 }
 
 impl MaterialStore {
@@ -1039,9 +1284,18 @@ impl MaterialStore {
             normalizer,
             keep_capture,
             reflow_judge,
+            youtube_cookies: Arc::new(|| None),
             figures,
             identities: Mutex::new(IdentityIndex::default()),
         }
+    }
+
+    pub fn with_youtube_cookies(
+        mut self,
+        provider: Arc<dyn Fn() -> Option<String> + Send + Sync>,
+    ) -> Self {
+        self.youtube_cookies = provider;
+        self
     }
 
     pub fn dir(&self) -> PathBuf {
@@ -1108,7 +1362,11 @@ impl MaterialStore {
 
     fn decorate(&self, record: &StoredRecord) -> Result<MaterialRecord, String> {
         let overrides = self.meta.get(&record.id)?;
-        Ok(effective_of(record, overrides))
+        let mut mat = effective_of(record, overrides);
+        if let Some(ref mut media) = mat.media {
+            media.cached_bytes = cached_media_info(&self.root, &record.id).map(|(_, _, len)| len);
+        }
+        Ok(mat)
     }
 
     pub fn get(&self, id: &str) -> Result<Option<MaterialRecord>, String> {
@@ -1248,12 +1506,56 @@ impl MaterialStore {
         let url = assert_public_http_url(raw).map_err(|e| (e.code, e.message))?;
         let known = self.find_by_url(&url).map_err(|e| ("NORMALIZE_FAILED".into(), e))?;
         if let Some(ref k) = known {
-            if !is_fallback_copy(k) {
+            if !is_fallback_copy(k) && !is_legacy_collapsed_shownotes(k) {
                 return self
                     .existing_result(k.clone(), item.as_ref(), &[raw.to_string()])
                     .await
                     .map_err(|e| ("NORMALIZE_FAILED".into(), e));
             }
+        }
+        if let Some(apple_ep) = resolve_apple_podcast_episode(&self.http, url.as_str())
+            .await
+            .map_err(|e| (e.code, e.message))?
+        {
+            return self.open_apple_episode(apple_ep, origin, item).await;
+        }
+        if let Some(video_id) = crate::youtube::parse_youtube_video_id(url.as_str()) {
+            return self.open_youtube_video(&video_id, raw, origin, None, item).await;
+        }
+        if is_audio_stream_url(&url) {
+            let id = material_id_of(&url);
+            let title = url
+                .path_segments()
+                .and_then(|s| s.last())
+                .map(String::from)
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "Audio episode".into());
+            let rec = self
+                .materialize_podcast_episode(
+                    PodcastEpisodeInput {
+                        id,
+                        url: url.to_string(),
+                        page_url: None,
+                        stream_url: url.to_string(),
+                        title,
+                        published_at: None,
+                        duration_sec: None,
+                        lang: None,
+                        transcripts: Vec::new(),
+                        chapters_url: None,
+                        chapters: Vec::new(),
+                        shownotes_content: None,
+                        shownotes_markdown: None,
+                        meta: item,
+                    },
+                    origin,
+                )
+                .await?;
+            let saved = self.save_stored(rec).map_err(|e| ("NORMALIZE_FAILED".into(), e))?;
+            return Ok(OpenUrlResult::success(
+                self.decorate(&saved).map_err(|e| ("NORMALIZE_FAILED".into(), e))?,
+                false,
+            ));
         }
         let page = fetch_page(&self.http, &url, PAGE_ACCEPT)
             .await
@@ -1473,6 +1775,7 @@ impl MaterialStore {
                     byte_length: bytes.len() as u64,
                     text_layer: inspection.text_layer,
                 }),
+                media: None,
                 capture: None,
                 arxiv_version: None,
                 extracted: None,
@@ -1484,6 +1787,7 @@ impl MaterialStore {
                 reader: None,
                 markdown: None,
                 plain: inspection.sample_text,
+                time_anchors: None,
                 problems: Vec::new(),
                 artifact_source: None,
             };
@@ -1512,6 +1816,28 @@ impl MaterialStore {
                 let _ = fs::remove_file(self.html_path(id));
                 None
             };
+            let html_media = detect_html_audio_stream(bytes).map(|stream_url| {
+                let word_count = normalized
+                    .plain
+                    .as_deref()
+                    .unwrap_or("")
+                    .split_whitespace()
+                    .count();
+                MediaInfo {
+                    kind: "audio".into(),
+                    provider: "web".into(),
+                    stream_url,
+                    video_id: None,
+                    duration_sec: None,
+                    cached_bytes: None,
+                    transcript_origin: if word_count >= 250 {
+                        "official".into()
+                    } else {
+                        "absent".into()
+                    },
+                    chapters: None,
+                }
+            });
             return Ok(StoredRecord {
                 id: id.to_string(),
                 url: requested_url.to_string(),
@@ -1530,6 +1856,7 @@ impl MaterialStore {
                 aliases: None,
                 canonical_url: normalized.canonical_url,
                 pdf: None,
+                media: html_media,
                 capture,
                 arxiv_version: None,
                 extracted: Some(normalized.extracted),
@@ -1541,6 +1868,7 @@ impl MaterialStore {
                 reader: normalized.reader,
                 markdown: normalized.markdown,
                 plain: normalized.plain,
+                time_anchors: None,
                 problems: normalized.problems,
                 artifact_source: None,
             });
@@ -1582,6 +1910,7 @@ impl MaterialStore {
                 aliases: None,
                 canonical_url: None,
                 pdf: None,
+                media: None,
                 capture: None,
                 arxiv_version: None,
                 extracted: None,
@@ -1593,6 +1922,7 @@ impl MaterialStore {
                 reader: md_parts.reader,
                 markdown: Some(content),
                 plain: None,
+                time_anchors: None,
                 problems: Vec::new(),
                 artifact_source: None,
             };
@@ -1731,6 +2061,7 @@ impl MaterialStore {
             aliases: None,
             canonical_url: None,
             pdf: None,
+            media: None,
             capture: None,
             arxiv_version: None,
             extracted: None,
@@ -1742,6 +2073,7 @@ impl MaterialStore {
             reader,
             markdown,
             plain,
+            time_anchors: None,
             problems: Vec::new(),
             artifact_source: Some(source),
         };
@@ -1976,8 +2308,8 @@ impl MaterialStore {
         if view != primary_view_of(&record) {
             return self.read_view_content(id, view);
         }
-        if view == "text" {
-            if let Some(c) = self.read_view_content(id, "text")? {
+        if view == "text" || view == "transcript" {
+            if let Some(c) = self.read_view_content(id, view)? {
                 return Ok(Some(c));
             }
         }
@@ -2084,6 +2416,7 @@ impl MaterialStore {
                 },
                 problems: Vec::new(),
                 anchors: None,
+                time_anchors: None,
                 artifact_body: None,
                 report: None,
             };
@@ -2163,8 +2496,9 @@ impl MaterialStore {
         let incoming = self
             .read_view_content(id, view)?
             .ok_or_else(|| format!("The {view} view of {id} is listed as stored but its file is missing."))?;
-        let outgoing = if current_primary == "text" {
-            self.read_view_content(id, "text")?.unwrap_or_else(|| primary_content_of(&record))
+        let outgoing = if current_primary == "text" || current_primary == "transcript" {
+            self.read_view_content(id, &current_primary)?
+                .unwrap_or_else(|| primary_content_of(&record))
         } else {
             primary_content_of(&record)
         };
@@ -2176,7 +2510,7 @@ impl MaterialStore {
         if incoming.pdf.is_some() {
             fs::rename(self.view_pdf_path(id, &incoming.view), self.pdf_path(id)).map_err(|e| e.to_string())?;
         }
-        if incoming.view != "text" {
+        if incoming.view != "text" && incoming.view != "transcript" {
             let _ = fs::remove_file(self.view_content_path(id, &incoming.view));
         }
 
@@ -2190,6 +2524,7 @@ impl MaterialStore {
         next.reader = incoming.reader;
         next.markdown = incoming.markdown;
         next.plain = incoming.plain;
+        next.time_anchors = incoming.time_anchors;
 
         let saved = self.save_stored(next)?;
         self.decorate(&saved)
@@ -2248,6 +2583,7 @@ impl MaterialStore {
             aliases: None,
             canonical_url: None,
             pdf: None,
+            media: None,
             capture: None,
             arxiv_version: None,
             extracted: None,
@@ -2259,6 +2595,7 @@ impl MaterialStore {
             reader: input.content.reader,
             markdown: input.content.markdown,
             plain: input.content.plain,
+            time_anchors: None,
             problems: vec![NormalizationProblem {
                 code: "FEED_CONTENT_FALLBACK".into(),
                 recover_by: "reopen".into(),
@@ -2278,6 +2615,1010 @@ impl MaterialStore {
         }
         let saved = self.save_stored(rec)?;
         self.decorate(&saved)
+    }
+
+    async fn fetch_podcast_chapters(&self, chapters_url: &str) -> Option<Vec<MediaChapter>> {
+        #[derive(Deserialize)]
+        struct ChaptersDoc {
+            #[serde(default)]
+            chapters: Vec<ChapterItem>,
+        }
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct ChapterItem {
+            start_time: Option<f64>,
+            title: Option<String>,
+        }
+        let u = assert_public_http_url(chapters_url).ok()?;
+        let page = fetch_page(&self.http, &u, "application/json+chapters,application/json;q=0.9,*/*;q=0.5")
+            .await
+            .ok()?;
+        let doc: ChaptersDoc = serde_json::from_slice(&page.bytes).ok()?;
+        let mut out: Vec<MediaChapter> = doc
+            .chapters
+            .into_iter()
+            .filter_map(|c| {
+                let start_sec = c.start_time.filter(|s| s.is_finite() && *s >= 0.0)?;
+                let title = c.title?.trim().to_string();
+                if title.is_empty() {
+                    None
+                } else {
+                    Some(MediaChapter { start_sec, title })
+                }
+            })
+            .collect();
+        out.sort_by(|a, b| a.start_sec.partial_cmp(&b.start_sec).unwrap_or(std::cmp::Ordering::Equal));
+        if out.is_empty() {
+            None
+        } else {
+            Some(out)
+        }
+    }
+
+    async fn open_apple_episode(
+        &self,
+        ep: crate::http::ApplePodcastEpisode,
+        origin: &str,
+        override_meta: Option<MaterialMeta>,
+    ) -> Result<OpenUrlResult, (String, String)> {
+        let parsed_url = Url::parse(&ep.url).map_err(|_| ("URL_INVALID".into(), "Invalid episode URL.".into()))?;
+        let id = material_id_of(&parsed_url);
+        let mut transcripts = Vec::new();
+        let mut chapters_url = None;
+        let mut chapters = Vec::new();
+        let mut shownotes_content = None;
+        let mut page_url = None;
+
+        if let Some(ref feed_url) = ep.feed_url {
+            if let Ok(u) = assert_public_http_url(feed_url) {
+                if let Ok(feed_page) = fetch_page(&self.http, &u, FEED_ACCEPT).await {
+                    if let Ok(parsed) = self
+                        .normalizer
+                        .parse_feed(&feed_page.bytes, &feed_page.media_type, feed_url, false)
+                        .await
+                    {
+                        if let Some(matched) = parsed.items.into_iter().find(|it| {
+                            podcast_episode_matches(
+                                it.signals.enclosure_url.as_deref(),
+                                &it.title,
+                                &ep.stream_url,
+                                &ep.title,
+                            )
+                        }) {
+                            transcripts = matched.signals.transcripts.unwrap_or_default();
+                            chapters_url = matched.signals.chapters_url;
+                            chapters = matched.signals.chapters.unwrap_or_default();
+                            shownotes_content = matched.content;
+                            if !matched.link.is_empty() {
+                                page_url = Some(matched.link);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut base_meta = MaterialMeta {
+            kind: Some("podcastEpisode".into()),
+            title: Some(ep.title.clone()),
+            publication: ep.show_title,
+            date: ep.published_at.clone(),
+            creators: ep.author.map(|name| {
+                vec![Creator {
+                    role: "host".into(),
+                    name,
+                    given: None,
+                    family: None,
+                }]
+            }),
+            ..Default::default()
+        };
+        if let Some(ref ov) = override_meta {
+            base_meta = apply_overrides(&base_meta, Some(ov));
+        }
+
+        let rec = self
+            .materialize_podcast_episode(
+                PodcastEpisodeInput {
+                    id,
+                    url: ep.url,
+                    page_url,
+                    stream_url: ep.stream_url,
+                    title: ep.title,
+                    published_at: ep.published_at,
+                    duration_sec: ep.duration_sec,
+                    lang: None,
+                    transcripts,
+                    chapters_url,
+                    chapters,
+                    shownotes_content,
+                    shownotes_markdown: ep.description,
+                    meta: Some(base_meta),
+                },
+                origin,
+            )
+            .await?;
+        let saved = self.save_stored(rec).map_err(|e| ("NORMALIZE_FAILED".into(), e))?;
+        Ok(OpenUrlResult::success(
+            self.decorate(&saved).map_err(|e| ("NORMALIZE_FAILED".into(), e))?,
+            false,
+        ))
+    }
+
+    pub async fn materialize_podcast_episode(
+        &self,
+        input: PodcastEpisodeInput,
+        origin: &str,
+    ) -> Result<StoredRecord, (String, String)> {
+        let valid_stream = assert_public_http_url(&input.stream_url)
+            .map_err(|e| (e.code, e.message))?
+            .to_string();
+        let fetched_at = now_iso();
+
+        let mut chapters = input.chapters;
+        if chapters.is_empty() {
+            if let Some(ref cu) = input.chapters_url {
+                if let Some(fetched_ch) = self.fetch_podcast_chapters(cu).await {
+                    chapters = fetched_ch;
+                }
+            }
+        }
+
+        // 1. Build Show notes view content (always stored as `<id>.shownotes.json`)
+        let mut notes_reader: Option<ReaderPayload> = None;
+        let mut notes_md: Option<String> = None;
+        let mut notes_plain: Option<String> = None;
+
+        if let Some(sc) = input.shownotes_content {
+            notes_reader = sc.reader;
+            notes_md = sc.markdown;
+            notes_plain = sc.plain;
+            if notes_reader.is_none() || is_single_paragraph_reader(&notes_reader) {
+                if let Some(md) = notes_md.clone().or_else(|| notes_plain.clone()) {
+                    if let Ok(parts) = self.normalizer.normalize_shownotes(&md, &input.url).await {
+                        if parts.reader.is_some() {
+                            notes_reader = parts.reader;
+                        }
+                        if let Some(formatted) = parts.markdown {
+                            notes_md = Some(formatted);
+                        }
+                        if chapters.is_empty() {
+                            if let Some(ch) = parts.chapters {
+                                chapters = ch;
+                            }
+                        }
+                    }
+                }
+            }
+        } else if let Some(desc) = input.shownotes_markdown.filter(|s| !s.trim().is_empty()) {
+            let mut formatted_md = desc.clone();
+            if let Ok(parts) = self.normalizer.normalize_shownotes(&desc, &input.url).await {
+                notes_reader = parts.reader;
+                if let Some(formatted) = parts.markdown {
+                    formatted_md = formatted;
+                }
+                if chapters.is_empty() {
+                    if let Some(ch) = parts.chapters {
+                        chapters = ch;
+                    }
+                }
+            }
+            notes_plain = Some(desc);
+            notes_md = Some(formatted_md);
+        } else if let Some(ref page_u) = input.page_url {
+            if let Ok(u) = assert_public_http_url(page_u) {
+                if !is_audio_stream_url(&u) {
+                    if let Ok(page) = fetch_page(&self.http, &u, PAGE_ACCEPT).await {
+                        if is_html_media(&page.media_type) {
+                            if let Ok(norm) = self
+                                .normalizer
+                                .normalize_html(&page.bytes, &page.media_type, &page.final_url, origin, &fetched_at, input.meta.as_ref())
+                                .await
+                            {
+                                notes_reader = norm.reader;
+                                notes_md = norm.markdown;
+                                notes_plain = norm.plain;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if notes_plain.as_deref().unwrap_or("").trim().is_empty() && notes_md.as_deref().unwrap_or("").trim().is_empty() {
+            let fallback = "No show notes were provided for this episode.".to_string();
+            if let Ok(parts) = self.normalizer.normalize_markdown(&fallback, &input.url).await {
+                notes_reader = parts.reader;
+            }
+            notes_md = Some(fallback.clone());
+            notes_plain = Some(fallback);
+        }
+
+        let notes_mins = input
+            .duration_sec
+            .filter(|&d| d > 0)
+            .map(|d| ((d as f64) / 60.0).round().max(1.0) as u32)
+            .unwrap_or_else(|| reading_minutes(notes_plain.as_deref().unwrap_or("")));
+
+        let shownotes_content = MaterialViewContent {
+            view: "shownotes".into(),
+            media_type: SHOWNOTES_VIEW_MEDIA_TYPE.into(),
+            pdf: None,
+            reader: notes_reader,
+            markdown: notes_md,
+            plain: notes_plain,
+            reading_minutes: notes_mins,
+            quality: ContentNormalizationQuality::default(),
+            problems: Vec::new(),
+            anchors: None,
+            time_anchors: None,
+            artifact_body: None,
+            report: None,
+        };
+        let shownotes_bytes = serde_json::to_string(&shownotes_content)
+            .map(|s| s.len() as u64)
+            .unwrap_or(0);
+        self.write_view_content(&input.id, &shownotes_content, None)
+            .map_err(|e| ("NORMALIZE_FAILED".into(), e))?;
+
+        let shownotes_view = MaterialView {
+            id: "shownotes".into(),
+            label: view_label("shownotes").into(),
+            url: input.page_url.clone().unwrap_or_else(|| input.url.clone()),
+            media_type: SHOWNOTES_VIEW_MEDIA_TYPE.into(),
+            status: "ready".into(),
+            fetched_at: Some(fetched_at.clone()),
+            byte_length: Some(shownotes_bytes),
+            pdf: None,
+            error: None,
+        };
+
+        // 2. Try declared `<podcast:transcript>` candidates in ranked order
+        let mut normalized_tx = None;
+        let mut transcript_source_url = input.url.clone();
+        for cand in &input.transcripts {
+            let Ok(tu) = assert_public_http_url(&cand.url) else {
+                continue;
+            };
+            let Ok(page) = fetch_page(&self.http, &tu, "*/*").await else {
+                continue;
+            };
+            let raw_text = String::from_utf8_lossy(&page.bytes).to_string();
+            let eff_type = if cand.media_type.is_empty() {
+                page.media_type.clone()
+            } else {
+                cand.media_type.clone()
+            };
+            if let Ok(tx) = self
+                .normalizer
+                .normalize_transcript(NormalizeTranscriptInput {
+                    raw_text: Some(raw_text),
+                    media_type: Some(eff_type),
+                    cues: None,
+                    chapters: if chapters.is_empty() { None } else { Some(chapters.clone()) },
+                    keyframes: None,
+                    title: Some(input.title.clone()),
+                })
+                .await
+            {
+                if !tx.time_anchors.is_empty() {
+                    transcript_source_url = cand.url.clone();
+                    normalized_tx = Some(tx);
+                    break;
+                }
+            }
+        }
+
+        let (
+            primary_view,
+            media_type,
+            reader,
+            markdown,
+            plain,
+            time_anchors,
+            reading_mins,
+            transcript_origin,
+            views,
+        ) = if let Some(tx) = normalized_tx {
+            fs::create_dir_all(self.dir()).map_err(|e| ("NORMALIZE_FAILED".into(), e.to_string()))?;
+            if let Ok(raw_json) = serde_json::to_string(&tx.cues) {
+                let _ = fs::write(self.dir().join(format!("{}.transcript.raw.json", input.id)), raw_json);
+            }
+            let tx_content = MaterialViewContent {
+                view: "transcript".into(),
+                media_type: TRANSCRIPT_VIEW_MEDIA_TYPE.into(),
+                pdf: None,
+                reader: Some(tx.reader.clone()),
+                markdown: Some(tx.markdown.clone()),
+                plain: Some(tx.plain.clone()),
+                reading_minutes: tx.reading_minutes,
+                quality: ContentNormalizationQuality::default(),
+                problems: Vec::new(),
+                anchors: None,
+                time_anchors: Some(tx.time_anchors.clone()),
+                artifact_body: None,
+                report: None,
+            };
+            let tx_len = serde_json::to_string(&tx_content)
+                .map(|s| s.len() as u64)
+                .unwrap_or(0);
+            self.write_view_content(&input.id, &tx_content, None)
+                .map_err(|e| ("NORMALIZE_FAILED".into(), e))?;
+            let tx_view = MaterialView {
+                id: "transcript".into(),
+                label: view_label("transcript").into(),
+                url: transcript_source_url,
+                media_type: TRANSCRIPT_VIEW_MEDIA_TYPE.into(),
+                status: "ready".into(),
+                fetched_at: Some(fetched_at.clone()),
+                byte_length: Some(tx_len),
+                pdf: None,
+                error: None,
+            };
+            (
+                "transcript".to_string(),
+                TRANSCRIPT_VIEW_MEDIA_TYPE.to_string(),
+                Some(tx.reader),
+                Some(tx.markdown),
+                Some(tx.plain),
+                Some(tx.time_anchors),
+                tx.reading_minutes,
+                "official".to_string(),
+                vec![tx_view, shownotes_view],
+            )
+        } else {
+            (
+                "shownotes".to_string(),
+                SHOWNOTES_VIEW_MEDIA_TYPE.to_string(),
+                shownotes_content.reader,
+                shownotes_content.markdown,
+                shownotes_content.plain,
+                None,
+                shownotes_content.reading_minutes,
+                "absent".to_string(),
+                vec![shownotes_view],
+            )
+        };
+
+        let mut item_meta = input.meta.unwrap_or_default();
+        if item_meta.kind.is_none() {
+            item_meta.kind = Some("podcastEpisode".into());
+        }
+
+        let mut rec = StoredRecord {
+            id: input.id,
+            url: input.url.clone(),
+            final_url: input.page_url.unwrap_or(input.url),
+            title: input.title,
+            byline: byline_of(item_meta.creators.as_deref()),
+            published_at: input.published_at,
+            fetched_at,
+            reading_minutes: reading_mins,
+            origin: origin.to_string(),
+            media_type,
+            quality: ContentNormalizationQuality::default(),
+            lineage: None,
+            rebuilt_as: None,
+            artifact: None,
+            aliases: None,
+            canonical_url: None,
+            pdf: None,
+            media: Some(MediaInfo {
+                kind: "audio".into(),
+                provider: "podcast".into(),
+                stream_url: valid_stream,
+                video_id: None,
+                duration_sec: input.duration_sec,
+                cached_bytes: None,
+                transcript_origin,
+                chapters: if chapters.is_empty() { None } else { Some(chapters) },
+            }),
+            capture: None,
+            arxiv_version: None,
+            extracted: None,
+            item_meta: Some(item_meta),
+            views: Some(views),
+            primary_view: Some(primary_view),
+            lang: input.lang,
+            dir: None,
+            reader,
+            markdown,
+            plain,
+            time_anchors,
+            problems: Vec::new(),
+            artifact_source: None,
+        };
+        rec.extracted = Some(fallback_extracted_for(&rec));
+        Ok(rec)
+    }
+
+    pub async fn materialize_podcast_item(
+        &self,
+        item: &ItemRecord,
+        content: Option<ItemContent>,
+        meta: Option<MaterialMeta>,
+    ) -> OpenUrlResult {
+        let Some(ref stream_url) = item.signals.enclosure_url else {
+            return OpenUrlResult::failure("EPISODE_NO_STREAM", "This podcast item has no enclosure stream URL.");
+        };
+        let locator = if !item.link.is_empty() { &item.link } else { stream_url.as_str() };
+        let parsed = Url::parse(locator).ok();
+        let known = match &parsed {
+            Some(u) => self.find_by_url(u).ok().flatten(),
+            None => self.read_stored(&id_for(locator)).ok().flatten(),
+        };
+        if let Some(existing) = known {
+            if existing.media.is_some() {
+                return match self.decorate(&existing) {
+                    Ok(mat) => OpenUrlResult::success(mat, true),
+                    Err(e) => OpenUrlResult::failure("NORMALIZE_FAILED", e),
+                };
+            }
+        }
+        let id = parsed
+            .as_ref()
+            .map(material_id_of)
+            .unwrap_or_else(|| id_for(locator));
+        let page_url = parsed
+            .as_ref()
+            .filter(|u| !is_audio_stream_url(u))
+            .map(|u| u.to_string());
+
+        match self
+            .materialize_podcast_episode(
+                PodcastEpisodeInput {
+                    id,
+                    url: locator.to_string(),
+                    page_url,
+                    stream_url: stream_url.clone(),
+                    title: item.title.clone(),
+                    published_at: Some(item.published_at.clone()),
+                    duration_sec: item.signals.duration_sec,
+                    lang: item.signals.lang.clone(),
+                    transcripts: item.signals.transcripts.clone().unwrap_or_default(),
+                    chapters_url: item.signals.chapters_url.clone(),
+                    chapters: item.signals.chapters.clone().unwrap_or_default(),
+                    shownotes_content: content,
+                    shownotes_markdown: if item.gist.is_empty() { None } else { Some(item.gist.clone()) },
+                    meta,
+                },
+                "feed",
+            )
+            .await
+        {
+            Ok(rec) => match self.save_stored(rec).and_then(|s| self.decorate(&s)) {
+                Ok(mat) => OpenUrlResult::success(mat, false),
+                Err(e) => OpenUrlResult::failure("NORMALIZE_FAILED", e),
+            },
+            Err((code, msg)) => OpenUrlResult::failure(code, msg),
+        }
+    }
+
+    pub async fn open_youtube_video(
+        &self,
+        video_id: &str,
+        requested_url: &str,
+        origin: &str,
+        fallback_content: Option<ItemContent>,
+        override_meta: Option<MaterialMeta>,
+    ) -> Result<OpenUrlResult, (String, String)> {
+        let watch_url = crate::youtube::canonical_youtube_watch_url(video_id);
+        let parsed_watch = Url::parse(&watch_url).map_err(|_| ("URL_INVALID".into(), "Invalid YouTube URL.".into()))?;
+        let yt_cookies = (self.youtube_cookies)();
+        let yt_cookie_hdr = yt_cookies
+            .as_deref()
+            .and_then(crate::youtube::cookie_header_for_youtube);
+        let previous = self.find_by_url(&parsed_watch).map_err(|e| ("NORMALIZE_FAILED".into(), e))?;
+        if let Some(ref existing) = previous {
+            let needs_cookie_upgrade = yt_cookie_hdr.is_some()
+                && existing.media.as_ref().is_some_and(|m| {
+                    m.provider == "youtube"
+                        && m.transcript_origin == "absent"
+                        && m.duration_sec.is_none()
+                });
+            if existing.media.is_some() && !is_legacy_collapsed_shownotes(existing) && !needs_cookie_upgrade {
+                return self
+                    .existing_result(existing.clone(), override_meta.as_ref(), &[requested_url.to_string(), watch_url])
+                    .await
+                    .map_err(|e| ("NORMALIZE_FAILED".into(), e));
+            }
+        }
+
+        let id = previous
+            .as_ref()
+            .map(|p| p.id.clone())
+            .unwrap_or_else(|| material_id_of(&parsed_watch));
+        let fetched_at = now_iso();
+        let mut yt = crate::youtube::fetch_youtube_watch_metadata_with_cookies(
+            &self.http,
+            video_id,
+            yt_cookies.as_deref(),
+        )
+        .await
+        .map_err(|e| (e.code, e.message))?;
+
+        // 1. Build video Show notes view from video description (or Atom feed content)
+        let mut notes_reader: Option<ReaderPayload> = None;
+        let mut notes_md: Option<String> = None;
+        let mut notes_plain: Option<String> = None;
+
+        if let Some(ref desc) = yt.description {
+            let mut formatted_md = desc.clone();
+            if let Ok(parts) = self.normalizer.normalize_shownotes(desc, &watch_url).await {
+                notes_reader = parts.reader;
+                if let Some(formatted) = parts.markdown {
+                    formatted_md = formatted;
+                }
+                if yt.chapters.is_empty() {
+                    if let Some(ch) = parts.chapters {
+                        yt.chapters = ch;
+                    }
+                }
+            }
+            notes_plain = Some(desc.clone());
+            notes_md = Some(formatted_md);
+        } else if let Some(fc) = fallback_content {
+            notes_reader = fc.reader;
+            notes_md = fc.markdown;
+            notes_plain = fc.plain;
+        }
+
+        if notes_plain.as_deref().unwrap_or("").trim().is_empty() {
+            let fallback = "No video description was provided.".to_string();
+            if let Ok(parts) = self.normalizer.normalize_markdown(&fallback, &watch_url).await {
+                notes_reader = parts.reader;
+            }
+            notes_md = Some(fallback.clone());
+            notes_plain = Some(fallback);
+        }
+
+        let notes_mins = yt
+            .duration_sec
+            .filter(|&d| d > 0)
+            .map(|d| ((d as f64) / 60.0).round().max(1.0) as u32)
+            .unwrap_or_else(|| reading_minutes(notes_plain.as_deref().unwrap_or("")));
+
+        let shownotes_content = MaterialViewContent {
+            view: "shownotes".into(),
+            media_type: SHOWNOTES_VIEW_MEDIA_TYPE.into(),
+            pdf: None,
+            reader: notes_reader,
+            markdown: notes_md,
+            plain: notes_plain,
+            reading_minutes: notes_mins,
+            quality: ContentNormalizationQuality::default(),
+            problems: Vec::new(),
+            anchors: None,
+            time_anchors: None,
+            artifact_body: None,
+            report: None,
+        };
+        let shownotes_bytes = serde_json::to_string(&shownotes_content)
+            .map(|s| s.len() as u64)
+            .unwrap_or(0);
+        self.write_view_content(&id, &shownotes_content, None)
+            .map_err(|e| ("NORMALIZE_FAILED".into(), e))?;
+        let shownotes_view = MaterialView {
+            id: "shownotes".into(),
+            label: view_label("shownotes").into(),
+            url: watch_url.clone(),
+            media_type: SHOWNOTES_VIEW_MEDIA_TYPE.into(),
+            status: "ready".into(),
+            fetched_at: Some(fetched_at.clone()),
+            byte_length: Some(shownotes_bytes),
+            pdf: None,
+            error: None,
+        };
+
+        // 2. Crop Storyboard keyframes into `figures/<id>/<index>.png` -> `quire-figure://<id>/<index>.png`
+        let mut keyframes: Vec<TranscriptKeyframeDto> = Vec::new();
+        if let Some(ref sb) = yt.storyboard {
+            let batches = crate::youtube::plan_storyboard_crops(sb, &yt.chapters, yt.duration_sec);
+            for batch in batches {
+                let Ok(sheet_u) = assert_public_http_url(&batch.sheet_url) else {
+                    continue;
+                };
+                let Ok(sheet_page) = fetch_page(&self.http, &sheet_u, "image/jpeg,image/webp,image/*,*/*;q=0.5").await else {
+                    continue;
+                };
+                let req_regions: Vec<StoryboardCropInputRegion> = batch
+                    .regions
+                    .iter()
+                    .map(|r| StoryboardCropInputRegion {
+                        index: r.index,
+                        x: r.x,
+                        y: r.y,
+                        width: r.width,
+                        height: r.height,
+                    })
+                    .collect();
+                let Ok(cropped) = self
+                    .normalizer
+                    .crop_storyboard_sheet(&sheet_page.bytes, &sheet_page.media_type, &req_regions)
+                    .await
+                else {
+                    continue;
+                };
+                for frame in cropped {
+                    let Some(meta_region) = batch.regions.iter().find(|r| r.index == frame.index) else {
+                        continue;
+                    };
+                    let Ok(png_bytes) = base64::engine::general_purpose::STANDARD.decode(&frame.png_base64) else {
+                        continue;
+                    };
+                    if let Ok(fig_url) = self.figures.write(&id, frame.index, &png_bytes) {
+                        keyframes.push(TranscriptKeyframeDto {
+                            time_sec: meta_region.time_sec,
+                            url: fig_url,
+                            caption: Some(meta_region.caption.clone()),
+                            width: Some(frame.width),
+                            height: Some(frame.height),
+                        });
+                    }
+                }
+            }
+            keyframes.sort_by(|a, b| a.time_sec.partial_cmp(&b.time_sec).unwrap_or(std::cmp::Ordering::Equal));
+        }
+
+        // 3. Fetch ranked caption track (`srv3` preferred, raw XML/VTT fallback)
+        let mut normalized_tx = None;
+        let mut transcript_origin = "absent".to_string();
+        let mut caption_url_used = watch_url.clone();
+
+        for track in &yt.captions {
+            let sep = if track.base_url.contains('?') { '&' } else { '?' };
+            let srv3_url = format!("{}{}fmt=srv3", track.base_url, sep);
+            for candidate_url in [srv3_url.as_str(), track.base_url.as_str()] {
+                let Ok(cu) = assert_public_http_url(candidate_url) else {
+                    continue;
+                };
+                let Ok(cap_page) = crate::youtube::fetch_youtube_page_with_cookies(
+                    &self.http,
+                    &cu,
+                    "*/*",
+                    yt_cookie_hdr.as_deref(),
+                )
+                .await
+                else {
+                    continue;
+                };
+                let raw_text = String::from_utf8_lossy(&cap_page.bytes).to_string();
+                if raw_text.trim().is_empty() {
+                    continue;
+                }
+                if let Ok(tx) = self
+                    .normalizer
+                    .normalize_transcript(NormalizeTranscriptInput {
+                        raw_text: Some(raw_text),
+                        media_type: Some(cap_page.media_type),
+                        cues: None,
+                        chapters: if yt.chapters.is_empty() { None } else { Some(yt.chapters.clone()) },
+                        keyframes: if keyframes.is_empty() { None } else { Some(keyframes.clone()) },
+                        title: Some(yt.title.clone()),
+                    })
+                    .await
+                {
+                    if !tx.time_anchors.is_empty() {
+                        caption_url_used = candidate_url.to_string();
+                        transcript_origin = if track.is_auto {
+                            "auto_captions".into()
+                        } else {
+                            "captions".into()
+                        };
+                        normalized_tx = Some(tx);
+                        break;
+                    }
+                }
+            }
+            if normalized_tx.is_some() {
+                break;
+            }
+        }
+
+        // Fallback when WEB `captionTracks` carry `exp=xpe` PO-token experiments and answer 0 bytes
+        // (or when the watch page itself was bot-gated so `yt.duration_sec` is absent).
+        if normalized_tx.is_none() && (!yt.captions.is_empty() || yt.duration_sec.is_none()) {
+            let all_declared_auto = !yt.captions.is_empty() && yt.captions.iter().all(|c| c.is_auto);
+            if let Some((raw_text, cap_media_type, is_auto)) = crate::youtube::fetch_ytdlp_subtitles(
+                video_id,
+                yt_cookies.as_deref(),
+                &self.root.join("tmp-asr"),
+            )
+            .await
+            {
+                if let Ok(tx) = self
+                    .normalizer
+                    .normalize_transcript(NormalizeTranscriptInput {
+                        raw_text: Some(raw_text),
+                        media_type: Some(cap_media_type),
+                        cues: None,
+                        chapters: if yt.chapters.is_empty() { None } else { Some(yt.chapters.clone()) },
+                        keyframes: if keyframes.is_empty() { None } else { Some(keyframes.clone()) },
+                        title: Some(yt.title.clone()),
+                    })
+                    .await
+                {
+                    if !tx.time_anchors.is_empty() {
+                        transcript_origin = if is_auto || all_declared_auto {
+                            "auto_captions".into()
+                        } else {
+                            "captions".into()
+                        };
+                        normalized_tx = Some(tx);
+                    }
+                }
+            }
+        }
+
+        let (
+            primary_view,
+            media_type,
+            reader,
+            markdown,
+            plain,
+            time_anchors,
+            reading_mins,
+            views,
+        ) = if let Some(tx) = normalized_tx {
+            fs::create_dir_all(self.dir()).map_err(|e| ("NORMALIZE_FAILED".into(), e.to_string()))?;
+            if let Ok(raw_json) = serde_json::to_string(&tx.cues) {
+                let _ = fs::write(self.dir().join(format!("{id}.transcript.raw.json")), raw_json);
+            }
+            let tx_content = MaterialViewContent {
+                view: "transcript".into(),
+                media_type: TRANSCRIPT_VIEW_MEDIA_TYPE.into(),
+                pdf: None,
+                reader: Some(tx.reader.clone()),
+                markdown: Some(tx.markdown.clone()),
+                plain: Some(tx.plain.clone()),
+                reading_minutes: tx.reading_minutes,
+                quality: ContentNormalizationQuality::default(),
+                problems: Vec::new(),
+                anchors: None,
+                time_anchors: Some(tx.time_anchors.clone()),
+                artifact_body: None,
+                report: None,
+            };
+            let tx_len = serde_json::to_string(&tx_content)
+                .map(|s| s.len() as u64)
+                .unwrap_or(0);
+            self.write_view_content(&id, &tx_content, None)
+                .map_err(|e| ("NORMALIZE_FAILED".into(), e))?;
+            let tx_view = MaterialView {
+                id: "transcript".into(),
+                label: view_label("transcript").into(),
+                url: caption_url_used,
+                media_type: TRANSCRIPT_VIEW_MEDIA_TYPE.into(),
+                status: "ready".into(),
+                fetched_at: Some(fetched_at.clone()),
+                byte_length: Some(tx_len),
+                pdf: None,
+                error: None,
+            };
+            (
+                "transcript".to_string(),
+                TRANSCRIPT_VIEW_MEDIA_TYPE.to_string(),
+                Some(tx.reader),
+                Some(tx.markdown),
+                Some(tx.plain),
+                Some(tx.time_anchors),
+                tx.reading_minutes,
+                vec![tx_view, shownotes_view],
+            )
+        } else {
+            (
+                "shownotes".to_string(),
+                SHOWNOTES_VIEW_MEDIA_TYPE.to_string(),
+                shownotes_content.reader,
+                shownotes_content.markdown,
+                shownotes_content.plain,
+                None,
+                shownotes_content.reading_minutes,
+                vec![shownotes_view],
+            )
+        };
+
+        let mut base_meta = MaterialMeta {
+            kind: Some("videoRecording".into()),
+            title: Some(yt.title.clone()),
+            publication: yt.author.clone(),
+            date: yt.published_at.clone(),
+            creators: yt.author.map(|name| {
+                vec![Creator {
+                    role: "author".into(),
+                    name,
+                    given: None,
+                    family: None,
+                }]
+            }),
+            ..Default::default()
+        };
+        if let Some(ref ov) = override_meta {
+            base_meta = apply_overrides(&base_meta, Some(ov));
+        }
+
+        let mut rec = StoredRecord {
+            id,
+            url: watch_url.clone(),
+            final_url: watch_url.clone(),
+            title: yt.title,
+            byline: byline_of(base_meta.creators.as_deref()),
+            published_at: yt.published_at,
+            fetched_at,
+            reading_minutes: reading_mins,
+            origin: origin.to_string(),
+            media_type,
+            quality: ContentNormalizationQuality::default(),
+            lineage: previous.as_ref().and_then(|p| p.lineage.clone()),
+            rebuilt_as: previous.as_ref().and_then(|p| p.rebuilt_as.clone()),
+            artifact: None,
+            aliases: None,
+            canonical_url: None,
+            pdf: None,
+            media: Some(MediaInfo {
+                kind: "video".into(),
+                provider: "youtube".into(),
+                stream_url: watch_url,
+                video_id: Some(yt.video_id),
+                duration_sec: yt.duration_sec,
+                cached_bytes: previous.as_ref().and_then(|p| p.media.as_ref()).and_then(|m| m.cached_bytes),
+                transcript_origin,
+                chapters: if yt.chapters.is_empty() { None } else { Some(yt.chapters) },
+            }),
+            capture: None,
+            arxiv_version: None,
+            extracted: None,
+            item_meta: Some(base_meta),
+            views: Some(views),
+            primary_view: Some(primary_view),
+            lang: yt.captions.first().map(|c| c.language_code.clone()),
+            dir: None,
+            reader,
+            markdown,
+            plain,
+            time_anchors,
+            problems: Vec::new(),
+            artifact_source: None,
+        };
+        rec.extracted = Some(fallback_extracted_for(&rec));
+        if let Some(ref prev) = previous {
+            rec = with_names_of(prev, rec);
+        }
+        rec = with_aliases(rec, &[requested_url.to_string()]);
+        let saved = self.save_stored(rec).map_err(|e| ("NORMALIZE_FAILED".into(), e))?;
+        Ok(OpenUrlResult::success(
+            self.decorate(&saved).map_err(|e| ("NORMALIZE_FAILED".into(), e))?,
+            false,
+        ))
+    }
+
+    pub async fn materialize_youtube_item(
+        &self,
+        item: &ItemRecord,
+        content: Option<ItemContent>,
+        meta: Option<MaterialMeta>,
+    ) -> OpenUrlResult {
+        let video_id = item
+            .signals
+            .video_id
+            .clone()
+            .or_else(|| crate::youtube::parse_youtube_video_id(&item.link));
+        let Some(vid) = video_id else {
+            return OpenUrlResult::failure("YOUTUBE_ID_INVALID", format!("Not a YouTube video link: {}", item.link));
+        };
+        match self.open_youtube_video(&vid, &item.link, "feed", content, meta).await {
+            Ok(res) => res,
+            Err((code, msg)) => OpenUrlResult::failure(code, msg),
+        }
+    }
+
+    pub fn read_raw_transcript(&self, id: &str) -> Result<Option<Vec<TranscriptCueDto>>, String> {
+        if !valid_hex_16(id) {
+            return Ok(None);
+        }
+        let path = self.dir().join(format!("{id}.transcript.raw.json"));
+        let Some(bytes) = self.read_optional(&path)? else {
+            return Ok(None);
+        };
+        serde_json::from_slice(&bytes).map(Some).map_err(|e| e.to_string())
+    }
+
+    pub fn save_transcribed_view(
+        &self,
+        id: &str,
+        tx: NormalizedTranscriptResult,
+        origin: &str,
+        overwrite_raw: bool,
+    ) -> Result<MaterialRecord, String> {
+        let mut record = self.require_stored(id)?;
+        fs::create_dir_all(self.dir()).map_err(|e| e.to_string())?;
+        if overwrite_raw {
+            if let Ok(raw_json) = serde_json::to_string(&tx.cues) {
+                let _ = fs::write(self.dir().join(format!("{id}.transcript.raw.json")), raw_json);
+            }
+        }
+        let tx_content = MaterialViewContent {
+            view: "transcript".into(),
+            media_type: TRANSCRIPT_VIEW_MEDIA_TYPE.into(),
+            pdf: None,
+            reader: Some(tx.reader.clone()),
+            markdown: Some(tx.markdown.clone()),
+            plain: Some(tx.plain.clone()),
+            reading_minutes: tx.reading_minutes,
+            quality: ContentNormalizationQuality::default(),
+            problems: Vec::new(),
+            anchors: None,
+            time_anchors: Some(tx.time_anchors.clone()),
+            artifact_body: None,
+            report: None,
+        };
+        let tx_len = serde_json::to_string(&tx_content)
+            .map(|s| s.len() as u64)
+            .unwrap_or(0);
+        self.write_view_content(id, &tx_content, None)?;
+
+        let tx_view = MaterialView {
+            id: "transcript".into(),
+            label: view_label("transcript").into(),
+            url: record.url.clone(),
+            media_type: TRANSCRIPT_VIEW_MEDIA_TYPE.into(),
+            status: "ready".into(),
+            fetched_at: Some(now_iso()),
+            byte_length: Some(tx_len),
+            pdf: None,
+            error: None,
+        };
+
+        let existing_views = views_of(&record);
+        record.views = Some(upsert_view(&existing_views, tx_view));
+        record.primary_view = Some("transcript".into());
+        record.media_type = TRANSCRIPT_VIEW_MEDIA_TYPE.into();
+        record.reader = Some(tx.reader);
+        record.markdown = Some(tx.markdown);
+        record.plain = Some(tx.plain);
+        record.time_anchors = Some(tx.time_anchors);
+        record.reading_minutes = tx.reading_minutes;
+        if let Some(ref mut media) = record.media {
+            media.transcript_origin = origin.to_string();
+            if let Some(ch) = tx.chapters.filter(|c| !c.is_empty()) {
+                if media.chapters.as_ref().is_none_or(|existing| existing.is_empty())
+                    || origin == "agent_refined"
+                {
+                    media.chapters = Some(ch);
+                }
+            }
+        }
+        let saved = self.save_stored(record)?;
+        self.decorate(&saved)
+    }
+
+    pub async fn refine_material_transcript(
+        &self,
+        id: &str,
+        refined_markdown: &str,
+    ) -> Result<MaterialRecord, String> {
+        let record = self.require_stored(id)?;
+        let raw_cues = self.read_raw_transcript(id)?.ok_or_else(|| {
+            format!(
+                "Material {id} ({}) has no raw transcript cues stored (`{id}.transcript.raw.json`).",
+                record.title
+            )
+        })?;
+        let existing_keyframes = extract_keyframes_from_reader(record.reader.as_ref());
+        let tx = self
+            .normalizer
+            .refine_transcript(RefineTranscriptInput {
+                markdown: refined_markdown.to_string(),
+                raw_cues,
+                keyframes: if existing_keyframes.is_empty() {
+                    None
+                } else {
+                    Some(existing_keyframes)
+                },
+                title: Some(record.title.clone()),
+            })
+            .await?;
+        self.save_transcribed_view(id, tx, "agent_refined", false)
     }
 
     pub async fn import_snapshots(&self, corpus_dir: &Path) -> Result<CorpusImportResult, String> {
@@ -2390,6 +3731,7 @@ impl MaterialStore {
             let _ = fs::remove_file(self.pdf_path(id));
             let _ = fs::remove_file(self.html_path(id));
             let _ = fs::remove_file(self.dir().join(format!("{id}.json")));
+            let _ = fs::remove_file(self.dir().join(format!("{id}.transcript.raw.json")));
             for v in MATERIAL_VIEW_IDS {
                 let _ = fs::remove_file(self.view_content_path(id, v));
                 let _ = fs::remove_file(self.view_pdf_path(id, v));
@@ -2398,6 +3740,7 @@ impl MaterialStore {
                 let _ = fs::remove_file(self.revision_path(id, rev));
             }
             let _ = self.figures.remove(id);
+            let _ = remove_cached_media_files(&self.root, id);
             let _ = self.meta.remove(id);
             if let Ok(mut idx) = self.identities.lock() {
                 idx.remove(id);
@@ -2702,11 +4045,15 @@ pub fn storage_usage(data_dir: &Path) -> StorageUsage {
         .iter()
         .map(|name| fs::metadata(data_dir.join(name)).map(|m| m.len()).unwrap_or(0))
         .sum();
+    let media = dir_bytes(&data_dir.join("media"));
+    let models = dir_bytes(&data_dir.join("models"));
     StorageUsage {
         materials: dir_bytes(&data_dir.join("materials")),
         images: dir_bytes(&data_dir.join("images")),
         figures: dir_bytes(&data_dir.join("figures")),
         database,
+        media: (media > 0).then_some(media),
+        models: (models > 0).then_some(models),
     }
 }
 
@@ -2987,6 +4334,7 @@ mod tests {
                 note: Some("note".into()),
                 kind: "highlight".into(),
                 view: Some("web".into()),
+                time_range: None,
                 color: "#ffd400".into(),
                 created_at: String::new(),
                 updated_at: String::new(),
@@ -2996,5 +4344,27 @@ mod tests {
         assert_eq!(store.list("fedcba9876543210").unwrap().len(), 1);
         store.delete("fedcba9876543210", "0123456789abcdef").unwrap();
         assert_eq!(store.list("fedcba9876543210").unwrap().len(), 0);
+    }
+
+    #[test]
+    fn podcast_episode_matching_handles_redirects_and_cjk_titles() {
+        assert!(podcast_episode_matches(
+            Some("https://dts.podtrac.com/redirect.m4a/media.xyzcdn.net/65a1b2c3d4e5f6071890abcd.m4a?source=rss"),
+            "Other Title",
+            "https://media.xyzcdn.net/65a1b2c3d4e5f6071890abcd.m4a?token=apple",
+            "Episode Title",
+        ));
+        assert!(podcast_episode_matches(
+            Some("https://cdn.example.com/a.mp3"),
+            "vol.62 ｜ 播客到底怎么赚钱？  这次把问题问到了苹果副总裁面前",
+            "https://cdn.example.com/b.mp3",
+            "vol.62 | 播客到底怎么赚钱？ 这次把问题问到了苹果副总裁面前 ",
+        ));
+        assert!(!podcast_episode_matches(
+            Some("https://cdn.example.com/episode1.mp3"),
+            "Episode 1",
+            "https://other.example.com/episode1.mp3",
+            "Episode 2",
+        ));
     }
 }

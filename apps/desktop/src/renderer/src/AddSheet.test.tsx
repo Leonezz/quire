@@ -90,4 +90,27 @@ describe("AddSheet", () => {
     await act(async () => { fireEvent.submit(form); await flush(); });
     expect(screen.getByText("offline")).toBeTruthy();
   });
+
+  it("offers Read episode alongside Subscribe when an episode carries its show feed", async () => {
+    const episode = {
+      kind: "episode" as const,
+      url: "https://podcasts.apple.com/us/podcast/dwarkesh/id1516093381?i=10001",
+      mediaKind: "audio" as const,
+      title: "Dwarkesh Podcast",
+      feed: "https://api.substack.com/feed/podcast/1084089.rss",
+    };
+    api.read = mockRead({
+      detectSource: vi.fn(async () => episode),
+      addSource: vi.fn(async () => ({ ok: true as const, source: { ...source, kind: "podcast" as const }, added: 5 })),
+    });
+    const { input, form, onSubmit, onSubscribed } = setup();
+    fireEvent.change(input, { target: { value: episode.url } });
+    await act(async () => { fireEvent.submit(form); await flush(); });
+    expect(screen.getByRole("status").textContent).toContain("Podcast episode · Dwarkesh Podcast");
+    expect(screen.getByRole("button", { name: "Read episode" })).toBeTruthy();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Subscribe to api.substack.com" })); await flush(); });
+    expect(api.read.addSource).toHaveBeenCalledWith("https://api.substack.com/feed/podcast/1084089.rss");
+    expect(onSubscribed).toHaveBeenCalled();
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
 });

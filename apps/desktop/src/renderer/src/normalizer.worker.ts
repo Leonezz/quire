@@ -1,4 +1,16 @@
-import { normalizeArticleCapture, sha256Hex } from "@read/normalize";
+import "./workerDomShim";
+import {
+  extractDescriptionChapters,
+  formatShowNotesMarkdown,
+  normalizeArticleCapture,
+  normalizeTranscript,
+  parseTranscriptCues,
+  sha256Hex,
+  validateRefinedTranscript,
+  type TranscriptChapter,
+  type TranscriptCue,
+  type TranscriptKeyframe,
+} from "@read/normalize";
 import type { MaterialMeta, MaterialRecord } from "../../shared/contracts";
 import { compileReact } from "../../main/artifact-runtime";
 import { arxivItemsOf } from "../../main/engine/arxiv";
@@ -144,12 +156,17 @@ async function runJob(op: string, payload: Record<string, unknown>): Promise<unk
   }
 
   if (op === "normalizeMarkdown") {
-    const content = String(payload.content ?? "");
+    const raw = String(payload.content ?? "");
+    const isShowNotes = Boolean(payload.showNotes);
+    const content = isShowNotes ? formatShowNotesMarkdown(raw) : raw;
     const baseUri = String(payload.baseUri ?? "https://file.local/");
     const parts = markdownParts(content, baseUri);
+    const chapters = isShowNotes ? extractDescriptionChapters(content) : undefined;
     return {
       ...(parts.reader ? { reader: parts.reader } : {}),
+      markdown: content,
       readingMinutes: parts.readingMinutes,
+      ...(chapters?.length ? { chapters } : {}),
     };
   }
 
@@ -204,6 +221,93 @@ async function runJob(op: string, payload: Record<string, unknown>): Promise<unk
 
   if (op === "compileReact") {
     return compileReact(String(payload.source ?? ""));
+  }
+
+  if (op === "normalizeTranscript") {
+    const rawText = typeof payload.rawText === "string" ? payload.rawText : undefined;
+    const mediaType = typeof payload.mediaType === "string" ? payload.mediaType : undefined;
+    const suppliedCues = Array.isArray(payload.cues) ? (payload.cues as TranscriptCue[]) : undefined;
+    const chapters = Array.isArray(payload.chapters) ? (payload.chapters as TranscriptChapter[]) : undefined;
+    const keyframes = Array.isArray(payload.keyframes) ? (payload.keyframes as TranscriptKeyframe[]) : undefined;
+    const title = typeof payload.title === "string" ? payload.title : undefined;
+
+    const cues = suppliedCues ?? parseTranscriptCues(rawText ?? "", mediaType);
+    if (cues.length === 0) {
+      throw new Error("Transcript contained no timed cues.");
+    }
+    const normalized = normalizeTranscript(cues, {
+      ...(chapters ? { chapters } : {}),
+      ...(keyframes ? { keyframes } : {}),
+      ...(title ? { title } : {}),
+    });
+    return {
+      reader: normalized.reader,
+      markdown: normalized.markdown,
+      plain: normalized.plain,
+      readingMinutes: readingMinutes(normalized.plain),
+      timeAnchors: normalized.anchors,
+      cues,
+    };
+  }
+
+  if (op === "cropStoryboardSheet") {
+    const bytes = fromBase64(String(payload.bytesBase64 ?? ""));
+    const mediaType = String(payload.mediaType ?? "image/jpeg");
+    const regions = Array.isArray(payload.regions)
+      ? (payload.regions as { index: number; x: number; y: number; width: number; height: number }[])
+      : [];
+    if (regions.length === 0 || typeof OffscreenCanvas === "undefined" || typeof createImageBitmap === "undefined") {
+      return [];
+    }
+    const copy = new Uint8Array(bytes.byteLength);
+    copy.set(bytes);
+    const bitmap = await createImageBitmap(new Blob([copy], { type: mediaType }));
+    try {
+      const crops: { index: number; pngBase64: string; width: number; height: number }[] = [];
+      for (const r of regions) {
+        if (r.width <= 0 || r.height <= 0 || r.x >= bitmap.width || r.y >= bitmap.height) continue;
+        const w = Math.min(r.width, bitmap.width - r.x);
+        const h = Math.min(r.height, bitmap.height - r.y);
+        if (w <= 0 || h <= 0) continue;
+        const canvas = new OffscreenCanvas(w, h);
+        const ctx = canvas.getContext("2d");
+        if (!ctx) continue;
+        ctx.drawImage(bitmap, r.x, r.y, w, h, 0, 0, w, h);
+        const blob = await canvas.convertToBlob({ type: "image/png" });
+        const pngBytes = new Uint8Array(await blob.arrayBuffer());
+        crops.push({ index: r.index, pngBase64: toBase64(pngBytes), width: w, height: h });
+      }
+      return crops;
+    } finally {
+      bitmap.close();
+    }
+  }
+
+  if (op === "refineTranscript") {
+    const markdown = String(payload.markdown ?? "");
+    const rawCues = Array.isArray(payload.rawCues) ? (payload.rawCues as TranscriptCue[]) : [];
+    const keyframes = Array.isArray(payload.keyframes) ? (payload.keyframes as TranscriptKeyframe[]) : undefined;
+    const title = typeof payload.title === "string" ? payload.title : undefined;
+
+    const checked = validateRefinedTranscript(markdown, rawCues);
+    if (!checked.ok) {
+      throw new Error(`Refined transcript validation failed:\n- ${checked.issues.join("\n- ")}`);
+    }
+    const normalized = normalizeTranscript(checked.cues, {
+      chapters: checked.chapters,
+      preserveParagraphs: true,
+      ...(keyframes ? { keyframes } : {}),
+      ...(title ? { title } : {}),
+    });
+    return {
+      reader: normalized.reader,
+      markdown: normalized.markdown,
+      plain: normalized.plain,
+      readingMinutes: readingMinutes(normalized.plain),
+      timeAnchors: normalized.anchors,
+      cues: checked.cues,
+      ...(checked.chapters.length > 0 ? { chapters: checked.chapters } : {}),
+    };
   }
 
   throw new Error(`Unknown normalizer operation: ${op}`);

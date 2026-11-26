@@ -9,7 +9,15 @@ import { PREVIEW_TEXT_VIEW_MEDIA_TYPE } from "./previewTextView";
 // "builds" after a short pause into the hand-written reflow of previewTextView.ts.
 
 const VIEWS_KEY = "read:preview-views";
-const MEDIA_TYPES: Record<MaterialViewId, string> = { web: "text/html", pdf: "application/pdf", markdown: "text/markdown", text: PREVIEW_TEXT_VIEW_MEDIA_TYPE, artifact: "application/vnd.quire.artifact+html" };
+const MEDIA_TYPES: Record<MaterialViewId, string> = {
+  web: "text/html",
+  pdf: "application/pdf",
+  markdown: "text/markdown",
+  text: PREVIEW_TEXT_VIEW_MEDIA_TYPE,
+  artifact: "application/vnd.quire.artifact+html",
+  transcript: "text/x-quire-transcript",
+  shownotes: "text/x-quire-shownotes",
+};
 const TEXT_BUILD_MS = 800;
 
 interface FetchedView { fetchedAt: string; byteLength: number; pdf?: PdfInfo }

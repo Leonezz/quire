@@ -1,8 +1,8 @@
 use crate::db::Db;
 use crate::types::{
     AgentContext, AgentSession, AgentSessionSummary, AgentToolRow, AgentTurnRecord, Creator,
-    ItemRecord, ItemSignals, MaterialMeta, ReaderPayload, ReadingEvent, ReadingStats, SourceRecord,
-    TagCount,
+    ItemRecord, ItemSignals, MaterialMeta, MediaState, ReaderPayload, ReadingEvent, ReadingStats,
+    SourceConfig, SourceRecord, TagCount,
 };
 use chrono::{Datelike, Duration, Local, TimeZone, Utc};
 use rand::RngCore;
@@ -472,7 +472,7 @@ pub struct SourceStore {
     db: Arc<Db>,
 }
 
-const SOURCE_COLS: &str = "id, kind, locator, title, site_url, added_at, interval_minutes, last_sync_at, last_success_at, last_error, failure_count, paused_at";
+const SOURCE_COLS: &str = "id, kind, locator, title, site_url, added_at, interval_minutes, last_sync_at, last_success_at, last_error, failure_count, paused_at, config";
 
 fn health_of_conn(conn: &rusqlite::Connection, source_id: &str) -> Result<(u32, u32, f64), String> {
     let since = (Utc::now() - Duration::days(28)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
@@ -489,13 +489,28 @@ fn health_of_conn(conn: &rusqlite::Connection, source_id: &str) -> Result<(u32, 
 
 fn row_to_source(conn: &rusqlite::Connection, row: &rusqlite::Row<'_>) -> Result<SourceRecord, String> {
     let id: String = row.get(0).map_err(|e| e.to_string())?;
+    let kind: String = row.get(1).map_err(|e| e.to_string())?;
+    let config_raw: Option<String> = row.get(12).ok();
+    let mut parsed_cfg: SourceConfig = config_raw
+        .as_deref()
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default();
+    if kind == "youtube" && parsed_cfg.ignore_shorts.is_none() {
+        parsed_cfg.ignore_shorts = Some(true);
+    }
+    let config = if parsed_cfg.ignore_shorts.is_some() {
+        Some(parsed_cfg)
+    } else {
+        None
+    };
     let (item_count, kept_count, weekly_rate) = health_of_conn(conn, &id)?;
     Ok(SourceRecord {
         id,
-        kind: row.get(1).map_err(|e| e.to_string())?,
+        kind,
         locator: row.get(2).map_err(|e| e.to_string())?,
         title: row.get(3).map_err(|e| e.to_string())?,
         site_url: row.get(4).map_err(|e| e.to_string())?,
+        config,
         added_at: row.get(5).map_err(|e| e.to_string())?,
         interval_minutes: row.get::<_, i64>(6).map_err(|e| e.to_string())?.max(1) as u32,
         last_sync_at: row.get(7).map_err(|e| e.to_string())?,
@@ -521,10 +536,15 @@ impl SourceStore {
         }
         let id = random_hex_16();
         let added_at = now_iso();
+        let default_cfg = if kind == "youtube" {
+            r#"{"ignoreShorts":true}"#
+        } else {
+            "{}"
+        };
         self.db.with_conn(|conn| {
             conn.execute(
-                &format!("INSERT INTO sources ({SOURCE_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 30, NULL, NULL, NULL, 0, NULL)"),
-                params![id, kind, locator, title, site_url, added_at],
+                &format!("INSERT INTO sources ({SOURCE_COLS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 30, NULL, NULL, NULL, 0, NULL, ?7)"),
+                params![id, kind, locator, title, site_url, added_at, default_cfg],
             )
             .map_err(|e| e.to_string())?;
             conn.query_row(&format!("SELECT {SOURCE_COLS} FROM sources WHERE id = ?1"), params![id], |r| Ok(row_to_source(conn, r)))
@@ -683,6 +703,75 @@ impl EventStore {
                 finished_last_week: between("finished", &lws_iso, &ws_iso)?,
                 opened_this_week: between("opened", &ws_iso, &nws_iso)?,
             })
+        })
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MediaStateStore
+// ---------------------------------------------------------------------------
+
+#[derive(Clone)]
+pub struct MediaStateStore {
+    db: Arc<Db>,
+}
+
+impl MediaStateStore {
+    pub fn new(db: Arc<Db>) -> Self {
+        Self { db }
+    }
+
+    pub fn get(&self, material_id: &str) -> Result<Option<MediaState>, String> {
+        self.db.with_conn(|conn| {
+            conn.query_row(
+                "SELECT material_id, position_sec, duration_sec, playback_speed, updated_at FROM media_states WHERE material_id = ?1",
+                params![material_id],
+                |r| {
+                    Ok(MediaState {
+                        material_id: r.get(0)?,
+                        position_sec: r.get(1)?,
+                        duration_sec: r.get(2)?,
+                        playback_speed: r.get(3)?,
+                        updated_at: r.get(4)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(|e| e.to_string())
+        })
+    }
+
+    pub fn save(&self, mut state: MediaState) -> Result<MediaState, String> {
+        state.position_sec = state.position_sec.max(0.0);
+        state.playback_speed = state.playback_speed.clamp(0.5, 3.0);
+        state.updated_at = now_iso();
+        self.db.with_conn(|conn| {
+            conn.execute(
+                "INSERT INTO media_states (material_id, position_sec, duration_sec, playback_speed, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)
+                 ON CONFLICT (material_id) DO UPDATE SET
+                   position_sec = excluded.position_sec,
+                   duration_sec = COALESCE(excluded.duration_sec, media_states.duration_sec),
+                   playback_speed = excluded.playback_speed,
+                   updated_at = excluded.updated_at",
+                params![
+                    state.material_id,
+                    state.position_sec,
+                    state.duration_sec,
+                    state.playback_speed,
+                    state.updated_at,
+                ],
+            )
+            .map_err(|e| e.to_string())?;
+            Ok(state)
+        })
+    }
+
+    pub fn remove(&self, material_id: &str) -> Result<(), String> {
+        self.db.with_conn(|conn| {
+            conn.execute("DELETE FROM media_states WHERE material_id = ?1", params![material_id])
+                .map_err(|e| e.to_string())?;
+            Ok(())
         })
     }
 }

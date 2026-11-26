@@ -10,7 +10,7 @@ export type Database = DatabaseSync;
  * files in MaterialStore). The schema is versioned with PRAGMA user_version so later
  * milestones can migrate in place instead of guessing what an old file holds.
  */
-export const SCHEMA_VERSION = 4;
+export const SCHEMA_VERSION = 5;
 
 /** The database's file name in the data directory. */
 export const DATABASE_FILE = "quire.sqlite";
@@ -163,6 +163,21 @@ function migrateToV4(db: Database) {
   }
 }
 
+const SCHEMA_V5_MEDIA = `
+CREATE TABLE IF NOT EXISTS media_states (
+  material_id TEXT PRIMARY KEY,
+  position_sec REAL NOT NULL DEFAULT 0,
+  duration_sec REAL,
+  playback_speed REAL NOT NULL DEFAULT 1.0,
+  updated_at TEXT NOT NULL
+);
+`;
+
+function migrateToV5(db: Database) {
+  if (!hasColumn(db, "sources", "config")) db.exec("ALTER TABLE sources ADD COLUMN config TEXT NOT NULL DEFAULT '{}'");
+  db.exec(SCHEMA_V5_MEDIA);
+}
+
 /** The version-1 schema as M1 shipped it; tests build old databases from it to exercise the migration. */
 export function createV1Database(path: string): Database {
   if (path !== ":memory:") mkdirSync(dirname(path), { recursive: true });
@@ -193,6 +208,7 @@ export function openDatabase(path: string): Database {
   if (version < 2) migrateToV2(db);
   if (version < 3) migrateToV3(db);
   if (version < 4) migrateToV4(db);
+  if (version < 5) migrateToV5(db);
   if (version < SCHEMA_VERSION) db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`);
   return db;
 }

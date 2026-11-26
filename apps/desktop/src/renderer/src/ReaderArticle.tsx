@@ -1,6 +1,12 @@
-import { useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode, Ref } from "react";
+import {
+  formatShowNotesMarkdown,
+  isCollapsedShowNotesReader,
+  splitShowNotesTimestamps,
+} from "@read/normalize/contract";
 import { ReaderDocumentSurface } from "@read/reader";
+import { formatMediaClock } from "@read/ui";
 import { IMAGE_SCHEME, type ArtifactInfo, type ArtifactType, type MaterialRecord, type MaterialViewContent } from "../../shared/contracts";
 import { ArtifactSurface } from "./ArtifactCitations";
 import { ArtifactCanvas } from "./ArtifactFrame";
@@ -49,32 +55,215 @@ export interface ReaderArticleProps {
   banner?: ReactNode;
   /** Hands an error an artifact hit while running to the agent, to fix the artifact. */
   onFixArtifact?: ((error: string) => void) | undefined;
+  /** Transcript view: the currently spoken paragraph index, highlighted with a calm left rule. */
+  activeParagraphIndex?: number | undefined;
+  /** Transcript view: seeks and plays from a clicked margin timestamp. */
+  onSeekTime?: ((seconds: number) => void) | undefined;
+  /** Video materials: clicking an inline keyframe `<figure>` expands the top video stage at that timestamp. */
+  onSelectKeyframeTime?: ((seconds: number) => void) | undefined;
+}
+
+interface MarginStamp {
+  paragraphIndex: number;
+  startSec: number;
+  top: number;
+}
+
+function assignRef<T>(ref: Ref<T> | undefined, value: T | null): void {
+  if (!ref) return;
+  if (typeof ref === "function") ref(value);
+  else (ref as { current: T | null }).current = value;
+}
+
+function parseCaptionTimestamp(text: string): number | undefined {
+  const m = /^(\d{1,2}):(\d{2})(?::(\d{2}))?\b/.exec(text.trim());
+  if (!m) return undefined;
+  if (m[3] !== undefined) {
+    return Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]);
+  }
+  return Number(m[1]) * 60 + Number(m[2]);
 }
 
 /**
  * The article column as a reader sees it: host, title, byline and the document surface, laid out with the reading prefs.
  * ReaderView wraps it with the reader's chrome; RenderHarness.tsx renders it alone for the eval capture, so the two never drift.
  */
-export function ReaderArticle({ material, content, prefs, resolveImage, onOpenLink, onOpenMaterial, scrolls = true, viewportRef, bodyRef, onShowSources, bylineExtra, banner, onFixArtifact }: ReaderArticleProps) {
-  const fallback = useMemo(() => (content.markdown ? { content: content.markdown, format: "gfm" as const } : { content: content.plain ?? "", format: "plain" as const }), [content]);
-  const surface = { schema: content.reader?.schema ?? "none", payload: content.reader?.payload ?? "", fallback, onOpenLink, hostImageSchemes: HOST_IMAGE_SCHEMES, resolveImageSource: resolveImage, resolveRemoteImageSource: resolveImage, showFallbackNotice: false };
+export function ReaderArticle({ material, content, prefs, resolveImage, onOpenLink, onOpenMaterial, scrolls = true, viewportRef, bodyRef, onShowSources, bylineExtra, banner, onFixArtifact, activeParagraphIndex, onSeekTime, onSelectKeyframeTime }: ReaderArticleProps) {
+  const articleRef = useRef<HTMLElement | null>(null);
+  const setBodyRefs = useCallback((node: HTMLElement | null) => {
+    articleRef.current = node;
+    assignRef(bodyRef, node);
+  }, [bodyRef]);
+  const [stamps, setStamps] = useState<MarginStamp[]>([]);
+  const timeAnchors = content.timeAnchors;
+
+  useEffect(() => {
+    const article = articleRef.current;
+    if (!article || !timeAnchors || timeAnchors.length === 0) {
+      setStamps([]);
+      return;
+    }
+    const syncLayout = () => {
+      const paragraphs = article.querySelectorAll<HTMLParagraphElement>(
+        ".reader-document > p, .reader-document > section > p",
+      );
+      const artRect = article.getBoundingClientRect();
+      let prevSpeaker: string | undefined;
+      const measured: MarginStamp[] = [];
+      paragraphs.forEach((p) => p.removeAttribute("data-speaker"));
+      for (const anchor of timeAnchors) {
+        const p = paragraphs[anchor.paragraphIndex];
+        if (!p) continue;
+        const hasSpeaker = Boolean(anchor.speaker && anchor.speaker !== prevSpeaker);
+        if (hasSpeaker && anchor.speaker) {
+          p.setAttribute("data-speaker", anchor.speaker);
+        }
+        prevSpeaker = anchor.speaker;
+        const pRect = p.getBoundingClientRect();
+        const baseTop = artRect.height > 0 || pRect.height > 0 ? pRect.top - artRect.top : p.offsetTop;
+        let lineOffset = 0;
+        if (!hasSpeaker && typeof window !== "undefined") {
+          const lh = Number.parseFloat(window.getComputedStyle(p).lineHeight);
+          lineOffset = Number.isFinite(lh) && lh > 18 ? Math.round((lh - 18) / 2) : 4;
+        }
+        measured.push({
+          paragraphIndex: anchor.paragraphIndex,
+          startSec: anchor.startSec,
+          top: Math.round(baseTop) + lineOffset,
+        });
+      }
+      setStamps(measured);
+    };
+
+    const frame = requestAnimationFrame(syncLayout);
+    let observer: ResizeObserver | undefined;
+    if (typeof ResizeObserver !== "undefined") {
+      observer = new ResizeObserver(syncLayout);
+      observer.observe(article);
+    }
+    return () => {
+      cancelAnimationFrame(frame);
+      observer?.disconnect();
+    };
+  }, [timeAnchors, content.reader?.payload, prefs]);
+
+  useEffect(() => {
+    const article = articleRef.current;
+    if (!article) return;
+    const paragraphs = article.querySelectorAll<HTMLParagraphElement>(
+      ".reader-document > p, .reader-document > section > p",
+    );
+    paragraphs.forEach((p, idx) => {
+      if (activeParagraphIndex !== undefined && idx === activeParagraphIndex) {
+        p.setAttribute("data-active-turn", "true");
+      } else {
+        p.removeAttribute("data-active-turn");
+      }
+    });
+  }, [activeParagraphIndex, timeAnchors, content.reader?.payload]);
+
+  const isShowNotes = content.view === "shownotes" || content.mediaType === "text/x-quire-shownotes";
+  const seekRef = useRef(onSeekTime);
+  seekRef.current = onSeekTime;
+  const hasSeekTime = Boolean(onSeekTime);
+
+  const renderShowNotesText = useCallback((value: string): ReactNode => {
+    const parts = splitShowNotesTimestamps(value);
+    if (parts.length === 1 && typeof parts[0] === "string") return value;
+    return parts.map((part, idx) => {
+      if (typeof part === "string") return part;
+      return (
+        <button
+          key={`${idx}-${part.seconds}`}
+          type="button"
+          data-reader-searchable=""
+          onClick={() => seekRef.current?.(part.seconds)}
+          aria-label={`Jump to ${part.label}`}
+          className="shownotes-timestamp mr-1 inline-flex cursor-pointer items-baseline rounded-[5px] border-0 bg-fill px-1.5 py-0.5 font-mono text-[0.82em] leading-[1.35] font-medium text-accent-text tabular-nums transition-colors hover:bg-accent-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-ring"
+        >
+          {part.raw}
+        </button>
+      );
+    });
+  }, []);
+
+  const showNotesUpgrade = useMemo(() => {
+    if (!isShowNotes) return undefined;
+    const raw = content.markdown ?? content.plain ?? "";
+    const formatted = formatShowNotesMarkdown(raw);
+    const upgrade = isCollapsedShowNotesReader(content.reader?.payload, formatted);
+    return { formatted, upgrade };
+  }, [content.markdown, content.plain, content.reader?.payload, isShowNotes]);
+
+  const fallback = useMemo(() => {
+    if (showNotesUpgrade && showNotesUpgrade.formatted) {
+      return { content: showNotesUpgrade.formatted, format: "gfm" as const };
+    }
+    return content.markdown
+      ? { content: content.markdown, format: "gfm" as const }
+      : { content: content.plain ?? "", format: "plain" as const };
+  }, [content.markdown, content.plain, showNotesUpgrade]);
+
+  const useFallbackForShowNotes = Boolean(showNotesUpgrade?.upgrade);
+  const surface = {
+    schema: useFallbackForShowNotes ? "none" : (content.reader?.schema ?? "none"),
+    payload: useFallbackForShowNotes ? "" : (content.reader?.payload ?? ""),
+    fallback,
+    onOpenLink,
+    hostImageSchemes: HOST_IMAGE_SCHEMES,
+    resolveImageSource: resolveImage,
+    resolveRemoteImageSource: resolveImage,
+    showFallbackNotice: false,
+    ...(isShowNotes && hasSeekTime ? { renderText: renderShowNotesText } : {}),
+  };
   const host = hostLabel(material);
   const lineageCount = material.origin === "agent" ? (material.lineage?.length ?? 0) : 0;
+  const handleArticleClick = useCallback((event: React.MouseEvent<HTMLElement>) => {
+    if (!onSelectKeyframeTime || !(event.target instanceof Element)) return;
+    if (event.target.closest("a, button")) return;
+    const figure = event.target.closest(".reader-document figure");
+    if (!figure) return;
+    const caption = figure.querySelector("figcaption")?.textContent ?? "";
+    const sec = parseCaptionTimestamp(caption);
+    if (sec !== undefined) {
+      onSelectKeyframeTime(sec);
+    }
+  }, [onSelectKeyframeTime]);
+
   return (
-    <div ref={viewportRef} className={`reader-viewport px-14 pb-[120px] pt-12${scrolls ? " overflow-auto" : ""}`} style={prefsStyle(prefs)}>
-      <article ref={bodyRef} className="reader-body" style={{ textAlign: prefs.justify ? "justify" : "start" }}>
+    <div ref={viewportRef} className={`reader-viewport px-14 ${material.media ? "pb-[156px]" : "pb-[120px]"} pt-12${scrolls ? " overflow-auto" : ""}`} style={prefsStyle(prefs)}>
+      <article ref={setBodyRefs} onClick={onSelectKeyframeTime ? handleArticleClick : undefined} data-view={content.view} data-video-figures={onSelectKeyframeTime ? "true" : undefined} className="reader-body relative" style={{ textAlign: prefs.justify ? "justify" : "start" }}>
+        {stamps.length > 0 ? (
+          <div aria-hidden="true" className="pointer-events-none absolute inset-y-0 -left-13 w-11 select-none">
+            {stamps.map((stamp) => {
+              const isActive = activeParagraphIndex === stamp.paragraphIndex;
+              return (
+                <button
+                  key={`${stamp.paragraphIndex}-${stamp.startSec}`}
+                  type="button"
+                  tabIndex={-1}
+                  onClick={() => onSeekTime?.(stamp.startSec)}
+                  style={{ top: stamp.top }}
+                  className={`pointer-events-auto absolute right-0 inline-flex h-[18px] cursor-pointer items-center rounded-control border-0 bg-transparent px-1 py-0 font-mono text-[11.5px] leading-[18px] tabular-nums transition-colors hover:bg-fill hover:text-label ${isActive ? "font-semibold text-accent-text" : "text-label-3"}`}
+                >
+                  {formatMediaClock(stamp.startSec)}
+                </button>
+              );
+            })}
+          </div>
+        ) : null}
         {lineageCount && onShowSources
-          ? <button type="button" className="mb-3 block cursor-default border-0 bg-transparent p-0 text-[13px] font-medium text-accent-text hover:underline" onClick={onShowSources}>{host} · sources in Info</button>
-          : <p className="mb-3 text-[13px] font-medium text-accent-text">{host}</p>}
+          ? <button type="button" data-reader-chrome="" className="mb-3 block select-none cursor-default border-0 bg-transparent p-0 text-[13px] font-medium text-accent-text hover:underline" onClick={onShowSources}>{host} · sources in Info</button>
+          : <p data-reader-chrome="" className="mb-3 select-none text-[13px] font-medium text-accent-text">{host}</p>}
         <h1>{material.title}</h1>
-        <div className="mb-8 flex flex-wrap gap-x-3 text-[12.5px] text-label-2">
-          {headerParts(material.meta).map((part) => <span key={part}>{part}</span>)}
+        <div data-reader-chrome="" className="mb-8 flex select-none flex-wrap gap-x-3 text-[12.5px] text-label-2">
+          {headerParts(material.meta).map((part, index) => <span key={`${index}-${part}`}>{part}</span>)}
           {artifactLabel(material.artifact) ? <span>{artifactLabel(material.artifact)}</span> : null}
           {material.origin === "agent" && material.artifact ? <span>{artifactDate(material.artifact.updatedAt)}</span> : null}
           <span>{content.readingMinutes} min</span>
           {bylineExtra}
         </div>
-        {banner}
+        {banner ? <div data-reader-chrome="" className="select-none [&_[role=alert]]:select-text">{banner}</div> : null}
         {content.artifactBody ? null : material.origin === "agent" && onOpenMaterial
           ? <ArtifactSurface material={material} markdown={content.markdown} onOpenMaterial={onOpenMaterial} {...surface} />
           : <ReaderDocumentSurface {...surface} />}

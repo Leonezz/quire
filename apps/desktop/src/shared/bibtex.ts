@@ -7,9 +7,10 @@ type EntryType = "article" | "inproceedings" | "book" | "incollection" | "techre
 
 const ENTRY_TYPES: Record<MaterialKind, EntryType> = {
   journalArticle: "article", conferencePaper: "inproceedings", book: "book", bookSection: "incollection", report: "techreport", thesis: "phdthesis",
-  preprint: "misc", webpage: "misc", blogPost: "misc", newsletter: "misc", newsArticle: "misc", document: "misc", note: "misc",
+  preprint: "misc", webpage: "misc", blogPost: "misc", newsletter: "misc", newsArticle: "misc", document: "misc",
+  podcastEpisode: "misc", videoRecording: "misc", note: "misc",
 };
-const WEB_KINDS: ReadonlySet<MaterialKind> = new Set(["webpage", "blogPost", "newsletter", "newsArticle", "document", "note"]);
+const WEB_KINDS: ReadonlySet<MaterialKind> = new Set(["webpage", "blogPost", "newsletter", "newsArticle", "document", "podcastEpisode", "videoRecording", "note"]);
 const MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
 
 /** The characters BibTeX/LaTeX would otherwise read as markup. */

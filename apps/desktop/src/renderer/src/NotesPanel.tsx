@@ -1,6 +1,6 @@
 import { useId } from "react";
-import { Copy, Trash2 } from "lucide-react";
-import { Button, InspectorSection, TextField } from "@read/ui";
+import { Copy, Play, Trash2 } from "lucide-react";
+import { Button, Icon, InspectorSection, TextField, formatMediaClock } from "@read/ui";
 import type { TextAnnotationPlacement } from "@read/reader";
 import type { Annotation, MaterialRecord, MaterialViewId } from "../../shared/contracts";
 import { annotationsMarkdown, citationFor } from "./annotations";
@@ -24,15 +24,17 @@ interface NoteCardProps {
   /** The view the note was made in, named on the card when the material stores both renderings of its PDF. */
   viewTag: string | undefined;
   placement: NotePlacement | undefined;
+  onPlayTime?: ((seconds: number) => void) | undefined;
 }
 
 /** One highlight: its quote (click to jump, unless it is not in this version), the note edited inline, copy and delete. */
-function NoteCard({ material, annotation, active, draft, onDraftChange, onJump, onUpdateNote, onDelete, section, viewTag, placement }: NoteCardProps) {
+function NoteCard({ material, annotation, active, draft, onDraftChange, onJump, onUpdateNote, onDelete, section, viewTag, placement, onPlayTime }: NoteCardProps) {
   const copyText = async (text: string) => { await navigator.clipboard.writeText(text); };
   const quote = (
     <>
       <span className="mb-1.5 flex items-center gap-2 text-[11px] text-label-3">
         <i aria-hidden="true" className="size-2.5 rounded-full" style={{ background: annotation.color }} />{new Date(annotation.updatedAt).toLocaleDateString()}
+        {annotation.timeRange ? <span className="font-mono tabular-nums text-accent-text">{formatMediaClock(annotation.timeRange[0])}</span> : null}
         {viewTag ? <span className="rounded-pill bg-fill px-1.5 text-[10px] font-medium leading-[14px] text-label-2" title={`Made in the ${viewTag} view`}>{viewTag}</span> : null}
       </span>
       <span className="block text-[13px] leading-[18px] text-label" style={{ boxShadow: `inset 3px 0 0 ${annotation.color}`, paddingLeft: 10 }}>{annotation.quote.length > 220 ? `${annotation.quote.slice(0, 220)}…` : annotation.quote}</span>
@@ -56,6 +58,11 @@ function NoteCard({ material, annotation, active, draft, onDraftChange, onJump, 
         <p className="mt-2 cursor-text text-[13px] text-label-2" onClick={() => onDraftChange({ id: annotation.id, value: annotation.note ?? "" })}>{annotation.note}</p>
       ) : null}
       <div className="mt-2 flex items-center gap-1">
+        {annotation.timeRange && onPlayTime ? (
+          <Button variant="quiet" size="sm" aria-label={`Play from ${formatMediaClock(annotation.timeRange[0])}`} onPress={() => onPlayTime(annotation.timeRange![0])}>
+            <Icon of={Play} size="sm" />{formatMediaClock(annotation.timeRange[0])}
+          </Button>
+        ) : null}
         {draft?.id !== annotation.id && !annotation.note ? <Button variant="plain" size="sm" onPress={() => onDraftChange({ id: annotation.id, value: "" })}>Add note</Button> : null}
         <Button variant="quiet" size="sm" aria-label="Copy citation" onPress={() => void copyText(citationFor(material, annotation, section))}><Copy /></Button>
         <Button variant="quiet" size="sm" aria-label="Delete" onPress={() => onDelete(annotation.id)}><Trash2 /></Button>
@@ -78,7 +85,7 @@ export function groupByView(material: Pick<MaterialRecord, "views" | "primaryVie
  * The Notes inspector: one card per highlight, notes edited inline, citations copied per note or all at once; grouped by view
  * when notes span several. Notes the reader could not place in this version are listed last, under a line that says so.
  */
-export function NotesPanel({ material, view, mirroredViews = [], annotations, error, activeId, draft, onDraftChange, onJump, onUpdateNote, onDelete, sectionFor, placementOf }: {
+export function NotesPanel({ material, view, mirroredViews = [], annotations, error, activeId, draft, onDraftChange, onJump, onUpdateNote, onDelete, sectionFor, placementOf, onPlayTime }: {
   material: MaterialRecord;
   /** The view being read: its group comes with no explanation, another view's jump switches there first. */
   view: MaterialViewId;
@@ -95,6 +102,7 @@ export function NotesPanel({ material, view, mirroredViews = [], annotations, er
   sectionFor: (annotation: Annotation) => string | undefined;
   /** Where the reader placed each note it shows (undefined for the notes it does not show, and in the PDF reader). */
   placementOf?: ((annotation: Annotation) => NotePlacement | undefined) | undefined;
+  onPlayTime?: ((seconds: number) => void) | undefined;
 }) {
   const copyText = async (text: string) => { await navigator.clipboard.writeText(text); };
   const unplacedId = useId();
@@ -107,7 +115,7 @@ export function NotesPanel({ material, view, mirroredViews = [], annotations, er
   const inPlace = (group: MaterialViewId) => group === view || mirroredViews.includes(group);
   const card = (annotation: Annotation) => (
     <NoteCard key={annotation.id} material={material} annotation={annotation} active={activeId === annotation.id} draft={draft} onDraftChange={onDraftChange} onJump={onJump} onUpdateNote={onUpdateNote} onDelete={onDelete} section={sectionFor(annotation)}
-      viewTag={tagged ? viewLabel(annotationView(annotation, material.primaryView)) : undefined} placement={placementOf?.(annotation)} />
+      viewTag={tagged ? viewLabel(annotationView(annotation, material.primaryView)) : undefined} placement={placementOf?.(annotation)} onPlayTime={onPlayTime} />
   );
   return (
     <InspectorSection title={annotations.length ? `${annotations.length} ${annotations.length === 1 ? "note" : "notes"}` : "Notes"}>

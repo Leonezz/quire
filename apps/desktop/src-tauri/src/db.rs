@@ -4,7 +4,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::Mutex;
 
-pub const SCHEMA_VERSION: i32 = 4;
+pub const SCHEMA_VERSION: i32 = 5;
 pub const DATABASE_FILE: &str = "quire.sqlite";
 
 pub struct Db {
@@ -102,6 +102,16 @@ const SCHEMA_V4_META: &str = "
 CREATE TABLE IF NOT EXISTS material_meta (
   material_id TEXT PRIMARY KEY,
   overrides TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+";
+
+const SCHEMA_V5_MEDIA: &str = "
+CREATE TABLE IF NOT EXISTS media_states (
+  material_id TEXT PRIMARY KEY,
+  position_sec REAL NOT NULL DEFAULT 0,
+  duration_sec REAL,
+  playback_speed REAL NOT NULL DEFAULT 1.0,
   updated_at TEXT NOT NULL
 );
 ";
@@ -229,6 +239,14 @@ fn migrate_to_v4(conn: &Connection) -> Result<(), String> {
     }
 }
 
+fn migrate_to_v5(conn: &Connection) -> Result<(), String> {
+    if !has_column(conn, "sources", "config")? {
+        conn.execute_batch("ALTER TABLE sources ADD COLUMN config TEXT NOT NULL DEFAULT '{}';")
+            .map_err(|e| e.to_string())?;
+    }
+    conn.execute_batch(SCHEMA_V5_MEDIA).map_err(|e| e.to_string())
+}
+
 impl Db {
     pub fn open(path: &Path) -> Result<Self, String> {
         if let Some(parent) = path.parent() {
@@ -267,6 +285,9 @@ impl Db {
         }
         if version < 4 {
             migrate_to_v4(&conn)?;
+        }
+        if version < 5 {
+            migrate_to_v5(&conn)?;
         }
         if version < SCHEMA_VERSION {
             conn.execute_batch(&format!("PRAGMA user_version = {SCHEMA_VERSION};"))

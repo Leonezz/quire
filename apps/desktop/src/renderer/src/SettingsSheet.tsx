@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useState } from "react";
 import { Button, Kbd, NumberField, Segment, Segmented, Sheet, SheetDialog, Switch, TextField } from "@read/ui";
-import type { AgentStatus, Settings, SettingsPatch, StorageUsage } from "../../shared/contracts";
+import type { AgentStatus, AsrModelDownloadProgress, AsrModelStatus, AsrProvider, Settings, SettingsPatch, StorageUsage } from "../../shared/contracts";
 import { AboutSection } from "./AboutSection";
 import { FeedbackSection } from "./FeedbackSection";
 import { agentStore, needsSignIn, useAgentStatus } from "./agentStore";
@@ -15,10 +15,10 @@ type Field = keyof Patch;
 /** The one-line privacy note of the Jev judge, from the Settings contract. */
 export const JEV_PRIVACY_NOTE = "Jev refines the blocks the rules are unsure about over the network; the page text of those blocks leaves the machine.";
 type FieldErrors = Partial<Record<Field, string>>;
-export type SettingsSection = "reading" | "sources" | "agent" | "storage" | "feedback" | "keyboard" | "about";
+export type SettingsSection = "reading" | "sources" | "agent" | "transcription" | "storage" | "feedback" | "keyboard" | "about";
 
 const SECTIONS: { id: SettingsSection; title: string }[] = [
-  { id: "reading", title: "Reading" }, { id: "sources", title: "Sources" }, { id: "agent", title: "Agent" }, { id: "storage", title: "Storage" }, { id: "feedback", title: "Feedback" }, { id: "keyboard", title: "Keyboard" }, { id: "about", title: "About" },
+  { id: "reading", title: "Reading" }, { id: "sources", title: "Sources" }, { id: "agent", title: "Agent" }, { id: "transcription", title: "Transcription" }, { id: "storage", title: "Storage" }, { id: "feedback", title: "Feedback" }, { id: "keyboard", title: "Keyboard" }, { id: "about", title: "About" },
 ];
 
 function Section({ id, title, children }: { id: SettingsSection; title: string; children: React.ReactNode }) {
@@ -39,13 +39,17 @@ function Row({ label, hint, children }: { label: string; hint?: string | undefin
   );
 }
 
-const USAGE_PARTS: { key: keyof StorageUsage; label: string }[] = [
+const USAGE_PARTS: { key: "materials" | "images" | "figures" | "database"; label: string }[] = [
   { key: "materials", label: "Materials" }, { key: "images", label: "Images" }, { key: "figures", label: "Figures" }, { key: "database", label: "Database" },
 ];
 
 /** The data directory's bytes by part, then their total. */
 function StorageUsageList({ usage }: { usage: StorageUsage }) {
-  const parts = USAGE_PARTS.map((part) => ({ label: part.label, bytes: usage[part.key] }));
+  const extraParts: { label: string; bytes: number }[] = [
+    ...(usage.media !== undefined ? [{ label: "Media", bytes: usage.media }] : []),
+    ...(usage.models !== undefined ? [{ label: "Models", bytes: usage.models }] : []),
+  ];
+  const parts = [...USAGE_PARTS.map((part) => ({ label: part.label, bytes: usage[part.key] })), ...extraParts];
   const rows = [...parts, { label: "Total", bytes: parts.reduce((total, part) => total + part.bytes, 0) }];
   return (
     <dl aria-label="Storage used" className="m-0 grid grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-1 pt-2 text-[13px]">
@@ -83,15 +87,53 @@ export function SettingsSheet({ open, onClose, section, onOpenLink }: { open: bo
   const refreshAgent = agentStore.refreshStatus;
   const [copied, setCopied] = useState(false);
   const [usage, setUsage] = useState<{ value?: StorageUsage; error?: string }>({});
+  const [asrModelInfo, setAsrModelInfo] = useState<AsrModelStatus | undefined>(undefined);
+  const [downloadingModel, setDownloadingModel] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState<AsrModelDownloadProgress | undefined>(undefined);
+  const [asrModelError, setAsrModelError] = useState<string | undefined>(undefined);
+  const [asrTest, setAsrTest] = useState<{ busy?: boolean; ok?: string; error?: string } | undefined>(undefined);
+  const [youtubeAuth, setYoutubeAuth] = useState<{ busy?: boolean; error?: string } | undefined>(undefined);
   // Text fields are edited locally and saved on blur / Enter, so a half-typed path is not rejected mid-way.
-  const [drafts, setDrafts] = useState<{ codexPath: string; agentModel: string; syncIntervalMinutes: number; typesafeApiKey: string }>({ codexPath: "", agentModel: "", syncIntervalMinutes: 30, typesafeApiKey: "" });
+  const [drafts, setDrafts] = useState<{
+    codexPath: string;
+    agentModel: string;
+    syncIntervalMinutes: number;
+    typesafeApiKey: string;
+    asrBaseUrl: string;
+    asrModel: string;
+    asrApiKey: string;
+  }>({
+    codexPath: "",
+    agentModel: "",
+    syncIntervalMinutes: 30,
+    typesafeApiKey: "",
+    asrBaseUrl: "",
+    asrModel: "",
+    asrApiKey: "",
+  });
 
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     setLoadError(undefined); setErrors({}); setSaved(undefined); setCopied(false); setUsage({});
+    setAsrModelInfo(undefined); setAsrModelError(undefined); setAsrTest(undefined); setYoutubeAuth(undefined);
     read.getSettings()
-      .then((loaded) => { if (cancelled) return; setSettings(loaded); setDrafts({ codexPath: loaded.codexPath, agentModel: loaded.agentModel, syncIntervalMinutes: loaded.syncIntervalMinutes, typesafeApiKey: "" }); })
+      .then((loaded) => {
+        if (cancelled) return;
+        setSettings(loaded);
+        setDrafts({
+          codexPath: loaded.codexPath,
+          agentModel: loaded.agentModel,
+          syncIntervalMinutes: loaded.syncIntervalMinutes,
+          typesafeApiKey: "",
+          asrBaseUrl: loaded.asrBaseUrl ?? "",
+          asrModel: loaded.asrModel ?? "",
+          asrApiKey: "",
+        });
+        if (loaded.asrProvider === "local") {
+          read.asrModelStatus().then((status) => { if (!cancelled) setAsrModelInfo(status); }).catch(() => undefined);
+        }
+      })
       .catch((cause: unknown) => { if (!cancelled) setLoadError(cause instanceof Error ? cause.message : "Could not load the settings."); });
     // Measured at every opening: deleting materials or reading new ones changes it between two.
     read.storageUsage()
@@ -108,15 +150,28 @@ export function SettingsSheet({ open, onClose, section, onOpenLink }: { open: bo
   }, [open, section, settings]);
 
   const save = async (field: Field, value: Patch[Field]) => {
-    if (field !== "typesafeApiKey" && settings && settings[field] === value) return;
+    if (field !== "typesafeApiKey" && field !== "asrApiKey" && settings && settings[field] === value) return;
     setErrors((current) => ({ ...current, [field]: undefined }));
     try {
       const next = await read.updateSettings({ [field]: value } as Patch);
       setSettings(next);
       // The key is write-only: once stored (or removed) the draft is cleared, never echoed back.
-      setDrafts({ codexPath: next.codexPath, agentModel: next.agentModel, syncIntervalMinutes: next.syncIntervalMinutes, typesafeApiKey: "" });
+      setDrafts({
+        codexPath: next.codexPath,
+        agentModel: next.agentModel,
+        syncIntervalMinutes: next.syncIntervalMinutes,
+        typesafeApiKey: "",
+        asrBaseUrl: next.asrBaseUrl ?? "",
+        asrModel: next.asrModel ?? "",
+        asrApiKey: "",
+      });
       setSaved(field);
       if (field === "codexPath" || field === "agentModel" || field === "agentReasoningEffort") void refreshAgent();
+      if (field === "asrProvider" || field === "localWhisperModel") {
+        if (next.asrProvider === "local") {
+          read.asrModelStatus().then(setAsrModelInfo).catch(() => undefined);
+        }
+      }
     } catch (cause: unknown) {
       setErrors((current) => ({ ...current, [field]: cause instanceof Error ? cause.message : `Could not save ${field}.` }));
     }
@@ -128,8 +183,97 @@ export function SettingsSheet({ open, onClose, section, onOpenLink }: { open: bo
     setCopied(true);
   };
   const savedNote = (field: Field) => (saved === field && !errors[field] ? "Saved." : undefined);
-  const enterSaves = (field: "codexPath" | "agentModel") => (event: React.KeyboardEvent) => { if (event.key === "Enter") { event.preventDefault(); void save(field, drafts[field]); } };
+  const enterSaves = (field: "codexPath" | "agentModel" | "asrBaseUrl" | "asrModel") => (event: React.KeyboardEvent) => { if (event.key === "Enter") { event.preventDefault(); void save(field, drafts[field]); } };
   const storeKey = () => { if (drafts.typesafeApiKey.trim()) void save("typesafeApiKey", drafts.typesafeApiKey); };
+  const storeAsrKey = () => { if (drafts.asrApiKey.trim()) void save("asrApiKey", drafts.asrApiKey); };
+  const asrProvider: AsrProvider = settings?.asrProvider ?? "openai_compatible";
+
+  const runAsrTest = async () => {
+    if (!settings) return;
+    setAsrTest({ busy: true });
+    try {
+      const pendingPatch: SettingsPatch = {};
+      if (drafts.asrBaseUrl !== (settings.asrBaseUrl ?? "")) pendingPatch.asrBaseUrl = drafts.asrBaseUrl;
+      if (drafts.asrModel !== (settings.asrModel ?? "")) pendingPatch.asrModel = drafts.asrModel;
+      if (drafts.asrApiKey.trim()) pendingPatch.asrApiKey = drafts.asrApiKey;
+      if (Object.keys(pendingPatch).length > 0) {
+        const next = await read.updateSettings(pendingPatch);
+        setSettings(next);
+        setDrafts((current) => ({ ...current, asrBaseUrl: next.asrBaseUrl ?? "", asrModel: next.asrModel ?? "", asrApiKey: "" }));
+      }
+      const res = await read.testAsrConnection();
+      setAsrTest({
+        ok: `Connected (${res.latencyMs} ms · ${res.supportsVerboseJson ? "segment timestamps" : "chunk timestamps"})`,
+      });
+    } catch (cause: unknown) {
+      setAsrTest({ error: cause instanceof Error ? cause.message : "Connection test failed." });
+    }
+  };
+
+  const downloadWhisperModel = async () => {
+    if (!settings) return;
+    setDownloadingModel(true);
+    setDownloadProgress(undefined);
+    setAsrModelError(undefined);
+    const unsub = read.onAsrModelProgress?.((progress) => {
+      setDownloadProgress(progress);
+    });
+    try {
+      const model = settings.localWhisperModel ?? "base";
+      const status = await read.downloadAsrModel(model);
+      setAsrModelInfo(status);
+      read.storageUsage().then((value) => setUsage({ value })).catch(() => undefined);
+    } catch (cause: unknown) {
+      const message =
+        cause instanceof Error
+          ? cause.message
+          : typeof cause === "string" && cause.trim()
+            ? cause
+            : "Could not download Whisper model.";
+      setAsrModelError(message);
+    } finally {
+      unsub?.();
+      setDownloadingModel(false);
+      setDownloadProgress(undefined);
+    }
+  };
+
+  const clearCachedMedia = async () => {
+    try {
+      await read.clearMediaCache();
+      const value = await read.storageUsage();
+      setUsage({ value });
+    } catch (cause: unknown) {
+      setUsage({ error: cause instanceof Error ? cause.message : "Could not clear cached media." });
+    }
+  };
+
+  const connectYoutube = async () => {
+    setYoutubeAuth({ busy: true });
+    try {
+      const next = await read.signInYoutube();
+      setSettings(next);
+      setYoutubeAuth(undefined);
+    } catch (cause: unknown) {
+      const msg = cause instanceof Error ? cause.message : "Could not sign in to YouTube.";
+      if (/cancelled/i.test(msg)) {
+        setYoutubeAuth(undefined);
+      } else {
+        setYoutubeAuth({ error: msg });
+      }
+    }
+  };
+
+  const disconnectYoutube = async () => {
+    setYoutubeAuth({ busy: true });
+    try {
+      const next = await read.signOutYoutube();
+      setSettings(next);
+      setYoutubeAuth(undefined);
+    } catch (cause: unknown) {
+      setYoutubeAuth({ error: cause instanceof Error ? cause.message : "Could not disconnect YouTube." });
+    }
+  };
 
   return (
     <Sheet isOpen={open} onOpenChange={(next) => { if (!next) onClose(); }} size="lg">
@@ -149,6 +293,26 @@ export function SettingsSheet({ open, onClose, section, onOpenLink }: { open: bo
               {/* The number field commits on blur, Enter and the steppers (never per keystroke), so its onChange is the save. */}
               <NumberField aria-label="Sync interval in minutes" value={drafts.syncIntervalMinutes} onChange={(value) => { setDrafts((current) => ({ ...current, syncIntervalMinutes: value })); void save("syncIntervalMinutes", value); }}
                 formatOptions={{ maximumFractionDigits: 0 }} unit="min" isDisabled={!settings} errorMessage={errors.syncIntervalMinutes} description={savedNote("syncIntervalMinutes")} />
+            </Row>
+            <Row label="YouTube account" hint="Optional sign-in when your network or proxy triggers YouTube bot checks; unlocks captions, keyframes and audio.">
+              <div className="flex flex-wrap items-center gap-2 pt-2 text-[13px] text-label">
+                {settings?.youtubeConnected ? (
+                  <>
+                    <span>Signed in</span>
+                    <Button size="sm" variant="quiet" isDisabled={youtubeAuth?.busy === true} onPress={() => void disconnectYoutube()}>
+                      {youtubeAuth?.busy ? "Disconnecting…" : "Disconnect"}
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-label-2">Not signed in</span>
+                    <Button size="sm" isDisabled={!settings || youtubeAuth?.busy === true} onPress={() => void connectYoutube()}>
+                      {youtubeAuth?.busy ? "Waiting for sign-in…" : "Sign in to YouTube…"}
+                    </Button>
+                  </>
+                )}
+              </div>
+              {youtubeAuth?.error ? <p role="alert" className="t-text-in m-0 text-[12px] text-red-text">{youtubeAuth.error}</p> : null}
             </Row>
           </Section>
 
@@ -197,10 +361,88 @@ export function SettingsSheet({ open, onClose, section, onOpenLink }: { open: bo
             </Row>
           </Section>
 
+          <Section id="transcription" title="Transcription">
+            <Row label="Provider" hint="Used when a podcast episode or video has no publisher transcript.">
+              <Segmented aria-label="Transcription provider" selectedKeys={[asrProvider]} isDisabled={!settings}
+                onSelectionChange={(keys) => { const key = [...keys][0]; if (key === "local" || key === "openai_compatible") void save("asrProvider", key); }}>
+                <Segment id="openai_compatible">OpenAI Compatible</Segment>
+                <Segment id="local">Built-in Local</Segment>
+              </Segmented>
+              {errors.asrProvider ? <p role="alert" className="t-text-in m-0 text-[12px] text-red-text">{errors.asrProvider}</p> : null}
+            </Row>
+            {asrProvider === "openai_compatible" ? (
+              <>
+                <Row label="ASR base URL" hint="HTTPS endpoint, or http://localhost for local whisper.cpp / mlx-audio.">
+                  <TextField aria-label="ASR base URL" placeholder="https://api.groq.com/openai/v1" value={drafts.asrBaseUrl}
+                    onChange={(value) => { setDrafts((current) => ({ ...current, asrBaseUrl: value })); setAsrTest(undefined); }}
+                    onBlur={() => void save("asrBaseUrl", drafts.asrBaseUrl)} onKeyDown={enterSaves("asrBaseUrl")}
+                    isDisabled={!settings} errorMessage={errors.asrBaseUrl} description={savedNote("asrBaseUrl")} />
+                </Row>
+                <Row label="ASR model" hint="Model sent to /audio/transcriptions.">
+                  <TextField aria-label="ASR model" placeholder="whisper-large-v3-turbo" value={drafts.asrModel}
+                    onChange={(value) => { setDrafts((current) => ({ ...current, asrModel: value })); setAsrTest(undefined); }}
+                    onBlur={() => void save("asrModel", drafts.asrModel)} onKeyDown={enterSaves("asrModel")}
+                    isDisabled={!settings} errorMessage={errors.asrModel} description={savedNote("asrModel")} />
+                </Row>
+                <Row label="ASR API key" hint="Stored encrypted in the macOS Keychain; optional for localhost.">
+                  {settings?.asrApiKeySet ? (
+                    <div className="flex flex-wrap items-center gap-2 pt-2 text-[13px] text-label">
+                      <span>ASR key stored</span>
+                      <Button size="sm" variant="quiet" onPress={() => void save("asrApiKey", "")}>Remove ASR key</Button>
+                    </div>
+                  ) : (
+                    <TextField aria-label="ASR API key" type="password" placeholder="Paste key (optional for localhost)" value={drafts.asrApiKey}
+                      onChange={(value) => { setDrafts((current) => ({ ...current, asrApiKey: value })); setAsrTest(undefined); }}
+                      onBlur={storeAsrKey} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); storeAsrKey(); } }}
+                      isDisabled={!settings} />
+                  )}
+                  {errors.asrApiKey ? <p role="alert" className="t-text-in m-0 text-[12px] text-red-text">{errors.asrApiKey}</p> : savedNote("asrApiKey") ? <p className="m-0 text-[11.5px] text-label-3">{savedNote("asrApiKey")}</p> : null}
+                </Row>
+                <Row label="Connection">
+                  <div className="flex flex-wrap items-center gap-2 pt-1.5 text-[12.5px]">
+                    <Button size="sm" isDisabled={!settings || asrTest?.busy === true} onPress={() => void runAsrTest()}>
+                      {asrTest?.busy ? "Testing…" : "Test connection"}
+                    </Button>
+                    {asrTest?.ok ? <span role="status" className="text-label-2">{asrTest.ok}</span> : null}
+                    {asrTest?.error ? <span role="alert" className="text-red-text">{asrTest.error}</span> : null}
+                  </div>
+                </Row>
+              </>
+            ) : (
+              <Row label="Whisper model" hint="GGUF weights stored locally in the data directory.">
+                <Segmented aria-label="Local Whisper model" selectedKeys={[settings?.localWhisperModel ?? "base"]} isDisabled={!settings}
+                  onSelectionChange={(keys) => { const key = [...keys][0]; if (typeof key === "string") void save("localWhisperModel", key); }}>
+                  <Segment id="base">Base</Segment>
+                  <Segment id="small">Small</Segment>
+                  <Segment id="large-v3-turbo">Large v3 Turbo</Segment>
+                </Segmented>
+                <div className="flex flex-wrap items-center gap-2 pt-1 text-[12.5px] text-label-2">
+                  <span>
+                    {asrModelInfo?.downloaded
+                      ? `Downloaded${asrModelInfo.sizeBytes ? ` (${bytesLabel(asrModelInfo.sizeBytes)})` : ""} · Ready`
+                      : downloadingModel && downloadProgress
+                        ? `Downloading ${bytesLabel(downloadProgress.downloadedBytes)}${downloadProgress.totalBytes ? ` / ${bytesLabel(downloadProgress.totalBytes)} (${Math.min(100, Math.round((downloadProgress.downloadedBytes / downloadProgress.totalBytes) * 100))}%)` : ""}…`
+                        : "Weights not downloaded yet."}
+                  </span>
+                  {!asrModelInfo?.downloaded ? (
+                    <Button size="sm" isDisabled={!settings || downloadingModel} onPress={() => void downloadWhisperModel()}>
+                      {downloadingModel ? "Downloading…" : "Download model"}
+                    </Button>
+                  ) : null}
+                </div>
+                {asrModelError ? <p role="alert" className="t-text-in m-0 text-[12px] text-red-text">{asrModelError}</p> : null}
+              </Row>
+            )}
+          </Section>
+
           <Section id="storage" title="Storage">
             <Row label="Raw page capture" hint="Keeps the page as fetched next to the record so the agent can rebuild it.">
               <div className="pt-1.5"><Switch aria-label="Keep raw page capture" isSelected={settings?.keepCapture ?? true} isDisabled={!settings} onChange={(value) => void save("keepCapture", value)}>{settings?.keepCapture ? "Kept" : "Discarded after extraction"}</Switch></div>
               {errors.keepCapture ? <p role="alert" className="t-text-in m-0 text-[12px] text-red-text">{errors.keepCapture}</p> : null}
+            </Row>
+            <Row label="Cached media" hint="Offline audio and video files downloaded for reading without the network.">
+              <div className="pt-1.5"><Switch aria-label="Remove cached media after finishing" isSelected={settings?.removeCachedMediaAfterFinish ?? false} isDisabled={!settings} onChange={(value) => void save("removeCachedMediaAfterFinish", value)}>{settings?.removeCachedMediaAfterFinish ? "Removed after finishing" : "Kept until cleared"}</Switch></div>
+              {errors.removeCachedMediaAfterFinish ? <p role="alert" className="t-text-in m-0 text-[12px] text-red-text">{errors.removeCachedMediaAfterFinish}</p> : null}
             </Row>
             <Row label="Data directory" hint="Materials, images and the database.">
               <button type="button" onClick={() => void copyDirectory()} disabled={!settings} className="cursor-default rounded-control bg-fill px-3 py-2 text-left font-mono text-[12px] leading-[17px] text-label outline-none break-all hover:bg-fill-2 focus-visible:ring-[3px] focus-visible:ring-accent-ring" title="Click to copy">
@@ -209,7 +451,16 @@ export function SettingsSheet({ open, onClose, section, onOpenLink }: { open: bo
               <span className="text-[11.5px] text-label-3">{copied ? "Copied." : "Click to copy the path."}</span>
             </Row>
             <Row label="Storage used" hint="Materials are records, captured pages, PDFs and views; images are cached pictures.">
-              {usage.value ? <StorageUsageList usage={usage.value} />
+              {usage.value ? (
+                <>
+                  <StorageUsageList usage={usage.value} />
+                  {(usage.value.media ?? 0) > 0 ? (
+                    <div className="pt-1">
+                      <Button size="sm" variant="quiet" onPress={() => void clearCachedMedia()}>Clear cached media</Button>
+                    </div>
+                  ) : null}
+                </>
+              )
                 : usage.error ? <p role="alert" className="t-text-in m-0 pt-2 text-[12px] text-red-text">{usage.error}</p>
                 : <span className="pt-2 text-[13px] text-label-3">Measuring…</span>}
             </Row>

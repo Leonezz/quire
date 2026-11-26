@@ -11,13 +11,22 @@ import { DATABASE_FILE } from "./db";
 const DATABASE_FILES = [DATABASE_FILE, `${DATABASE_FILE}-wal`, `${DATABASE_FILE}-shm`];
 
 export async function storageUsage(dataDirectory: string): Promise<StorageUsage> {
-  const [materials, images, figures, database] = await Promise.all([
+  const [materials, images, figures, media, models, database] = await Promise.all([
     directoryBytes(join(dataDirectory, "materials")),
     directoryBytes(join(dataDirectory, "images")),
     directoryBytes(join(dataDirectory, "figures")),
+    directoryBytes(join(dataDirectory, "media")),
+    directoryBytes(join(dataDirectory, "models")),
     Promise.all(DATABASE_FILES.map((name) => fileBytes(join(dataDirectory, name)))).then(sum),
   ]);
-  return { materials, images, figures, database };
+  return {
+    materials,
+    images,
+    figures,
+    database,
+    ...(media > 0 ? { media } : {}),
+    ...(models > 0 ? { models } : {}),
+  };
 }
 
 /** Every file below the directory; a directory that was never written holds nothing. */

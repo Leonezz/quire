@@ -113,6 +113,91 @@ describe("detectSource", () => {
     expect(subscriptionOf({ kind: "page", url: "https://a.test/post", feed: "https://a.test/rss.xml" })).toEqual({ kind: "feed", locator: "https://a.test/rss.xml", title: "a.test" });
     expect(subscriptionOf({ kind: "arxiv", category: "cs.CL", title: "arXiv cs.CL" })).toEqual({ kind: "arxiv", locator: "cs.CL", title: "arXiv cs.CL" });
     expect(subscriptionOf({ kind: "page", url: "https://a.test/post" })).toBeUndefined();
+    expect(subscriptionOf({ kind: "podcast", url: "https://a.test/podcast.xml", title: "Show", siteUrl: "https://a.test" })).toEqual({ kind: "podcast", locator: "https://a.test/podcast.xml", title: "Show", siteUrl: "https://a.test" });
+    expect(subscriptionOf({ kind: "episode", url: "https://podcasts.apple.com/us/podcast/x/id1?i=2", mediaKind: "audio", feed: "https://feeds.example.test/show.xml" })).toEqual({ kind: "podcast", locator: "https://feeds.example.test/show.xml", title: "feeds.example.test" });
+  });
+
+  it("recognises Podcast RSS feeds and Apple Podcasts show & episode URLs with region preservation", async () => {
+    const podcastXml = `<?xml version="1.0"?><rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"><channel><title>Dwarkesh Podcast</title><link>https://www.dwarkeshpatel.com</link><item><title>Ep 1</title><enclosure url="https://cdn.example.test/ep1.mp3" type="audio/mpeg" length="1000" /></item></channel></rss>`;
+    const lookupJson = JSON.stringify({
+      resultCount: 2,
+      results: [
+        { wrapperType: "track", kind: "podcast", collectionId: 1516093381, collectionName: "Dwarkesh Podcast", feedUrl: "https://api.substack.com/feed/podcast/69345.rss", collectionViewUrl: "https://podcasts.apple.com/jp/podcast/id1516093381" },
+        { wrapperType: "track", kind: "podcast-episode", collectionId: 1516093381, trackId: 1000678901234, trackName: "Ilya Sutskever — Scaling", trackTimeMillis: 6120000 },
+      ],
+    });
+    const fetch = answering({
+      "https://feeds.example.test/podcast.xml": { bytes: podcastXml, mediaType: "application/rss+xml" },
+      "https://itunes.apple.com/lookup?id=1516093381&country=jp&entity=podcastEpisode&limit=200": { bytes: lookupJson, mediaType: "application/json" },
+    });
+
+    expect(await detectSource("https://feeds.example.test/podcast.xml", fetch)).toEqual({
+      kind: "podcast",
+      url: "https://feeds.example.test/podcast.xml",
+      title: "Dwarkesh Podcast",
+      siteUrl: "https://www.dwarkeshpatel.com/",
+    });
+
+    expect(await detectSource("https://podcasts.apple.com/jp/podcast/dwarkesh-podcast/id1516093381", fetch)).toEqual({
+      kind: "podcast",
+      url: "https://api.substack.com/feed/podcast/69345.rss",
+      title: "Dwarkesh Podcast",
+      siteUrl: "https://podcasts.apple.com/jp/podcast/id1516093381",
+    });
+
+    expect(await detectSource("https://podcasts.apple.com/jp/podcast/dwarkesh-podcast/id1516093381?i=1000678901234", fetch)).toEqual({
+      kind: "episode",
+      url: "https://podcasts.apple.com/jp/podcast/dwarkesh-podcast/id1516093381?i=1000678901234",
+      mediaKind: "audio",
+      title: "Ilya Sutskever — Scaling",
+      durationSec: 6120,
+      feed: "https://api.substack.com/feed/podcast/69345.rss",
+    });
+  });
+
+  it("recognises YouTube channels, playlists, and single video links with channel subscription offer", async () => {
+    const channelHtml = `<!doctype html><html><head><title>Andrej Karpathy - YouTube</title>
+      <link rel="alternate" type="application/rss+xml" title="RSS" href="https://www.youtube.com/feeds/videos.xml?channel_id=UCXUPKJO5MZQN11PqgIvyuvQ">
+      </head><body></body></html>`;
+    const watchHtml = `<!doctype html><html><head><title>Intro to LLMs - YouTube</title></head><body>
+      <script>var ytInitialPlayerResponse = {"videoDetails":{"videoId":"zjkBMFhNj_g","title":"Intro to Large Language Models","lengthSeconds":"3600","channelId":"UCXUPKJO5MZQN11PqgIvyuvQ","author":"Andrej Karpathy"}};</script>
+      </body></html>`;
+    const atomXml = `<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom"><title>Deep Learning Lectures</title></feed>`;
+
+    const fetch = answering({
+      "https://www.youtube.com/@AndrejKarpathy": { bytes: channelHtml, mediaType: "text/html" },
+      "https://www.youtube.com/watch?v=zjkBMFhNj_g": { bytes: watchHtml, mediaType: "text/html" },
+      "https://www.youtube.com/feeds/videos.xml?playlist_id=PLAqhIrjkxbuWI23v9cThsA9GvCAUhRvKZ": { bytes: atomXml, mediaType: "application/atom+xml" },
+    });
+
+    expect(await detectSource("https://www.youtube.com/@AndrejKarpathy", fetch)).toEqual({
+      kind: "youtube",
+      url: "https://www.youtube.com/feeds/videos.xml?channel_id=UCXUPKJO5MZQN11PqgIvyuvQ",
+      channelId: "UCXUPKJO5MZQN11PqgIvyuvQ",
+      title: "Andrej Karpathy",
+    });
+
+    expect(await detectSource("https://www.youtube.com/playlist?list=PLAqhIrjkxbuWI23v9cThsA9GvCAUhRvKZ", fetch)).toEqual({
+      kind: "youtube",
+      url: "https://www.youtube.com/feeds/videos.xml?playlist_id=PLAqhIrjkxbuWI23v9cThsA9GvCAUhRvKZ",
+      title: "Deep Learning Lectures",
+    });
+
+    const videoDet = await detectSource("https://youtu.be/zjkBMFhNj_g?si=xyz", fetch);
+    expect(videoDet).toEqual({
+      kind: "episode",
+      url: "https://www.youtube.com/watch?v=zjkBMFhNj_g",
+      mediaKind: "video",
+      title: "Intro to Large Language Models",
+      durationSec: 3600,
+      feed: "https://www.youtube.com/feeds/videos.xml?channel_id=UCXUPKJO5MZQN11PqgIvyuvQ",
+      feedTitle: "Andrej Karpathy",
+    });
+    expect(subscriptionOf(videoDet)).toEqual({
+      kind: "youtube",
+      locator: "https://www.youtube.com/feeds/videos.xml?channel_id=UCXUPKJO5MZQN11PqgIvyuvQ",
+      title: "Andrej Karpathy",
+    });
   });
 
   it("reports a plain page and refuses private hosts", async () => {

@@ -65,6 +65,57 @@ describe("parseFeed", () => {
     expect(() => parseFeed(new TextEncoder().encode("<root><x/></root>"), "application/xml", "https://x.example.test/f")).toThrow(/neither RSS 2.0 nor Atom/);
     expect(() => parseFeed(new TextEncoder().encode("{\"json\": true}"), "application/json", "https://x.example.test/f")).toThrow(/Not a feed/);
   });
+
+  it("maps podcast RSS and YouTube Atom entries with media signals, clean gist, chapters, and bibliographic kind", () => {
+    const podcastXml = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd" xmlns:podcast="https://podcastindex.org/namespace/1.0">
+  <channel>
+    <title>Latent Space</title>
+    <link>https://www.latent.space</link>
+    <description>AI Engineers</description>
+    <itunes:author>Swyx &amp; Alessio</itunes:author>
+    <item>
+      <title>Episode 42: Reasoning Models</title>
+      <link>https://www.latent.space/p/ep42</link>
+      <pubDate>Wed, 25 Nov 2026 10:00:00 GMT</pubDate>
+      <enclosure url="https://cdn.latent.space/ep42.mp3" length="54000000" type="audio/mpeg" />
+      <itunes:duration>58:30</itunes:duration>
+      <itunes:episode>42</itunes:episode>
+      <podcast:transcript url="https://cdn.latent.space/ep42.vtt" type="text/vtt" />
+      <description><![CDATA[
+        <p>Deep dive into verifier loops and synthetic reasoning traces.</p>
+        <p>00:00 Cold Open<br/>05:10 Verifier Loops</p>
+        <p>Sponsored by ExampleCorp.</p>
+      ]]></description>
+    </item>
+  </channel>
+</rss>`;
+    const parsed = parseFeed(new TextEncoder().encode(podcastXml), "application/rss+xml", "https://www.latent.space/feed", NOW);
+    const ep = parsed.items[0]!;
+    expect(ep.signals).toEqual({
+      media: "audio",
+      enclosureUrl: "https://cdn.latent.space/ep42.mp3",
+      enclosureType: "audio/mpeg",
+      durationSec: 3510,
+      hasTranscript: true,
+      transcripts: [{ url: "https://cdn.latent.space/ep42.vtt", type: "text/vtt" }],
+      chapters: [
+        { startSec: 0, title: "Cold Open" },
+        { startSec: 310, title: "Verifier Loops" },
+      ],
+    });
+    expect(ep.readingMinutes).toBe(59);
+    expect(ep.gist).toBe("Deep dive into verifier loops and synthetic reasoning traces.");
+    expect(ep.summaryOnly).toBe(false);
+    expect(ep.content?.plain).toContain("Deep dive into verifier loops");
+    expect(ep.meta).toEqual({
+      kind: "podcastEpisode",
+      publication: "Latent Space",
+      date: "2026-11-25T10:00:00.000Z",
+      issue: "42",
+      creators: [{ role: "host", name: "Swyx & Alessio" }],
+    });
+  });
 });
 
 describe("gistOf", () => {

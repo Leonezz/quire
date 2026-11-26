@@ -453,7 +453,241 @@ fn is_feed_home(page_url: &str, feed_url: &str) -> bool {
     home == "/" || (feed.origin() == page.origin() && feed.path().starts_with(home.as_ref()))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApplePodcastRef {
+    pub country: String,
+    pub collection_id: String,
+    pub track_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ApplePodcastEpisode {
+    pub url: String,
+    pub stream_url: String,
+    pub stream_type: Option<String>,
+    pub title: String,
+    pub show_title: Option<String>,
+    pub author: Option<String>,
+    pub published_at: Option<String>,
+    pub duration_sec: Option<u32>,
+    pub description: Option<String>,
+    pub image_url: Option<String>,
+    pub feed_url: Option<String>,
+}
+
+pub fn parse_apple_podcast_url(raw: &str) -> Option<ApplePodcastRef> {
+    let re = Regex::new(
+        r"(?i)^https?://podcasts\.apple\.com/(?:([a-z]{2})/)?podcast/(?:[^/?#]+/)?id(\d+)(?:\?[^#]*?\bi=(\d+))?",
+    )
+    .unwrap();
+    let caps = re.captures(raw.trim())?;
+    Some(ApplePodcastRef {
+        country: caps
+            .get(1)
+            .map(|m| m.as_str().to_lowercase())
+            .unwrap_or_else(|| "us".into()),
+        collection_id: caps.get(2)?.as_str().to_string(),
+        track_id: caps.get(3).map(|m| m.as_str().to_string()),
+    })
+}
+
+pub fn is_audio_stream_url(url: &Url) -> bool {
+    let path = url.path().to_ascii_lowercase();
+    [".mp3", ".m4a", ".aac", ".ogg", ".opus", ".wav"]
+        .iter()
+        .any(|ext| path.ends_with(ext))
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ItunesLookupResponse {
+    #[serde(default)]
+    results: Vec<ItunesLookupItem>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ItunesLookupItem {
+    wrapper_type: Option<String>,
+    kind: Option<String>,
+    track_id: Option<u64>,
+    collection_name: Option<String>,
+    artist_name: Option<String>,
+    track_name: Option<String>,
+    feed_url: Option<String>,
+    collection_view_url: Option<String>,
+    episode_url: Option<String>,
+    preview_url: Option<String>,
+    episode_file_extension: Option<String>,
+    episode_content_type: Option<String>,
+    track_time_millis: Option<u64>,
+    release_date: Option<String>,
+    description: Option<String>,
+    short_description: Option<String>,
+    artwork_url600: Option<String>,
+}
+
+async fn lookup_itunes(
+    client: &reqwest::Client,
+    id: &str,
+    country: &str,
+    limit: usize,
+) -> Result<Vec<ItunesLookupItem>, FetchError> {
+    let lookup = assert_public_http_url(&format!(
+        "https://itunes.apple.com/lookup?id={id}&country={country}&entity=podcastEpisode&limit={limit}"
+    ))?;
+    let page = fetch_page(client, &lookup, "application/json").await?;
+    let parsed: ItunesLookupResponse = serde_json::from_slice(&page.bytes)
+        .map_err(|e| FetchError::new("PODCAST_LOOKUP_INVALID", format!("Invalid Apple Podcasts lookup JSON: {e}")))?;
+    Ok(parsed.results)
+}
+
+pub async fn resolve_apple_podcast_episode(
+    client: &reqwest::Client,
+    raw_url: &str,
+) -> Result<Option<ApplePodcastEpisode>, FetchError> {
+    let Some(apple) = parse_apple_podcast_url(raw_url) else {
+        return Ok(None);
+    };
+    let Some(ref tid) = apple.track_id else {
+        return Ok(None);
+    };
+    let results = lookup_itunes(client, &apple.collection_id, &apple.country, 200).await?;
+    let show = results
+        .iter()
+        .find(|r| r.kind.as_deref() == Some("podcast") || r.wrapper_type.as_deref() == Some("collection") || r.feed_url.is_some())
+        .cloned();
+    let mut ep = results
+        .into_iter()
+        .find(|r| r.track_id.map(|n| n.to_string()).as_deref() == Some(tid.as_str()));
+    if ep.is_none() {
+        if let Ok(single) = lookup_itunes(client, tid, &apple.country, 5).await {
+            ep = single
+                .into_iter()
+                .find(|r| r.track_id.map(|n| n.to_string()).as_deref() == Some(tid.as_str()));
+        }
+    }
+    let Some(ep) = ep else {
+        return Err(FetchError::new(
+            "EPISODE_NOT_FOUND",
+            "Could not find that episode in Apple Podcasts.",
+        ));
+    };
+    let stream_url = ep
+        .episode_url
+        .or(ep.preview_url)
+        .ok_or_else(|| FetchError::new("EPISODE_NO_STREAM", "Apple Podcasts did not provide an audio stream URL for this episode."))?;
+    assert_public_http_url(&stream_url)?;
+    let stream_type = match (ep.episode_content_type.as_deref(), ep.episode_file_extension.as_deref()) {
+        (Some("audio"), Some("m4a")) => Some("audio/mp4".into()),
+        (Some("audio"), Some("mp3")) => Some("audio/mpeg".into()),
+        _ => None,
+    };
+    let feed_url = show
+        .as_ref()
+        .and_then(|s| s.feed_url.as_deref())
+        .or(ep.feed_url.as_deref())
+        .and_then(|u| assert_public_http_url(u).ok().map(|v| v.to_string()));
+    Ok(Some(ApplePodcastEpisode {
+        url: raw_url.to_string(),
+        stream_url,
+        stream_type,
+        title: ep
+            .track_name
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "Untitled Episode".into()),
+        show_title: show.as_ref().and_then(|s| s.collection_name.clone()).or(ep.collection_name),
+        author: show.as_ref().and_then(|s| s.artist_name.clone()).or(ep.artist_name),
+        published_at: ep.release_date,
+        duration_sec: ep.track_time_millis.filter(|&ms| ms > 0).map(|ms| (ms / 1000) as u32),
+        description: ep.description.or(ep.short_description),
+        image_url: ep.artwork_url600.or_else(|| show.and_then(|s| s.artwork_url600)),
+        feed_url,
+    }))
+}
+
+async fn detect_apple_podcast(
+    client: &reqwest::Client,
+    apple: &ApplePodcastRef,
+    page_url: &str,
+) -> Result<SourceDetection, FetchError> {
+    let results = lookup_itunes(client, &apple.collection_id, &apple.country, 200).await?;
+    let show = results
+        .iter()
+        .find(|r| r.kind.as_deref() == Some("podcast") || r.wrapper_type.as_deref() == Some("collection") || r.feed_url.is_some());
+    let feed_url = show.and_then(|s| s.feed_url.as_deref()).map(str::trim).filter(|s| !s.is_empty());
+
+    if let Some(ref tid) = apple.track_id {
+        let mut ep = results
+            .iter()
+            .find(|r| r.track_id.map(|n| n.to_string()).as_deref() == Some(tid.as_str()) && r.kind.as_deref() == Some("podcast-episode"))
+            .cloned();
+        if ep.is_none() {
+            if let Ok(single) = lookup_itunes(client, tid, &apple.country, 5).await {
+                ep = single
+                    .into_iter()
+                    .find(|r| r.track_id.map(|n| n.to_string()).as_deref() == Some(tid.as_str()));
+            }
+        }
+        let title = ep
+            .as_ref()
+            .and_then(|e| e.track_name.as_deref())
+            .or_else(|| show.and_then(|s| s.collection_name.as_deref()))
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from);
+        let duration_sec = ep
+            .as_ref()
+            .and_then(|e| e.track_time_millis)
+            .filter(|&ms| ms > 0)
+            .map(|ms| (ms / 1000) as u32);
+        let feed = feed_url.and_then(|f| assert_public_http_url(f).ok().map(|u| u.to_string()));
+        let feed_title = show
+            .and_then(|s| s.collection_name.as_deref())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from);
+        return Ok(SourceDetection::Episode {
+            url: page_url.to_string(),
+            media_kind: "audio".into(),
+            title,
+            duration_sec,
+            feed,
+            feed_title,
+        });
+    }
+
+    let Some(feed_raw) = feed_url else {
+        return Err(FetchError::new(
+            "PODCAST_NOT_FOUND",
+            "Apple Podcasts did not return an RSS feed for this show.",
+        ));
+    };
+    let valid_feed = assert_public_http_url(feed_raw)?.to_string();
+    let title = show
+        .and_then(|s| s.collection_name.as_deref())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
+    let site_url = show
+        .and_then(|s| s.collection_view_url.as_deref())
+        .and_then(|u| assert_public_http_url(u).ok().map(|v| v.to_string()));
+    Ok(SourceDetection::Podcast {
+        url: valid_feed,
+        title,
+        site_url,
+    })
+}
+
 pub async fn detect_source(client: &reqwest::Client, input: &str) -> Result<SourceDetection, FetchError> {
+    detect_source_with_cookies(client, input, None).await
+}
+
+pub async fn detect_source_with_cookies(
+    client: &reqwest::Client,
+    input: &str,
+    youtube_cookies: Option<&str>,
+) -> Result<SourceDetection, FetchError> {
     let value = input.trim();
     if let Some(category) = arxiv_category_from_input(value) {
         return Ok(SourceDetection::Arxiv {
@@ -467,9 +701,31 @@ pub async fn detect_source(client: &reqwest::Client, input: &str) -> Result<Sour
         format!("https://{value}")
     };
     let url = assert_public_http_url(&normalized)?;
+    if let Some(apple) = parse_apple_podcast_url(url.as_str()) {
+        return detect_apple_podcast(client, &apple, url.as_str()).await;
+    }
+    if let Some(yt_target) = crate::youtube::classify_youtube_url(&url) {
+        return crate::youtube::detect_youtube_target_with_cookies(client, yt_target, youtube_cookies).await;
+    }
+    if is_audio_stream_url(&url) {
+        let seg_title = url
+            .path_segments()
+            .and_then(|s| s.last())
+            .map(String::from)
+            .filter(|s| !s.is_empty());
+        return Ok(SourceDetection::Episode {
+            url: url.to_string(),
+            media_kind: "audio".into(),
+            title: seg_title,
+            duration_sec: None,
+            feed: None,
+            feed_title: None,
+        });
+    }
     let page = fetch_page(client, &url, FEED_ACCEPT).await?;
     let head_len = page.bytes.len().min(64 * 1024);
     let head = String::from_utf8_lossy(&page.bytes[..head_len]);
+    let head_256 = String::from_utf8_lossy(&page.bytes[..page.bytes.len().min(256 * 1024)]);
 
     let xml_type_re = Regex::new(r"^(?:application/(?:rss|atom|rdf)\+xml|application/xml|text/xml)$").unwrap();
     let feed_root_re = Regex::new(r"(?s)^(?:\u{feff})?\s*(?:<\?xml[^>]*\?>\s*)?(?:<!--.*?-->\s*)*<(?:rss|feed|rdf:RDF)\b").unwrap();
@@ -481,13 +737,28 @@ pub async fn detect_source(client: &reqwest::Client, input: &str) -> Result<Sour
             .and_then(|c| c.get(1))
             .map(|m| m.as_str().split_whitespace().collect::<Vec<_>>().join(" "))
             .filter(|s| !s.is_empty());
+        let podcast_enclosure_re = Regex::new(
+            r#"(?i)<enclosure\b[^>]*?(?:\btype\s*=\s*["']audio/|\burl\s*=\s*["'][^"']+\.(?:mp3|m4a|aac|ogg|opus|wav)(?:[?#][^"']*)?["'])"#,
+        )
+        .unwrap();
+        if podcast_enclosure_re.is_match(&head_256) {
+            let link_re = Regex::new(r"(?is)<channel\b[^>]*>.*?<link>\s*(https?://[^<\s]+)\s*</link>").unwrap();
+            let site_url = link_re
+                .captures(&head_256)
+                .and_then(|c| c.get(1))
+                .and_then(|m| assert_public_http_url(m.as_str()).ok().map(|u| u.to_string()));
+            return Ok(SourceDetection::Podcast {
+                url: page.final_url,
+                title,
+                site_url,
+            });
+        }
         return Ok(SourceDetection::Feed {
             url: page.final_url,
             title,
         });
     }
 
-    let head_256 = String::from_utf8_lossy(&page.bytes[..page.bytes.len().min(256 * 1024)]);
     if let Some(alt) = alternate_feed_of(&head_256, &page.final_url) {
         if !is_feed_home(&page.final_url, &alt) {
             let feed = assert_public_http_url(&alt).ok().map(|u| u.to_string());
@@ -518,11 +789,35 @@ pub fn subscription_of(detection: &SourceDetection) -> Option<(String, String, S
             let fallback = Url::parse(url).ok().and_then(|u| u.host_str().map(String::from)).unwrap_or_else(|| url.clone());
             Some(("feed".into(), url.clone(), title.clone().unwrap_or(fallback)))
         }
+        SourceDetection::Podcast { url, title, .. } => {
+            let fallback = Url::parse(url).ok().and_then(|u| u.host_str().map(String::from)).unwrap_or_else(|| url.clone());
+            Some(("podcast".into(), url.clone(), title.clone().unwrap_or(fallback)))
+        }
+        SourceDetection::Youtube { url, title, .. } => {
+            Some(("youtube".into(), url.clone(), title.clone().unwrap_or_else(|| "YouTube channel".into())))
+        }
         SourceDetection::Page { feed: Some(feed), .. } => {
             let fallback = Url::parse(feed).ok().and_then(|u| u.host_str().map(String::from)).unwrap_or_else(|| feed.clone());
             Some(("feed".into(), feed.clone(), fallback))
         }
-        SourceDetection::Page { feed: None, .. } => None,
+        SourceDetection::Episode {
+            media_kind,
+            feed: Some(feed),
+            feed_title,
+            ..
+        } => {
+            let fallback = Url::parse(feed).ok().and_then(|u| u.host_str().map(String::from)).unwrap_or_else(|| feed.clone());
+            let kind = if media_kind == "audio" {
+                "podcast"
+            } else if feed.contains("youtube.com/feeds/videos.xml") {
+                "youtube"
+            } else {
+                "feed"
+            };
+            let title = feed_title.clone().filter(|s| !s.trim().is_empty()).unwrap_or(fallback);
+            Some((kind.into(), feed.clone(), title))
+        }
+        SourceDetection::Page { feed: None, .. } | SourceDetection::Episode { feed: None, .. } => None,
     }
 }
 
@@ -547,5 +842,25 @@ mod tests {
         assert_eq!(arxiv_category_from_input("cs.CL").as_deref(), Some("cs.CL"));
         assert_eq!(arxiv_category_from_input("https://arxiv.org/list/cs.LG/recent").as_deref(), Some("cs.LG"));
         assert_eq!(arxiv_rendering_version("2409.12345", &["https://arxiv.org/abs/2409.12345"], "arXiv:2409.12345v3 [cs.CL]"), Some(3));
+    }
+
+    #[test]
+    fn parses_apple_podcast_urls_preserving_country_and_track() {
+        assert_eq!(
+            parse_apple_podcast_url("https://podcasts.apple.com/jp/podcast/dwarkesh-podcast/id1516093381?i=1000678901234"),
+            Some(ApplePodcastRef {
+                country: "jp".into(),
+                collection_id: "1516093381".into(),
+                track_id: Some("1000678901234".into()),
+            })
+        );
+        assert_eq!(
+            parse_apple_podcast_url("https://podcasts.apple.com/podcast/id1516093381"),
+            Some(ApplePodcastRef {
+                country: "us".into(),
+                collection_id: "1516093381".into(),
+                track_id: None,
+            })
+        );
     }
 }

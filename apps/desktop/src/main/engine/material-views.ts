@@ -9,23 +9,27 @@ import type { StoredRecord } from "./material-record";
 // <id>.<view>.pdf. The primary PDF keeps <id>.pdf, as before views existed. The text view (the
 // PDF reflowed, pdf-reflow/) is derived: every record with a pdf view lists it as available.
 
-export const MATERIAL_VIEW_IDS: readonly MaterialViewId[] = ["web", "pdf", "markdown", "text", "artifact"];
+export const MATERIAL_VIEW_IDS: readonly MaterialViewId[] = ["web", "pdf", "markdown", "text", "artifact", "transcript", "shownotes"];
 export const TEXT_VIEW_MEDIA_TYPE = "text/x-quire-reflow";
+export const TRANSCRIPT_VIEW_MEDIA_TYPE = "text/x-quire-transcript";
+export const SHOWNOTES_VIEW_MEDIA_TYPE = "text/x-quire-shownotes";
 
 export function isMaterialViewId(value: unknown): value is MaterialViewId {
   return typeof value === "string" && (MATERIAL_VIEW_IDS as readonly string[]).includes(value);
 }
 
-const LABELS: Record<MaterialViewId, string> = { web: "Web page", pdf: "PDF", markdown: "Markdown", text: "Text", artifact: "Artifact" };
+const LABELS: Record<MaterialViewId, string> = { web: "Web page", pdf: "PDF", markdown: "Markdown", text: "Text", artifact: "Artifact", transcript: "Transcript", shownotes: "Show notes" };
 
 export function viewLabel(id: MaterialViewId): string {
   return LABELS[id];
 }
 
-/** Which view a media type renders as: PDFs, Markdown (and plain text, which the Markdown pipeline renders), pages. */
+/** Which view a media type renders as: PDFs, Markdown (and plain text, which the Markdown pipeline renders), transcripts, pages. */
 export function viewIdForMediaType(mediaType: string): MaterialViewId {
   if (mediaType === "application/pdf") return "pdf";
   if (mediaType === TEXT_VIEW_MEDIA_TYPE) return "text";
+  if (mediaType === TRANSCRIPT_VIEW_MEDIA_TYPE) return "transcript";
+  if (mediaType === SHOWNOTES_VIEW_MEDIA_TYPE) return "shownotes";
   if (mediaType === "text/markdown" || mediaType === "text/x-markdown" || mediaType === "text/plain") return "markdown";
   if (isArtifactMediaType(mediaType)) return "artifact";
   return "web";

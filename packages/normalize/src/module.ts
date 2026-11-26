@@ -6,8 +6,19 @@ import type {
   FeedNormalizationOutcome,
   NormalizationProblem,
   NormalizedFeedEntry,
+  NormalizedFeedMedia,
+  NormalizedFeedTranscriptRef,
+  NormalizedMediaChapter,
   ProducerDetection,
 } from "./model";
+import {
+  extractDescriptionChapters,
+  extractEntryMedia,
+  formatShowNotesMarkdown,
+  mediaGroupDescription,
+  parseDurationSeconds,
+  stripShowNotesBoilerplate,
+} from "./feed-media";
 import { detectProducer, rssDescriptionRole } from "./profiles";
 import { hasValidIriReferenceLexicalForm } from "./iri";
 import { createRepresentations, sha256Identity } from "./representations";
@@ -645,10 +656,13 @@ function contentCandidates(entry: XmlNode, dialect: "atom" | "rss", producer: Pr
     if (full && text(full)) values.push({ baseUri: link || entry.baseUri, content: text(full), mediaType: "text/html", role: "full", sourcePath: "rss.channel.item.content:encoded" });
     const description = child(entry, "description", "");
     if (description && text(description)) {
+      const descContent = text(description);
+      const hasEnclosure = entry.children.some((item) => item.namespaceUri === "" && item.localName === "enclosure");
+      const isPlainMediaNotes = hasEnclosure && !/<[a-z!/][\s\S]*>/iu.test(descContent);
       values.push({
         baseUri: link || entry.baseUri,
-        content: text(description),
-        mediaType: "text/html",
+        content: descContent,
+        mediaType: isPlainMediaNotes ? "text/plain" : "text/html",
         role: rssDescriptionRole(producer.key),
         sourcePath: "rss.channel.item.description",
       });
@@ -746,6 +760,17 @@ function contentCandidates(entry: XmlNode, dialect: "atom" | "rss", producer: Pr
       conformant = false;
       warnings.push(problem("SOURCE_ATOM_SUMMARY_INVALID", "warning", "generic-fallback", "candidate"));
     }
+  } else {
+    const mediaDescription = mediaGroupDescription(entry);
+    if (mediaDescription) {
+      values.push({
+        baseUri: link || entry.baseUri,
+        content: mediaDescription,
+        mediaType: "text/plain",
+        role: "summary",
+        sourcePath: "atom.feed.entry.media:group.media:description",
+      });
+    }
   }
   if (link) values.push({ baseUri: link, content: link, mediaType: "text/uri-list", role: "external", sourcePath: "atom.feed.entry.link[rel=alternate]" });
   return { conformant, values, warnings };
@@ -776,6 +801,7 @@ function normalizeEntry(input: {
   captureIdentity: `sha256:${string}`;
   dialect: "atom" | "rss";
   entry: XmlNode;
+  feed: XmlNode;
   feedConformant: boolean;
   feedHasAuthor: boolean;
   maxDepth: number;
@@ -783,7 +809,7 @@ function normalizeEntry(input: {
   maxNodes: number;
   producer: ProducerDetection;
 }): NormalizedFeedEntry {
-  const { captureIdentity, dialect, entry, feedConformant, feedHasAuthor, maxDepth, maxEntryOutputBytes, maxNodes, producer } = input;
+  const { captureIdentity, dialect, entry, feed, feedConformant, feedHasAuthor, maxDepth, maxEntryOutputBytes, maxNodes, producer } = input;
   const titleNode = child(entry, "title", dialect === "atom" ? ATOM_NAMESPACE : "");
   const title = (text(titleNode) || "Untitled entry").slice(0, 500);
   const link = dialect === "atom" ? atomLink(entry) : rssLink(entry);
@@ -876,7 +902,25 @@ function normalizeEntry(input: {
       representations: representationResult.representations,
       sourceIdentity,
     };
-    return { externalId: canonicalExternalId, legacyExternalIds, link, materialization, publishedAt, sourceFingerprint, sourceIdentity, title };
+    const media = extractEntryMedia({
+      descriptionSource: selectedCandidate.mediaType === "text/uri-list" ? "" : selectedCandidate.content,
+      dialect,
+      entry,
+      feed,
+      link,
+      safeHttpUrl,
+    });
+    return {
+      externalId: canonicalExternalId,
+      legacyExternalIds,
+      link,
+      materialization,
+      ...(media ? { media } : {}),
+      publishedAt,
+      sourceFingerprint,
+      sourceIdentity,
+      title,
+    };
   };
 
   let lastError: unknown = new Error("SOURCE_SAFE_REPRESENTATION_MISSING");
@@ -996,6 +1040,7 @@ export function normalizeFeedCapture(input: FeedCaptureInput): FeedNormalization
           captureIdentity: input.capture.contentIdentity,
           dialect,
           entry,
+          feed,
           feedConformant: conformsAtFeedLevel,
           feedHasAuthor,
           maxDepth: input.budget.maxDepth,
@@ -1032,6 +1077,36 @@ export function normalizeFeedCapture(input: FeedCaptureInput): FeedNormalization
   }
 }
 
+export {
+  extractDescriptionChapters,
+  formatShowNotesMarkdown,
+  parseDurationSeconds,
+  stripShowNotesBoilerplate,
+} from "./feed-media";
+export {
+  anchorForTimeRange,
+  dedupeRollingCues,
+  formatTimestamp,
+  normalizeTranscript,
+  parseJsonCues,
+  parseSrtCues,
+  parseTimedTextXmlCues,
+  parseTranscriptCues,
+  parseVttCues,
+  timeRangeForOffsets,
+  transcriptWordUnits,
+  validateRefinedTranscript,
+} from "./transcript";
+export type {
+  NormalizedTranscript,
+  NormalizeTranscriptOptions,
+  RefinedTranscriptValidation,
+  TranscriptAnchor,
+  TranscriptChapter,
+  TranscriptCue,
+  TranscriptKeyframe,
+  TranscriptOrigin,
+} from "./transcript";
 export type {
   ArticleCaptureInput,
   ArticleNormalizationOutcome,
@@ -1040,5 +1115,8 @@ export type {
   FeedNormalizationOutcome,
   NormalizationProblem,
   NormalizedFeedEntry,
+  NormalizedFeedMedia,
+  NormalizedFeedTranscriptRef,
+  NormalizedMediaChapter,
   ProducerDetection,
 } from "./model";

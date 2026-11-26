@@ -10,8 +10,14 @@ function hostOf(url: string): string { try { return new URL(url).hostname; } cat
 function describe(detected: Detected): { line: string; action: string } {
   switch (detected.kind) {
     case "feed": return { line: `Feed · ${detected.title ?? hostOf(detected.url)}`, action: `Subscribe to ${detected.title ?? hostOf(detected.url)}` };
+    case "podcast": return { line: `Podcast · ${detected.title ?? hostOf(detected.url)}`, action: `Subscribe to ${detected.title ?? hostOf(detected.url)}` };
+    case "youtube": return { line: `YouTube channel · ${detected.title ?? hostOf(detected.url)}`, action: `Subscribe to ${detected.title ?? hostOf(detected.url)}` };
     case "arxiv": return { line: `arXiv category · ${detected.category}`, action: `Subscribe to arXiv ${detected.category}` };
     case "page": return { line: `Page · ${hostOf(detected.url)}${detected.feed ? " · its site has a feed" : ""}`, action: "Read" };
+    case "episode": return {
+      line: `${detected.mediaKind === "video" ? "Video" : "Podcast episode"} · ${detected.title ?? hostOf(detected.url)}`,
+      action: detected.mediaKind === "video" ? "Read video" : "Read episode",
+    };
   }
 }
 
@@ -49,7 +55,7 @@ export function AddSheet({ open, busy, error, onClose, onSubmit, onSubscribed }:
     finally { setPhase("idle"); }
   };
   const act = (target: Detected) => {
-    if (target.kind === "page") { onSubmit(target.url); return; }
+    if (target.kind === "page" || target.kind === "episode") { onSubmit(target.url); return; }
     void subscribe(target.kind === "arxiv" ? target.category : target.url);
   };
   const submit = async () => {
@@ -60,13 +66,14 @@ export function AddSheet({ open, busy, error, onClose, onSubmit, onSubscribed }:
       const result = await read.detectSource(input);
       const next = { ...result, input };
       setDetected(next);
-      if (next.kind === "page" && !next.feed) act(next);
+      if ((next.kind === "page" || next.kind === "episode") && !next.feed) act(next);
     } catch (cause: unknown) { setLocalError(cause instanceof Error ? cause.message : "Could not tell what this is."); }
     finally { setPhase("idle"); }
   };
 
   const label = phase === "detecting" ? "Checking…" : phase === "subscribing" ? "Subscribing…" : busy ? "Fetching…" : known ? describe(known).action : "Add";
-  const pageFeed = known?.kind === "page" ? known.feed : undefined;
+  const pageFeed = known?.kind === "page" || known?.kind === "episode" ? known.feed : undefined;
+  const pageFeedLabel = known?.kind === "episode" && known.feedTitle ? known.feedTitle : pageFeed ? hostOf(pageFeed) : "";
   return (
     <Sheet isOpen={open} onOpenChange={(next) => { if (!next) close(); }}>
       <SheetDialog title="Add">
@@ -77,7 +84,7 @@ export function AddSheet({ open, busy, error, onClose, onSubmit, onSubscribed }:
           {known ? <p role="status" className="t-text-in m-0 -mt-2 text-[12.5px] text-label-2"><span className="rounded-pill bg-accent-soft px-2 py-px text-[11.5px] font-medium text-accent-text">recognised</span> <span className="ml-1">{describe(known).line}</span></p> : null}
           <SheetFooter>
             <Button variant="quiet" onPress={close} isDisabled={working}>Cancel</Button>
-            {pageFeed ? <Button variant="plain" onPress={() => void subscribe(pageFeed)} isDisabled={working}>Subscribe to {hostOf(pageFeed)}</Button> : null}
+            {pageFeed ? <Button variant="plain" onPress={() => void subscribe(pageFeed)} isDisabled={working}>Subscribe to {pageFeedLabel}</Button> : null}
             <Button variant="primary" type="submit" isDisabled={working || !input}>{label}</Button>
           </SheetFooter>
         </form>

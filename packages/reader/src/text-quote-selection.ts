@@ -51,7 +51,7 @@ export function decodeTextQuoteLocator(locator: string) {
 
 type TextPosition = Readonly<{ node: Text; offset: number }>;
 const READER_TEXT_EXCLUSION_SELECTOR =
-  "[data-footnote-ref], [data-footnote-backref], [data-reader-footnote-ref], [data-reader-footnote-backref], [data-footnotes] > h2, .reader-footnotes-heading";
+  "[data-reader-chrome], [data-footnote-ref], [data-footnote-backref], [data-reader-footnote-ref], [data-reader-footnote-backref], [data-footnotes] > h2, .reader-footnotes-heading";
 const READER_TEXT_BLOCK_SELECTOR =
   "p, li, blockquote, pre, h1, h2, h3, h4, h5, h6, tr, th, td";
 
@@ -281,7 +281,11 @@ export function renderedTextQuoteSelection(
   const range = selection.getRangeAt(0);
   if (!root.contains(range.commonAncestorContainer))
     return blocked("Select text in this revision before capturing it.");
-  if (isInsideReaderTextExclusion(range.commonAncestorContainer, root))
+  if (
+    isInsideReaderTextExclusion(range.commonAncestorContainer, root) ||
+    isInsideReaderTextExclusion(range.startContainer, root) ||
+    isInsideReaderTextExclusion(range.endContainer, root)
+  )
     return blocked("Select source text rather than a footnote control.");
 
   const quote = semanticRangeText(range).replace(/\s+/g, " ").trim();

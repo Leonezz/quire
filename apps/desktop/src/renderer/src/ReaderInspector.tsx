@@ -32,6 +32,7 @@ export interface ReaderInspectorProps {
   sectionFor: (annotation: Annotation) => string | undefined;
   /** Where the article reader placed each note it draws; the Notes panel lists the unplaced ones apart. */
   placementOf?: ((annotation: Annotation) => NotePlacement | undefined) | undefined;
+  onPlayTime?: ((seconds: number) => void) | undefined;
   onMaterialSaved: (record: MaterialRecord) => void;
   onOpenLink: (url: string) => void;
   onOpenMaterial: (id: string) => void;
@@ -49,13 +50,13 @@ export interface ReaderInspectorProps {
 
 /** The reader's side panel, shared by the article and PDF readers: one of Info (i), Notes (n), Agent (⌘J), with its name and × on top. */
 export function ReaderInspector(props: ReaderInspectorProps) {
-  const { material, views, panel, onClose, subject, agentContext, onClearSelection, annotations, annotationsError, mirroredViews, activeAnnotation, noteDraft, onNoteDraftChange, onJump, onUpdateNote, onDeleteAnnotation, sectionFor, placementOf, onMaterialSaved, onOpenLink, onOpenMaterial, onOpenSettings, agentSessionId, onAgentSessionChange, onReport, onRebuild, rebuild = "idle", rebuildError } = props;
+  const { material, views, panel, onClose, subject, agentContext, onClearSelection, annotations, annotationsError, mirroredViews, activeAnnotation, noteDraft, onNoteDraftChange, onJump, onUpdateNote, onDeleteAnnotation, sectionFor, placementOf, onPlayTime, onMaterialSaved, onOpenLink, onOpenMaterial, onOpenSettings, agentSessionId, onAgentSessionChange, onReport, onRebuild, rebuild = "idle", rebuildError } = props;
   return (
     <Panel title={PANEL_TITLES[panel]} onClose={onClose} className="h-full">
       {panel === "info" ? <InfoPanel material={material} views={views} onSaved={onMaterialSaved} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onReport={onReport} onRebuild={onRebuild} rebuild={rebuild} rebuildError={rebuildError} /> : null}
       {panel === "notes" ? (
         <NotesPanel material={material} view={views.view} mirroredViews={mirroredViews} annotations={annotations} error={annotationsError} activeId={activeAnnotation} draft={noteDraft} onDraftChange={onNoteDraftChange}
-          onJump={onJump} onUpdateNote={onUpdateNote} onDelete={onDeleteAnnotation} sectionFor={sectionFor} placementOf={placementOf} />
+          onJump={onJump} onUpdateNote={onUpdateNote} onDelete={onDeleteAnnotation} sectionFor={sectionFor} placementOf={placementOf} onPlayTime={onPlayTime} />
       ) : null}
       {panel === "agent" ? (
         <AgentPanel context={agentContext} subject={subject} sessionId={agentSessionId} onSessionChange={onAgentSessionChange} onOpenMaterial={onOpenMaterial} onOpenLink={onOpenLink} onClearSelection={onClearSelection} onOpenSettings={onOpenSettings} />

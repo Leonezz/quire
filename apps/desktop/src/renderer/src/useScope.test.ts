@@ -3,7 +3,7 @@ import { scopeFamily, scopeKey, scopeOfKey, type Scope } from "./useScope";
 
 describe("scope keys", () => {
   it("round-trips every kind of scope", () => {
-    const scopes: Scope[] = [{ kind: "inbox" }, { kind: "queue" }, { kind: "agent" }, { kind: "sources" }, { kind: "library", id: "papers" }, { kind: "tag", id: "react:hooks" }, { kind: "source", id: "src_1" }];
+    const scopes: Scope[] = [{ kind: "inbox" }, { kind: "queue" }, { kind: "agent" }, { kind: "sources" }, { kind: "library", id: "papers" }, { kind: "library", id: "podcasts" }, { kind: "library", id: "videos" }, { kind: "tag", id: "react:hooks" }, { kind: "source", id: "src_1" }];
     for (const scope of scopes) expect(scopeOfKey(scopeKey(scope))).toEqual(scope);
   });
   it("rejects keys that name no scope", () => {

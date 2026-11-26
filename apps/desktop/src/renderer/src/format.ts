@@ -35,6 +35,8 @@ export function dayLabel(iso: string, now = Date.now()): string {
 
 export function signalsOf(signals: ItemSignals): string[] {
   const out: string[] = [];
+  if (signals.media) out.push(signals.media);
+  if (signals.hasTranscript) out.push("transcript");
   if (signals.code) out.push("code");
   if (signals.math) out.push("math");
   if (signals.figures) out.push("figures");
@@ -42,7 +44,25 @@ export function signalsOf(signals: ItemSignals): string[] {
   return out;
 }
 
-export function sourceKindLabel(kind: SourceRecord["kind"]): string { return kind === "arxiv" ? "arXiv" : "feed"; }
+/** "1h 42m", "48 min", or "45s" for spoken audio/video duration. */
+export function durationLabel(seconds: number | undefined): string | undefined {
+  if (seconds === undefined || !Number.isFinite(seconds) || seconds <= 0) return undefined;
+  const whole = Math.round(seconds);
+  if (whole < 60) return `${whole}s`;
+  const hours = Math.floor(whole / 3600);
+  const mins = Math.round((whole % 3600) / 60);
+  if (hours > 0) return mins > 0 ? `${hours}h ${mins}m` : `${hours}h`;
+  return `${Math.max(1, Math.round(whole / 60))} min`;
+}
+
+export function sourceKindLabel(kind: SourceRecord["kind"]): string {
+  switch (kind) {
+    case "arxiv": return "arXiv";
+    case "podcast": return "podcast";
+    case "youtube": return "YouTube";
+    default: return "feed";
+  }
+}
 
 /** The host of a feed URL, or the arXiv category. */
 export function sourceLocatorLabel(source: SourceRecord): string {

@@ -2,22 +2,29 @@ use crate::agent::AgentService;
 use crate::codex::CodexClient;
 use crate::db::Db;
 use crate::feedback::{copy_png_to_clipboard, issue_url_for, FeedbackStore};
-use crate::http::{detect_source, MAX_BYTES};
+use crate::http::{detect_source_with_cookies, MAX_BYTES};
 use crate::images::ImageCache;
 use crate::materials::{
     delete_materials, image_urls_of_record, is_material_view_id, query_library, search_hits,
     storage_usage, valid_hex_16, AnnotationStore, MaterialStore,
 };
+use crate::media::MediaCache;
 use crate::normalizer_bridge::{BridgeReply, TauriNormalizerBridge};
 use crate::settings::SettingsStore;
-use crate::sqlite_stores::{EventStore, ItemStore, MetaStore, SessionStore, SourceStore};
+use crate::sqlite_stores::{
+    EventStore, ItemStore, MediaStateStore, MetaStore, SessionStore, SourceStore,
+};
 use crate::sync::{add_source, keep_item, read_item, sync_source, SyncCoordinator};
+use crate::transcribe::{
+    check_asr_model_status, download_asr_model, test_asr_connection, TranscriptionService,
+};
 use crate::types::{
     AddSourceResult, AgentRequest, AgentResult, AgentRun, AgentSession, AgentSessionSummary,
-    AgentStatus, Annotation, CorpusImportResult, DeleteMaterialsResult, ItemRecord, LibraryFilter,
-    MaterialRecord, MaterialSummary, MaterialViewContent, OpenUrlResult, ReadingEvent,
-    ReadingStats, RenderingFeedback, RenderingFeedbackDraft, SearchHit, Settings, SourceDetection,
-    SourceRecord, StorageUsage, SyncSourceResult, TagCount, UpdateState,
+    AgentStatus, Annotation, AsrConnectionTestResult, AsrModelStatus, CorpusImportResult,
+    DeleteMaterialsResult, ItemRecord, LibraryFilter, MaterialRecord, MaterialSummary,
+    MaterialViewContent, MediaState, OpenUrlResult, ReadingEvent, ReadingStats, RenderingFeedback,
+    RenderingFeedbackDraft, SearchHit, Settings, SourceDetection, SourceRecord, StorageUsage,
+    SyncSourceResult, TagCount, TranscribeJobSnapshot, UpdateState,
 };
 use crate::updates::UpdateService;
 use base64::Engine;
@@ -36,6 +43,8 @@ pub struct AppState {
     pub meta: MetaStore,
     pub store: Arc<MaterialStore>,
     pub images: ImageCache,
+    pub media_cache: MediaCache,
+    pub media_states: MediaStateStore,
     pub annotations: AnnotationStore,
     pub items: ItemStore,
     pub sources: SourceStore,
@@ -44,6 +53,7 @@ pub struct AppState {
     pub sync_coord: Arc<SyncCoordinator>,
     pub codex: Arc<CodexClient>,
     pub agent: Arc<AgentService>,
+    pub transcribe: Arc<TranscriptionService>,
     pub updates: Arc<UpdateService>,
     pub feedback: Arc<FeedbackStore>,
 }
@@ -197,12 +207,40 @@ pub async fn material_open_file(
 }
 
 #[tauri::command]
-pub fn material_get(
+pub async fn material_get(
+    app: AppHandle,
     state: State<'_, AppState>,
     id: String,
 ) -> Result<Option<MaterialRecord>, String> {
     let cid = bounded_str(&id, 64, "IPC_INVALID_ID")?;
-    state.store.get(&cid)
+    let current = state.store.get(&cid)?;
+    if let Some(ref rec) = current {
+        let trimmed = rec.title.trim();
+        let has_yt_cookies = state.settings.get().youtube_connected;
+        let is_placeholder_yt = (trimmed.eq_ignore_ascii_case("- youtube")
+            || trimmed.eq_ignore_ascii_case("youtube")
+            || trimmed.starts_with("YouTube video ")
+            || (has_yt_cookies && rec.media.as_ref().is_some_and(|m| m.duration_sec.is_none())))
+            && rec.media.as_ref().is_some_and(|m| m.provider == "youtube" && m.transcript_origin == "absent");
+        if is_placeholder_yt {
+            let vid = rec
+                .media
+                .as_ref()
+                .and_then(|m| m.video_id.clone())
+                .or_else(|| crate::youtube::parse_youtube_video_id(&rec.url));
+            if let Some(video_id) = vid {
+                if let Ok(OpenUrlResult::Ok { material, .. }) = state
+                    .store
+                    .open_youtube_video(&video_id, &rec.url, &rec.origin, None, None)
+                    .await
+                {
+                    let _ = app.emit("library:changed", ());
+                    return Ok(Some(*material));
+                }
+            }
+        }
+    }
+    Ok(current)
 }
 
 #[tauri::command]
@@ -278,7 +316,8 @@ pub async fn source_detect(
     input: String,
 ) -> Result<SourceDetection, String> {
     let text = bounded_str(&input, 4096, "IPC_INVALID_INPUT")?;
-    detect_source(&state.http, &text)
+    let yt_cookies = state.settings.optional_secret("youtubeCookies").ok().flatten();
+    detect_source_with_cookies(&state.http, &text, yt_cookies.as_deref())
         .await
         .map_err(|e| e.message)
 }
@@ -472,8 +511,15 @@ pub fn event_record(
     }
     let rid = bounded_str(&reference, 64, "IPC_INVALID_ID")?;
     let ev = state.events.record(&kind, &rid)?;
-    if kind == "finished" && state.items.mark_finished(&rid).unwrap_or(0) > 0 {
-        let _ = app.emit("sources:changed", ());
+    if kind == "finished" {
+        if state.items.mark_finished(&rid).unwrap_or(0) > 0 {
+            let _ = app.emit("sources:changed", ());
+        }
+        if state.settings.get().remove_cached_media_after_finish && valid_hex_16(&rid) {
+            if state.media_cache.remove(&rid).unwrap_or(0) > 0 {
+                let _ = app.emit("library:changed", ());
+            }
+        }
     }
     Ok(ev)
 }
@@ -503,7 +549,14 @@ pub async fn agent_ask(
 ) -> Result<AgentResult, String> {
     if !matches!(
         request.task.as_str(),
-        "ask" | "explain" | "verify" | "related" | "summary" | "synthesis" | "rebuild"
+        "ask"
+            | "explain"
+            | "verify"
+            | "related"
+            | "summary"
+            | "synthesis"
+            | "rebuild"
+            | "cleanup_transcript"
     ) {
         return Err("IPC_INVALID_AGENT_TASK".into());
     }
@@ -604,6 +657,9 @@ pub async fn material_delete(
         return Err("IPC_INVALID_IDS".into());
     }
     let res = delete_materials(&ids, &state.store, &state.annotations, &state.items, &state.images).await;
+    for id in &ids {
+        let _ = state.media_states.remove(id);
+    }
     let _ = app.emit("library:changed", ());
     let (_, unlinked, out) = res?;
     if unlinked > 0 {
@@ -640,6 +696,158 @@ pub fn settings_update(
 #[tauri::command]
 pub fn storage_usage_get(state: State<'_, AppState>) -> Result<StorageUsage, String> {
     Ok(storage_usage(&state.data_dir))
+}
+
+#[tauri::command]
+pub fn media_state_get(
+    state: State<'_, AppState>,
+    material_id: String,
+) -> Result<Option<MediaState>, String> {
+    if !valid_hex_16(&material_id) {
+        return Err("IPC_INVALID_ID".into());
+    }
+    state.media_states.get(&material_id)
+}
+
+#[tauri::command]
+pub fn media_state_save(
+    state: State<'_, AppState>,
+    media_state: MediaState,
+) -> Result<(), String> {
+    if !valid_hex_16(&media_state.material_id) {
+        return Err("IPC_INVALID_ID".into());
+    }
+    if !media_state.position_sec.is_finite() || !media_state.playback_speed.is_finite() {
+        return Err("IPC_INVALID_MEDIA_STATE".into());
+    }
+    state.media_states.save(media_state)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn media_cache_download(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    material_id: String,
+) -> Result<MaterialRecord, String> {
+    if !valid_hex_16(&material_id) {
+        return Err("IPC_INVALID_ID".into());
+    }
+    let record = state
+        .store
+        .read_stored(&material_id)?
+        .ok_or_else(|| "MATERIAL_NOT_FOUND".to_string())?;
+    let media = record
+        .media
+        .ok_or_else(|| "This material has no audio or video stream.".to_string())?;
+    let app_ev = app.clone();
+    state
+        .media_cache
+        .download(&material_id, &media.stream_url, |prog| {
+            let _ = app_ev.emit("media:cache:progress", &prog);
+        })
+        .await?;
+    let updated = state
+        .store
+        .get(&material_id)?
+        .ok_or_else(|| "MATERIAL_NOT_FOUND".to_string())?;
+    let _ = app.emit("library:changed", ());
+    Ok(updated)
+}
+
+#[tauri::command]
+pub fn media_cache_remove(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    material_id: String,
+) -> Result<MaterialRecord, String> {
+    if !valid_hex_16(&material_id) {
+        return Err("IPC_INVALID_ID".into());
+    }
+    state.media_cache.remove(&material_id)?;
+    let updated = state
+        .store
+        .get(&material_id)?
+        .ok_or_else(|| "MATERIAL_NOT_FOUND".to_string())?;
+    let _ = app.emit("library:changed", ());
+    Ok(updated)
+}
+
+#[tauri::command]
+pub fn media_cache_clear_all(app: AppHandle, state: State<'_, AppState>) -> Result<u64, String> {
+    let freed = state.media_cache.clear_all()?;
+    let _ = app.emit("library:changed", ());
+    Ok(freed)
+}
+
+#[tauri::command]
+pub fn transcribe_start(
+    state: State<'_, AppState>,
+    material_id: String,
+    provider: Option<String>,
+) -> Result<TranscribeJobSnapshot, String> {
+    if !valid_hex_16(&material_id) {
+        return Err("IPC_INVALID_ID".into());
+    }
+    state.transcribe.start(&material_id, provider)
+}
+
+#[tauri::command]
+pub fn transcribe_cancel(state: State<'_, AppState>, material_id: String) -> Result<(), String> {
+    if !valid_hex_16(&material_id) {
+        return Err("IPC_INVALID_ID".into());
+    }
+    state.transcribe.cancel(&material_id);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn transcribe_jobs(state: State<'_, AppState>) -> Result<Vec<TranscribeJobSnapshot>, String> {
+    Ok(state.transcribe.list_jobs())
+}
+
+#[tauri::command]
+pub fn asr_model_status(state: State<'_, AppState>) -> Result<AsrModelStatus, String> {
+    let cur = state.settings.get();
+    Ok(check_asr_model_status(&state.data_dir, &cur.local_whisper_model))
+}
+
+#[tauri::command]
+pub async fn asr_model_download(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    model: String,
+) -> Result<AsrModelStatus, String> {
+    let m = bounded_str(&model, 32, "IPC_INVALID_MODEL")?;
+    let app_ev = app.clone();
+    download_asr_model(&state.data_dir, &m, move |progress| {
+        let _ = app_ev.emit("asr:model:progress", &progress);
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn asr_test_connection(state: State<'_, AppState>) -> Result<AsrConnectionTestResult, String> {
+    test_asr_connection(&state.settings).await
+}
+
+#[tauri::command]
+pub async fn youtube_sign_in(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Settings, String> {
+    let updated = crate::youtube::sign_in_youtube_window(&app, &state.settings).await?;
+    let _ = app.emit("library:changed", ());
+    Ok(updated)
+}
+
+#[tauri::command]
+pub async fn youtube_sign_out(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Settings, String> {
+    let updated = crate::youtube::disconnect_youtube_session(&app, &state.settings).await?;
+    Ok(updated)
 }
 
 #[tauri::command]

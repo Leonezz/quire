@@ -195,6 +195,34 @@ describe("text quote selection", () => {
     selection?.removeAllRanges();
   });
 
+  it("blocks selections inside [data-reader-chrome] banners and excludes chrome text from quote offsets", () => {
+    const root = document.createElement("article");
+    root.innerHTML = '<div data-reader-chrome=""><p>No publisher transcript came with this episode.</p></div><p>Actual spoken show notes.</p>';
+    document.body.append(root);
+    const chromeRange = document.createRange();
+    chromeRange.selectNodeContents(root.querySelector("[data-reader-chrome] p")!);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(chromeRange);
+    expect(renderedTextQuoteSelection(root, selection).kind).toBe("blocked");
+
+    const proseRange = document.createRange();
+    proseRange.selectNodeContents(root.querySelectorAll("p")[1]!);
+    selection?.removeAllRanges();
+    selection?.addRange(proseRange);
+    const captured = renderedTextQuoteSelection(root, selection);
+    expect(captured.kind).toBe("capture");
+    if (captured.kind === "capture") {
+      // Removing the dynamic banner does not perturb the exact locator of the article paragraph
+      root.querySelector("[data-reader-chrome]")?.remove();
+      expect(resolveTextQuoteRange(root, captured.capture.locator, captured.capture.quote)?.toString()).toBe(
+        "Actual spoken show notes.",
+      );
+    }
+    root.remove();
+    selection?.removeAllRanges();
+  });
+
   it("does not resolve a locator whose exact quote is absent", () => {
     const root = document.createElement("article");
     root.textContent = "Different rendered text";

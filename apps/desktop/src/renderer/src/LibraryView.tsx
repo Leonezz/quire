@@ -12,6 +12,7 @@ import { InlineError } from "./ItemPreview";
 import { isTypingTarget, timeOf } from "./format";
 import { KIND_LABELS, publicationOf } from "./materialMeta";
 import { viewLabel } from "./materialViews";
+import type { SettingsSection } from "./SettingsSheet";
 import type { Library } from "./useLibrary";
 import type { MaterialQuoteJump } from "./quoteJump";
 
@@ -42,7 +43,7 @@ export interface LibraryViewProps {
   onOpenMaterial: (id: string, quote?: string) => void;
   /** A passage to reveal in the selected material (a citation's quote); handed to its reader. */
   jumpToQuote?: MaterialQuoteJump | undefined;
-  onOpenSettings: () => void;
+  onOpenSettings: (section?: SettingsSection) => void;
   shell: ShellSlots;
   /** The scope is narrower than the whole library (a cut or a tag): an empty list says so. */
   narrowed: boolean;

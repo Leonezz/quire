@@ -1,5 +1,103 @@
 // The only vocabulary that crosses the preload bridge. Types only.
-import type { ContentNormalizationQuality, NormalizationProblem } from "@read/normalize/contract";
+import type {
+  ContentNormalizationQuality,
+  NormalizationProblem,
+  NormalizedMediaChapter,
+  TranscriptAnchor,
+  TranscriptOrigin,
+} from "@read/normalize/contract";
+
+export type { NormalizedMediaChapter, TranscriptAnchor, TranscriptOrigin };
+
+export interface TranscriptTrackRef {
+  url: string;
+  type: string;
+  language?: string;
+  rel?: string;
+}
+
+export interface MediaState {
+  materialId: string;
+  positionSec: number;
+  durationSec?: number;
+  playbackSpeed: number;
+  updatedAt: string;
+}
+
+export interface MediaCacheProgress {
+  materialId: string;
+  downloadedBytes: number;
+  totalBytes?: number;
+  phase: "downloading" | "done" | "error";
+  error?: string;
+}
+
+export type AsrProvider = "local" | "openai_compatible";
+
+export interface TranscribeJobSnapshot {
+  jobId: string;
+  materialId: string;
+  provider: AsrProvider;
+  phase: "preparing" | "transcribing";
+  completedChunks: number;
+  totalChunks: number;
+}
+
+export type TranscribeEvent =
+  | { type: "preparing"; jobId: string; materialId: string }
+  | { type: "progress"; jobId: string; materialId: string; completedChunks: number; totalChunks: number }
+  | { type: "completed"; jobId: string; materialId: string }
+  | { type: "failed"; jobId: string; materialId: string; message: string };
+
+export interface AsrModelStatus {
+  model: string;
+  downloaded: boolean;
+  sizeBytes?: number;
+  localRuntimeReady: boolean;
+}
+
+export interface AsrModelDownloadProgress {
+  model: string;
+  downloadedBytes: number;
+  totalBytes?: number;
+}
+
+export interface AsrConnectionTestResult {
+  latencyMs: number;
+  supportsVerboseJson: boolean;
+  model: string;
+}
+
+export interface ReadApiMedia {
+  getMediaState: (materialId: string) => Promise<MediaState | undefined>;
+  saveMediaState: (state: Omit<MediaState, "updatedAt"> & { updatedAt?: string }) => Promise<void>;
+  downloadMediaCache: (materialId: string) => Promise<MaterialRecord>;
+  removeMediaCache: (materialId: string) => Promise<MaterialRecord>;
+  clearMediaCache: () => Promise<number>;
+  onMediaCacheProgress: (listener: (progress: MediaCacheProgress) => void) => () => void;
+  startTranscription: (materialId: string, provider?: AsrProvider) => Promise<TranscribeJobSnapshot>;
+  cancelTranscription: (materialId: string) => Promise<void>;
+  listTranscriptionJobs: () => Promise<TranscribeJobSnapshot[]>;
+  onTranscribeEvent: (listener: (event: TranscribeEvent) => void) => () => void;
+  asrModelStatus: () => Promise<AsrModelStatus>;
+  downloadAsrModel: (model: string) => Promise<AsrModelStatus>;
+  onAsrModelProgress?: (listener: (progress: AsrModelDownloadProgress) => void) => () => void;
+  testAsrConnection: () => Promise<AsrConnectionTestResult>;
+  signInYoutube: () => Promise<Settings>;
+  signOutYoutube: () => Promise<Settings>;
+}
+
+export interface MediaInfo {
+  kind: "audio" | "video";
+  provider: "podcast" | "youtube" | "web";
+  streamUrl: string;
+  videoId?: string;
+  durationSec?: number;
+  /** Bytes stored on disk under `<dataDir>/media/<id>.<ext>` when cached for offline playback. */
+  cachedBytes?: number;
+  transcriptOrigin: TranscriptOrigin;
+  chapters?: NormalizedMediaChapter[];
+}
 
 export interface MaterialSummary {
   id: string;
@@ -58,6 +156,8 @@ export interface MaterialRecord extends MaterialSummary {
   /** The page's <link rel="canonical"> when it names another page of the same site (never the site's home page). */
   canonicalUrl?: string;
   pdf?: PdfInfo;
+  /** Present when the material carries spoken audio or video (a podcast episode, a YouTube video, or an article with an episode). */
+  media?: MediaInfo;
   /**
    * The raw page as captured (kept next to the record as <id>.html) so the agent can rebuild from it.
    * `sha256` (the normalizer's contentIdentity) and `fetchedAt` say which bytes, read when; captures
@@ -83,6 +183,8 @@ export interface MaterialRecord extends MaterialSummary {
   markdown?: string;
   /** Plain text when nothing richer could be produced. */
   plain?: string;
+  /** transcript primary view: paragraph anchors mapping `plain` character spans to `[startSec, endSec]` media timestamps. */
+  timeAnchors?: TranscriptAnchor[];
   problems: NormalizationProblem[];
   /** Agent artifacts: the source exactly as the agent wrote it (Markdown, code, HTML or SVG); what an update edits. */
   artifactSource?: string;
@@ -112,6 +214,8 @@ export interface Annotation {
   kind: AnnotationKind;
   /** The view the locator belongs to ("web" text-quote, "pdf" regions); absent means the material's primary view. */
   view?: MaterialViewId;
+  /** Media materials: `[startSec, endSec]` window of the quoted passage so highlights survive transcript re-punctuation and jump to audio. */
+  timeRange?: [startSec: number, endSec: number];
   color: AnnotationColor;
   createdAt: string;
   updatedAt: string;
@@ -127,8 +231,12 @@ export interface CorpusImportResult {
 
 /** The scheme resolveImage answers on, served by main from disk (image-protocol.ts). */
 export const IMAGE_SCHEME = "quire-image";
+/** The scheme companion audio/video streams from, proxied with Range support by main. */
+export const MEDIA_SCHEME = "quire-media";
+/** The scheme sandboxed companion video embeds run under (`quire-player://youtube/<videoId>`). */
+export const PLAYER_SCHEME = "quire-player";
 
-export interface ReadApi extends ReadApiM1, ReadApiM2, ReadApiM3, ReadApiViews, ReadApiUpdates, ReadApiFeedback {
+export interface ReadApi extends ReadApiM1, ReadApiM2, ReadApiM3, ReadApiViews, ReadApiUpdates, ReadApiFeedback, ReadApiMedia {
   version: string;
   platform: string;
   /** Fires after the main process changed the library on its own (an import); the renderer reloads the list. */
@@ -159,7 +267,12 @@ export interface ReadApi extends ReadApiM1, ReadApiM2, ReadApiM3, ReadApiViews, 
 // M1: sources, the Inbox / Queue loop, reading events, search.
 // ---------------------------------------------------------------------------
 
-export type SourceKind = "feed" | "arxiv";
+export type SourceKind = "feed" | "arxiv" | "podcast" | "youtube";
+
+export interface SourceConfig {
+  /** YouTube channels & playlists: skip Shorts (`<= 60s` or `/shorts/`) during sync (default `true`). */
+  ignoreShorts?: boolean;
+}
 
 /** A subscription. `locator` is the feed URL, or the arXiv category (e.g. "cs.CL") for kind "arxiv". */
 export interface SourceRecord {
@@ -169,6 +282,7 @@ export interface SourceRecord {
   title: string;
   /** The site the feed belongs to, when the feed declares one. */
   siteUrl?: string;
+  config?: SourceConfig;
   addedAt: string;
   /** Refresh cadence; the scheduler skips a source whose last sync is younger than this. */
   intervalMinutes: number;
@@ -190,6 +304,16 @@ export interface ItemSignals {
   math?: boolean;
   figures?: boolean;
   lang?: string;
+  media?: "audio" | "video";
+  enclosureUrl?: string;
+  enclosureType?: string;
+  durationSec?: number;
+  imageUrl?: string;
+  hasTranscript?: boolean;
+  transcripts?: TranscriptTrackRef[];
+  chaptersUrl?: string;
+  chapters?: NormalizedMediaChapter[];
+  videoId?: string;
 }
 
 /**
@@ -229,9 +353,13 @@ export type ItemDecision = "queue" | "dismiss" | "unqueue" | "undismiss";
 
 export type SourceDetection =
   | { kind: "feed"; url: string; title?: string }
+  | { kind: "podcast"; url: string; title?: string; siteUrl?: string }
+  | { kind: "youtube"; url: string; channelId?: string; title?: string }
   | { kind: "arxiv"; category: string; title: string }
   /** A page to read; `feed` is the feed it declares, offered as a subscription beside reading. */
-  | { kind: "page"; url: string; feed?: string };
+  | { kind: "page"; url: string; feed?: string }
+  /** A single podcast episode or video to read now, with its show or channel feed offered alongside when known. */
+  | { kind: "episode"; url: string; mediaKind: "audio" | "video"; title?: string; durationSec?: number; feed?: string; feedTitle?: string };
 
 export type AddSourceResult =
   | { ok: true; source: SourceRecord; added: number }
@@ -312,7 +440,7 @@ export type AgentContext =
   | { kind: "selection"; materialId: string; quote: string; locator: string };
 
 /** Canned intents map to prompt templates; "ask" sends the text as written. */
-export type AgentTask = "ask" | "explain" | "verify" | "related" | "summary" | "synthesis" | "rebuild";
+export type AgentTask = "ask" | "explain" | "verify" | "related" | "summary" | "synthesis" | "rebuild" | "cleanup_transcript";
 
 export interface AgentRequest {
   context: AgentContext;
@@ -404,10 +532,11 @@ export type MaterialKind =
   | "webpage" | "blogPost" | "newsletter" | "newsArticle"
   | "journalArticle" | "preprint" | "conferencePaper"
   | "book" | "bookSection" | "report" | "thesis" | "document"
+  | "podcastEpisode" | "videoRecording"
   /** Written inside Quire (an agent artifact). */
   | "note";
 
-export type CreatorRole = "author" | "editor" | "translator" | "contributor";
+export type CreatorRole = "author" | "editor" | "translator" | "contributor" | "host" | "guest";
 
 export interface Creator {
   role: CreatorRole;
@@ -465,6 +594,8 @@ export const MATERIAL_KIND_FIELDS: Record<MaterialKind, readonly (keyof Material
   report: ["publisher", "place", "series", "doi"],
   thesis: ["publisher", "place"],
   document: ["publisher", "accessed"],
+  podcastEpisode: ["publication", "series", "issue", "accessed"],
+  videoRecording: ["publication", "series", "accessed"],
   note: [],
 };
 
@@ -503,10 +634,27 @@ export interface Settings {
   reflowJudge: "rules" | "jev";
   /** Whether a TypeSafe API key is stored (the key itself is never returned; it is kept encrypted). */
   typesafeApiKeySet: boolean;
+  /** Speech-to-text backend for podcasts & videos without publisher transcripts. */
+  asrProvider?: AsrProvider;
+  /** OpenAI-compatible `/audio/transcriptions` base URL (HTTPS remote or `http://localhost`). */
+  asrBaseUrl?: string;
+  /** Model identifier sent to the ASR endpoint (e.g. `whisper-large-v3-turbo` or `FunAudioLLM/SenseVoiceSmall`). */
+  asrModel?: string;
+  /** Whether an ASR API key is stored in the system Keychain. */
+  asrApiKeySet?: boolean;
+  /** Local Whisper GGUF model tier (`base` | `small` | `large-v3-turbo`). */
+  localWhisperModel?: string;
+  /** Automatically remove downloaded offline audio/video files once an episode is marked finished. */
+  removeCachedMediaAfterFinish?: boolean;
+  /** Whether a YouTube session is stored encrypted in the system Keychain for captions, storyboards, and yt-dlp audio extraction. */
+  youtubeConnected?: boolean;
 }
 
-/** What updateSettings accepts: every editable field, plus the write-only key ("" removes it). */
-export type SettingsPatch = Partial<Omit<Settings, "dataDirectory" | "typesafeApiKeySet">> & { typesafeApiKey?: string };
+/** What updateSettings accepts: every editable field, plus the write-only keys ("" removes them). */
+export type SettingsPatch = Partial<Omit<Settings, "dataDirectory" | "typesafeApiKeySet" | "asrApiKeySet" | "youtubeConnected">> & {
+  typesafeApiKey?: string;
+  asrApiKey?: string;
+};
 
 /** A delete that went through. `picturesKept`: the cached pictures of the deleted materials could not be forgotten, and why. */
 export interface DeleteMaterialsResult {
@@ -519,10 +667,14 @@ export interface StorageUsage {
   materials: number;
   /** Pictures cached for reading without the network (images/). */
   images: number;
-  /** Figure crops of PDF text views (figures/). */
+  /** Figure crops of PDF text views and video storyboards (figures/). */
   figures: number;
   /** Sources, items, reading events, metadata overrides and agent sessions (quire.sqlite with its WAL files). */
   database: number;
+  /** Downloaded audio/video files kept for offline playback (media/). */
+  media?: number;
+  /** Local speech-to-text model weights (models/). */
+  models?: number;
 }
 
 export interface AgentTurnRecord {
@@ -587,7 +739,7 @@ export interface ReadApiM3 {
  * never fetched. It exists only for materials that have a pdf view. "artifact" is an agent artifact
  * that is not a text document (HTML, SVG): it renders from its source, not through the reader.
  */
-export type MaterialViewId = "web" | "pdf" | "markdown" | "text" | "artifact";
+export type MaterialViewId = "web" | "pdf" | "markdown" | "text" | "artifact" | "transcript" | "shownotes";
 
 /** A way to read the material. Only `ready` views have content stored; `available` ones are fetched on demand. */
 export interface MaterialView {
@@ -645,6 +797,8 @@ export interface MaterialViewContent {
   problems: NormalizationProblem[];
   /** text view only: line anchors back into the PDF, in `plain` order. */
   anchors?: TextViewAnchor[];
+  /** transcript view only: paragraph anchors mapping `plain` character spans to `[startSec, endSec]` media timestamps. */
+  timeAnchors?: TranscriptAnchor[];
   /** artifact view only: the artifact's type, source and revision, rendered in a sandbox (HTML) or as an image (SVG). */
   artifactBody?: { type: CanvasArtifactType; source: string; version: number };
   report?: TextViewReport;

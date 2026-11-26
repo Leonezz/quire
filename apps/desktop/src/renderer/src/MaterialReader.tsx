@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { X } from "lucide-react";
 import { Button } from "@read/ui";
-import type { Annotation, MaterialRecord } from "../../shared/contracts";
+import type { Annotation, MaterialRecord, MaterialViewContent } from "../../shared/contracts";
 import { read } from "./api";
 import { FeedbackSheet } from "./FeedbackSheet";
 import { annotationView, isPdfContent, viewOf } from "./materialViews";
@@ -11,6 +11,8 @@ import { ReaderView } from "./ReaderView";
 import { useMaterialView } from "./useMaterialView";
 import type { MaterialQuoteJump } from "./quoteJump";
 import type { ReportRequest } from "./reportRequest";
+
+import type { SettingsSection } from "./SettingsSheet";
 
 const FINISHED_AT = 0.95;
 /** Materials whose "finished" event was recorded in this session: once per material, whatever pane shows it. */
@@ -23,7 +25,7 @@ export interface MaterialReaderProps {
   /** A passage to reveal once the body is up (a citation's quote); the reader ignores one for another material. */
   jumpToQuote?: MaterialQuoteJump | undefined;
   onBack?: (() => void) | undefined;
-  onOpenSettings?: (() => void) | undefined;
+  onOpenSettings?: ((section?: SettingsSection) => void) | undefined;
   /** The shell's Add · Search icons for the toolbar segment. */
   trailing?: ReactNode;
 }
@@ -94,7 +96,11 @@ function LoadedMaterialReader({ material, onMaterialChanged, onBack, onOpenLink,
   const onReport = useCallback((request: ReportRequest) => setReporting((current) => ({ open: true, request, nonce: (current?.nonce ?? 0) + 1 })), []);
   const closeReport = useCallback(() => setReporting((current) => (current ? { ...current, open: false } : current)), []);
 
+  const lastReadyRef = useRef<{ id: string; content: MaterialViewContent } | undefined>(undefined);
   const { content } = views;
+  if (content.status === "ready") {
+    lastReadyRef.current = { id: material.id, content: content.content };
+  }
   if (content.status === "error") {
     const primary = viewOf(material.views, material.primaryView);
     return (
@@ -104,12 +110,19 @@ function LoadedMaterialReader({ material, onMaterialChanged, onBack, onOpenLink,
       </div>
     );
   }
-  if (content.status === "loading") return <div className="grid flex-1 place-items-center text-[13px] text-label-3">Opening…</div>;
-  const Reader = isPdfContent(content.content) ? PdfReaderView : ReaderView;
+  const activeContent =
+    content.status === "ready"
+      ? content.content
+      : lastReadyRef.current?.id === material.id
+        ? lastReadyRef.current.content
+        : undefined;
+  if (!activeContent) return <div className="grid flex-1 place-items-center text-[13px] text-label-3">Opening…</div>;
+  const pdfMode = isPdfContent(activeContent);
+  const Reader = pdfMode ? PdfReaderView : ReaderView;
   const failedView = fetchError ? viewOf(material.views, fetchError.view) : undefined;
   return (
     <>
-      <Reader key={`${material.id}:${views.view}`} material={material} content={content.content} views={views} onBack={onBack} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onProgress={onProgress}
+      <Reader key={`${material.id}:${pdfMode ? "pdf" : "doc"}`} material={material} content={activeContent} views={views} onBack={onBack} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onProgress={onProgress}
         onMaterialSaved={onMaterialChanged} onOpenSettings={onOpenSettings} onReport={onReport} trailing={trailing} pendingJump={pendingJump} onJumpDone={onJumpDone} onJumpAcross={jumpAcross} jumpToQuote={jumpToQuote} initialPanel={panelRef.current} onPanelChange={onPanelChange} />
       {reporting ? <FeedbackSheet isOpen={reporting.open} material={material} view={views.view} request={reporting.request} nonce={reporting.nonce} onClose={closeReport} /> : null}
       {fetchError ? (

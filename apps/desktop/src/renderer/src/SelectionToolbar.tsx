@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import { Copy, Flag, MessageSquarePlus, Sparkles } from "lucide-react";
+import { Copy, Flag, MessageSquarePlus, Play, Sparkles } from "lucide-react";
 import { Button, Icon } from "@read/ui";
 import type { AnnotationColor } from "../../shared/contracts";
 import { ANNOTATION_COLORS } from "./annotations";
@@ -39,7 +39,7 @@ export function placeToolbar(rect: Box, box: Box, bar: BarSize): { top: number; 
  * citation, ask the agent about it, or report that it rendered wrong. Nothing is stored until a button is pressed. The bar stands
  * above the selection with a gap (never over the line before it); on the first lines it drops below.
  */
-export function SelectionToolbar({ root, viewport, capture, onHighlight, onNote, onCopy, onAsk, onReport }: {
+export function SelectionToolbar({ root, viewport, capture, onHighlight, onNote, onCopy, onAsk, onReport, onListen }: {
   root: HTMLElement | null;
   viewport: HTMLElement | null;
   /** Turns the live selection into a locator + quote, or undefined when it cannot be anchored (cross-page, outside the text). */
@@ -51,6 +51,8 @@ export function SelectionToolbar({ root, viewport, capture, onHighlight, onNote,
   onAsk: (capture: SelectionCapture) => void;
   /** "Report": the reader opens the report panel with this passage attached; `rect` is its box in window CSS pixels. */
   onReport: (capture: SelectionCapture, rect: DOMRect) => void;
+  /** Media transcripts: previews the spoken audio snippet covering this selection. */
+  onListen?: ((capture: SelectionCapture) => void) | undefined;
 }) {
   const [placement, setPlacement] = useState<Placement | null>(null);
   const barRef = useRef<HTMLDivElement>(null);
@@ -66,6 +68,11 @@ export function SelectionToolbar({ root, viewport, capture, onHighlight, onNote,
       if (!selection || selection.isCollapsed || selection.rangeCount === 0) { setPlacement(null); return; }
       const range = selection.getRangeAt(0);
       if (!root.contains(range.commonAncestorContainer)) { setPlacement(null); return; }
+      const inChrome = (node: Node) => (node instanceof Element ? node : node.parentElement)?.closest("[data-reader-chrome]") !== null;
+      if (inChrome(range.commonAncestorContainer) || inChrome(range.startContainer) || inChrome(range.endContainer)) {
+        setPlacement(null);
+        return;
+      }
       const captured = capture(selection);
       if (!captured) { setPlacement(null); return; }
       // Positioned inside the reader frame (not the scrolled content), so viewport-relative
@@ -127,6 +134,7 @@ export function SelectionToolbar({ root, viewport, capture, onHighlight, onNote,
         </Button>
       ))}
       <span className="mx-1 h-5 w-px shrink-0 bg-separator" />
+      {onListen ? <Button variant="quiet" size="sm" aria-label="Play selection" className="size-8 shrink-0" onPress={() => { onListen(placement.capture); done(); }}><Play /></Button> : null}
       <Button variant="quiet" size="sm" aria-label="Add a note" className="size-8 shrink-0" onPress={() => { onNote(placement.capture); done(); }}><MessageSquarePlus /></Button>
       <Button variant="quiet" size="sm" aria-label="Copy citation" className="size-8 shrink-0" onPress={() => { onCopy(placement.capture); done(); }}><Copy /></Button>
       <Button variant="quiet" size="sm" aria-label="Ask about this" className="size-8 shrink-0" onPress={() => { onAsk(placement.capture); done(); }}><Sparkles /></Button>

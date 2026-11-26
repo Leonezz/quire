@@ -50,6 +50,19 @@ fn task_instruction(task: &str, material_id: Option<&str>) -> Option<String> {
             let id_token = material_id.map(|id| format!("[{id}]")).unwrap_or_else(|| "[<id>]".into());
             Some(format!("The extractor could not recover this page cleanly. Read the captured page text with material_source (page through it fully), then rewrite the article as faithful Markdown: title line, byline and date if present, the body in order with headings, paragraphs, lists, quotes, code blocks and links; leave out navigation, related-post cards, comments, share and subscribe blocks; never invent or summarise. Save it with artifact_write using lineage {id_token} (its `sources` argument) and reply with one line saying the page was rebuilt, followed by the [artifact-id] citation."))
         }
+        "cleanup_transcript" => {
+            let target_id = material_id.unwrap_or("<id>");
+            Some(format!(
+                "Refine the machine-generated transcript of material {target_id} into clean, speaker-attributed, semantically structured prose WITHOUT summarising, dropping substance, or translating.\n\
+                1. Read all raw cues with transcript_read_raw (id \"{target_id}\", starting at offset 0 — which also returns `showNotes` with host/guest names and topic clues — and paging with nextOffset until nextOffset is null).\n\
+                2. NEVER TRANSLATE: keep every sentence and speaker turn in the EXACT language it appears in the raw cues (Chinese stays Chinese, English stays English; in bilingual interviews where one speaker speaks Chinese and another speaks English, preserve each speaker's original language verbatim without translating either side). Ignore the system prompt's general \"Write in the language the reader writes in\" rule for the transcript body.\n\
+                3. Split by speaker turns: infer speaker switches from questions vs answers, language/register shifts, forms of address, and names in `showNotes`/`byline`. Start EVERY speaker turn on its own new paragraph prefixed with `[MM:SS] **Speaker**: ` (use real names from `showNotes`/`byline` when clear, otherwise `**主持人**` / `**嘉宾**` for Chinese or `**Host**` / `**Guest**` for English).\n\
+                4. Split by semantics & restore sentences: break run-on ASR streams into complete, properly punctuated sentences (`。？！` / `. ? !`), and split long monologues into focused single-idea paragraphs (~40–90 words or ~60–160 Chinese characters per paragraph). Give each split paragraph the exact `[MM:SS]` (or `[H:MM:SS]`) timestamp from the raw cue where that sentence/idea starts, strictly non-decreasing.\n\
+                5. Repair homophones, proper nouns, technical terms, and mixed CJK/English spacing using `title` and `showNotes`; trim only pure non-lexical stutters (`嗯嗯`, `uh`, repeated false starts) while keeping word/character count within 70%–125% of the raw cues — never condense or skip sections.\n\
+                6. Insert descriptive `## Section Title` headings at major topic transitions, written in the primary language of the episode's `title` / `showNotes` (e.g. Chinese headings for Chinese-titled podcasts).\n\
+                7. Save in place with transcript_save_refined (id \"{target_id}\") and reply in one sentence (in the episode's primary language) confirming how many sections/turns were refined."
+            ))
+        }
         _ => None,
     }
 }
@@ -92,7 +105,7 @@ pub fn build_prompt(
             }
         }
         (_, Some(mat)) => {
-            if request.task == "rebuild" {
+            if request.task == "rebuild" || request.task == "cleanup_transcript" {
                 parts.push(material_head(mat));
             } else {
                 let text = mat.markdown.as_deref().or(mat.plain.as_deref()).unwrap_or("");
@@ -374,6 +387,32 @@ To cite inside html or react, link the claim: <a href=\"quire:material/ID\" data
                 "additionalProperties": false
             }),
         },
+        DynamicTool {
+            name: "transcript_read_raw".into(),
+            description: format!("Read the raw unrefined timed cues (`[MM:SS] text`) of a podcast or video material, {PAGE_CHARS} characters per call. {paging} Use this before calling transcript_save_refined."),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": id_schema,
+                    "offset": { "type": "integer", "minimum": 0, "description": "Character offset; use the previous call's nextOffset." }
+                },
+                "required": ["id"],
+                "additionalProperties": false
+            }),
+        },
+        DynamicTool {
+            name: "transcript_save_refined".into(),
+            description: "Save a refined, punctuated, speaker-attributed, semantically paragraphed transcript back onto a podcast or video material while preserving its raw cues, timestamps, and highlight anchors. Every paragraph and speaker turn must begin on its own line with a monotonic `[MM:SS]` (or `[H:MM:SS]`) timestamp and optional `**Speaker**: ` label, `## Heading` lines mark topic sections, and total word count must stay within 70%–125% of the raw cues (never summarise).".into(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "id": id_schema,
+                    "markdown": { "type": "string", "minLength": 1, "maxLength": MAX_ARTIFACT_SOURCE }
+                },
+                "required": ["id", "markdown"],
+                "additionalProperties": false
+            }),
+        },
     ]
 }
 
@@ -439,6 +478,7 @@ fn read_key(tool: &str, raw: &serde_json::Value) -> Option<String> {
             | "library_recent"
             | "material_read"
             | "material_source"
+            | "transcript_read_raw"
             | "material_annotations"
             | "inbox_list"
     ) {
@@ -446,7 +486,9 @@ fn read_key(tool: &str, raw: &serde_json::Value) -> Option<String> {
     }
     let obj = raw.as_object()?;
     let mut cloned = obj.clone();
-    if (tool == "material_read" || tool == "material_source") && !cloned.contains_key("offset") {
+    if (tool == "material_read" || tool == "material_source" || tool == "transcript_read_raw")
+        && !cloned.contains_key("offset")
+    {
         cloned.insert("offset".into(), serde_json::json!(0));
     }
     let mut keys: Vec<&String> = cloned.keys().collect();
@@ -935,6 +977,90 @@ impl TurnExecutionContext {
                 Ok((
                     artifact_tool_value(&saved),
                     format!("{} {} → {} v{ver}", call.tool, quote_of(&saved.title), saved.id),
+                ))
+            }
+            "transcript_read_raw" => {
+                let args = check_obj(&["id", "offset"])?;
+                let id = check_id(&args, "id")?;
+                let offset = match args.get("offset") {
+                    None => 0usize,
+                    Some(v) => v
+                        .as_u64()
+                        .ok_or_else(|| arg_err("\"offset\" must be a non-negative integer.".into()))? as usize,
+                };
+                let mat = self
+                    .store
+                    .get(&id)
+                    .map_err(run_err)?
+                    .ok_or_else(|| run_err(format!("Material {id} is not in the library.")))?;
+                let raw_cues = self
+                    .store
+                    .read_raw_transcript(&id)
+                    .map_err(run_err)?
+                    .ok_or_else(|| run_err(format!("Material {id} ({}) has no raw transcript cues stored.", mat.title)))?;
+                self.seen.lock().unwrap().insert(id.clone());
+                let formatted = raw_cues
+                    .iter()
+                    .map(|c| {
+                        let clock = crate::youtube::format_clock(c.start_sec);
+                        match &c.speaker {
+                            Some(sp) if !sp.trim().is_empty() => format!("[{clock}] {}: {}", sp.trim(), c.text),
+                            _ => format!("[{clock}] {}", c.text),
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let paged = page_slice(&formatted, offset).map_err(run_err)?;
+                let mut out = serde_json::Map::new();
+                out.insert("id".into(), serde_json::json!(id));
+                out.insert("title".into(), serde_json::json!(mat.title));
+                if let Some(ref b) = mat.byline {
+                    out.insert("byline".into(), serde_json::json!(b));
+                }
+                if let Some(ref pub_name) = mat.publication {
+                    out.insert("publication".into(), serde_json::json!(pub_name));
+                }
+                out.insert("cueCount".into(), serde_json::json!(raw_cues.len()));
+                if offset == 0 {
+                    if let Ok(Some(notes_view)) = self.store.get_view(&id, "shownotes") {
+                        if let Some(notes_txt) = notes_view.markdown.or(notes_view.plain) {
+                            let snippet: String = notes_txt.chars().take(6000).collect();
+                            if !snippet.trim().is_empty() {
+                                out.insert("showNotes".into(), serde_json::json!(snippet));
+                            }
+                        }
+                    }
+                }
+                if let Some(po) = paged.as_object() {
+                    for (k, v) in po {
+                        out.insert(k.clone(), v.clone());
+                    }
+                }
+                Ok((
+                    serde_json::Value::Object(out),
+                    format!("transcript_read_raw {id} @{offset} → {} cues", raw_cues.len()),
+                ))
+            }
+            "transcript_save_refined" => {
+                let args = check_obj(&["id", "markdown"])?;
+                let id = check_id(&args, "id")?;
+                let markdown = check_text(&args, "markdown", MAX_ARTIFACT_SOURCE)?;
+                let updated = self
+                    .store
+                    .refine_material_transcript(&id, &markdown)
+                    .await
+                    .map_err(run_err)?;
+                self.seen.lock().unwrap().insert(updated.id.clone());
+                (self.on_library_changed)();
+                let para_count = updated.time_anchors.as_ref().map(|a| a.len()).unwrap_or(0);
+                Ok((
+                    serde_json::json!({
+                        "id": updated.id,
+                        "title": updated.title,
+                        "paragraphs": para_count,
+                        "transcriptOrigin": "agent_refined",
+                    }),
+                    format!("transcript_save_refined {} → {para_count} paragraphs", quote_of(&updated.title)),
                 ))
             }
             other => Err(run_err(format!("Unknown tool {other}."))),

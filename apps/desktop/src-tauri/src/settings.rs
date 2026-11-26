@@ -12,6 +12,7 @@ pub const MIN_SYNC_MINUTES: u32 = 5;
 pub const MAX_SYNC_MINUTES: u32 = 1440;
 pub const MAX_MODEL_LENGTH: usize = 64;
 pub const MAX_API_KEY_LENGTH: usize = 512;
+const MAX_YOUTUBE_COOKIES_LENGTH: usize = 256 * 1024;
 const MAX_PATH_LENGTH: usize = 1024;
 
 pub trait SecretEncryptor: Send + Sync {
@@ -157,6 +158,33 @@ struct StoredSettings {
     reflow_judge: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     typesafe_api_key_encrypted: Option<String>,
+    #[serde(default = "default_asr_provider")]
+    asr_provider: String,
+    #[serde(default = "default_asr_base_url")]
+    asr_base_url: String,
+    #[serde(default = "default_asr_model")]
+    asr_model: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    asr_api_key_encrypted: Option<String>,
+    #[serde(default = "default_local_whisper_model")]
+    local_whisper_model: String,
+    #[serde(default)]
+    remove_cached_media_after_finish: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    youtube_cookies_encrypted: Option<String>,
+}
+
+fn default_asr_provider() -> String {
+    "local".into()
+}
+fn default_asr_base_url() -> String {
+    "https://api.groq.com/openai/v1".into()
+}
+fn default_asr_model() -> String {
+    "whisper-large-v3-turbo".into()
+}
+fn default_local_whisper_model() -> String {
+    "base".into()
 }
 
 impl Default for StoredSettings {
@@ -170,6 +198,13 @@ impl Default for StoredSettings {
             check_updates_automatically: true,
             reflow_judge: "rules".into(),
             typesafe_api_key_encrypted: None,
+            asr_provider: default_asr_provider(),
+            asr_base_url: default_asr_base_url(),
+            asr_model: default_asr_model(),
+            asr_api_key_encrypted: None,
+            local_whisper_model: default_local_whisper_model(),
+            remove_cached_media_after_finish: false,
+            youtube_cookies_encrypted: None,
         }
     }
 }
@@ -249,6 +284,40 @@ impl SettingsStore {
         if let Some(v) = obj.get("reflowJudge") {
             if let Ok(j) = Self::valid_judge(v, s.typesafe_api_key_encrypted.is_some()) {
                 s.reflow_judge = j;
+            }
+        }
+        if let Some(sealed) = obj.get("asrApiKeyEncrypted").and_then(|v| v.as_str()) {
+            if !sealed.is_empty() {
+                s.asr_api_key_encrypted = Some(sealed.to_string());
+            }
+        }
+        if let Some(v) = obj.get("asrProvider").and_then(|v| v.as_str()) {
+            if matches!(v, "local" | "openai_compatible") {
+                s.asr_provider = v.to_string();
+            }
+        }
+        if let Some(v) = obj.get("asrBaseUrl").and_then(|v| v.as_str()) {
+            if crate::transcribe::validate_asr_base_url(v).is_ok() {
+                s.asr_base_url = v.trim().trim_end_matches('/').to_string();
+            }
+        }
+        if let Some(v) = obj.get("asrModel").and_then(|v| v.as_str()) {
+            let trimmed = v.trim();
+            if trimmed.chars().count() <= 128 {
+                s.asr_model = trimmed.to_string();
+            }
+        }
+        if let Some(v) = obj.get("localWhisperModel").and_then(|v| v.as_str()) {
+            if matches!(v, "base" | "small" | "large-v3-turbo") {
+                s.local_whisper_model = v.to_string();
+            }
+        }
+        if let Some(v) = obj.get("removeCachedMediaAfterFinish").and_then(|v| v.as_bool()) {
+            s.remove_cached_media_after_finish = v;
+        }
+        if let Some(sealed) = obj.get("youtubeCookiesEncrypted").and_then(|v| v.as_str()) {
+            if !sealed.is_empty() {
+                s.youtube_cookies_encrypted = Some(sealed.to_string());
             }
         }
         Ok(s)
@@ -336,6 +405,13 @@ impl SettingsStore {
             check_updates_automatically: cur.check_updates_automatically,
             reflow_judge: cur.reflow_judge,
             typesafe_api_key_set: cur.typesafe_api_key_encrypted.is_some(),
+            asr_provider: cur.asr_provider,
+            asr_base_url: cur.asr_base_url,
+            asr_model: cur.asr_model,
+            asr_api_key_set: cur.asr_api_key_encrypted.is_some(),
+            local_whisper_model: cur.local_whisper_model,
+            remove_cached_media_after_finish: cur.remove_cached_media_after_finish,
+            youtube_connected: cur.youtube_cookies_encrypted.is_some(),
         }
     }
 
@@ -349,6 +425,12 @@ impl SettingsStore {
             "checkUpdatesAutomatically",
             "reflowJudge",
             "typesafeApiKey",
+            "asrProvider",
+            "asrBaseUrl",
+            "asrModel",
+            "asrApiKey",
+            "localWhisperModel",
+            "removeCachedMediaAfterFinish",
         ];
         let unknown: Vec<&str> = patch
             .keys()
@@ -406,7 +488,68 @@ impl SettingsStore {
         if let Some(v) = patch.get("reflowJudge") {
             next.reflow_judge = Self::valid_judge(v, next.typesafe_api_key_encrypted.is_some())?;
         }
+        if let Some(raw_asr_key) = patch.get("asrApiKey") {
+            let k = raw_asr_key.as_str().ok_or_else(|| {
+                format!("asrApiKey must be a string of at most {MAX_API_KEY_LENGTH} characters, or empty to remove the stored key.")
+            })?;
+            if k.chars().count() > MAX_API_KEY_LENGTH {
+                return Err(format!(
+                    "asrApiKey must be a string of at most {MAX_API_KEY_LENGTH} characters, or empty to remove the stored key."
+                ));
+            }
+            let trimmed = k.trim();
+            if trimmed.is_empty() {
+                next.asr_api_key_encrypted = None;
+            } else {
+                if !self.encryptor.available() {
+                    return Err("This machine cannot encrypt secrets (Keychain is unavailable), so the ASR key was not stored.".into());
+                }
+                next.asr_api_key_encrypted = Some(self.encryptor.encrypt(trimmed)?);
+            }
+        }
+        if let Some(v) = patch.get("asrProvider") {
+            let s = v
+                .as_str()
+                .ok_or_else(|| "asrProvider must be \"local\" or \"openai_compatible\".".to_string())?;
+            if !matches!(s, "local" | "openai_compatible") {
+                return Err("asrProvider must be \"local\" or \"openai_compatible\".".into());
+            }
+            next.asr_provider = s.to_string();
+        }
+        if let Some(v) = patch.get("asrBaseUrl") {
+            let s = v
+                .as_str()
+                .ok_or_else(|| "asrBaseUrl must be a URL string.".to_string())?;
+            crate::transcribe::validate_asr_base_url(s)?;
+            next.asr_base_url = s.trim().trim_end_matches('/').to_string();
+        }
+        if let Some(v) = patch.get("asrModel") {
+            let s = v
+                .as_str()
+                .ok_or_else(|| "asrModel must be a string of at most 128 characters.".to_string())?;
+            let trimmed = s.trim();
+            if trimmed.chars().count() > 128 {
+                return Err("asrModel must be at most 128 characters.".into());
+            }
+            next.asr_model = trimmed.to_string();
+        }
+        if let Some(v) = patch.get("localWhisperModel") {
+            let s = v
+                .as_str()
+                .ok_or_else(|| "localWhisperModel must be \"base\", \"small\" or \"large-v3-turbo\".".to_string())?;
+            if !matches!(s, "base" | "small" | "large-v3-turbo") {
+                return Err("localWhisperModel must be \"base\", \"small\" or \"large-v3-turbo\".".into());
+            }
+            next.local_whisper_model = s.to_string();
+        }
+        if let Some(v) = patch.get("removeCachedMediaAfterFinish") {
+            next.remove_cached_media_after_finish = Self::valid_flag("removeCachedMediaAfterFinish", v)?;
+        }
 
+        self.persist(next)
+    }
+
+    fn persist(&self, next: StoredSettings) -> Result<Settings, String> {
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         }
@@ -419,15 +562,42 @@ impl SettingsStore {
         Ok(self.get())
     }
 
-    pub fn secret(&self, name: &str) -> Result<String, String> {
-        let sealed = self
+    pub fn set_youtube_cookies(&self, cookies_json: Option<&str>) -> Result<Settings, String> {
+        let mut next = self
             .current
             .lock()
             .map_err(|_| "Settings lock poisoned".to_string())?
-            .typesafe_api_key_encrypted
             .clone();
+        match cookies_json.map(str::trim).filter(|s| !s.is_empty()) {
+            Some(raw) => {
+                if raw.len() > MAX_YOUTUBE_COOKIES_LENGTH {
+                    return Err("YouTube session cookies exceeded the maximum storage size.".into());
+                }
+                if !self.encryptor.available() {
+                    return Err(
+                        "This machine cannot encrypt secrets (Keychain is unavailable), so the YouTube session was not stored."
+                            .into(),
+                    );
+                }
+                next.youtube_cookies_encrypted = Some(self.encryptor.encrypt(raw)?);
+            }
+            None => {
+                next.youtube_cookies_encrypted = None;
+            }
+        }
+        self.persist(next)
+    }
+
+    pub fn optional_secret(&self, name: &str) -> Result<Option<String>, String> {
+        let cur = self.current.lock().map_err(|_| "Settings lock poisoned".to_string())?;
+        let sealed = match name {
+            "asrApiKey" => cur.asr_api_key_encrypted.clone(),
+            "youtubeCookies" => cur.youtube_cookies_encrypted.clone(),
+            _ => cur.typesafe_api_key_encrypted.clone(),
+        };
+        drop(cur);
         let Some(s) = sealed else {
-            return Err(format!("No {name} is stored. Enter the TypeSafe API key in Settings › Agent."));
+            return Ok(None);
         };
         if !self.encryptor.available() {
             return Err(format!("The stored {name} cannot be decrypted right now: Keychain is unavailable."));
@@ -437,9 +607,21 @@ impl SettingsStore {
             .decrypt(&s)
             .map_err(|e| format!("The stored {name} could not be decrypted ({e}). Remove it and enter it again."))?;
         if plain.is_empty() {
-            return Err(format!("The stored {name} decrypted to nothing. Remove it and enter it again."));
+            return Ok(None);
         }
-        Ok(plain)
+        Ok(Some(plain))
+    }
+
+    pub fn secret(&self, name: &str) -> Result<String, String> {
+        self.optional_secret(name)?.ok_or_else(|| {
+            if name == "asrApiKey" {
+                "No asrApiKey is stored. Enter the ASR API key in Settings › Transcription.".into()
+            } else if name == "youtubeCookies" {
+                "No YouTube account is connected. Sign in to YouTube in Settings › Sources.".into()
+            } else {
+                format!("No {name} is stored. Enter the TypeSafe API key in Settings › Agent.")
+            }
+        })
     }
 }
 
@@ -489,5 +671,19 @@ mod tests {
         let after = store.update(clear.as_object().unwrap()).unwrap();
         assert!(!after.typesafe_api_key_set);
         assert_eq!(after.reflow_judge, "rules");
+
+        // Encrypted YouTube cookie jar round-trip
+        assert!(!store.get().youtube_connected);
+        let yt_set = store
+            .set_youtube_cookies(Some(r#"[{"name":"SAPISID","value":"abc"}]"#))
+            .unwrap();
+        assert!(yt_set.youtube_connected);
+        assert_eq!(
+            store.optional_secret("youtubeCookies").unwrap().as_deref(),
+            Some(r#"[{"name":"SAPISID","value":"abc"}]"#)
+        );
+        let yt_cleared = store.set_youtube_cookies(None).unwrap();
+        assert!(!yt_cleared.youtube_connected);
+        assert!(store.optional_secret("youtubeCookies").unwrap().is_none());
     }
 }
