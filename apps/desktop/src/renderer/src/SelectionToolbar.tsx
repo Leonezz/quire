@@ -68,6 +68,11 @@ export function SelectionToolbar({ root, viewport, capture, onHighlight, onNote,
       if (!selection || selection.isCollapsed || selection.rangeCount === 0) { setPlacement(null); return; }
       const range = selection.getRangeAt(0);
       if (!root.contains(range.commonAncestorContainer)) { setPlacement(null); return; }
+      const inChrome = (node: Node) => (node instanceof Element ? node : node.parentElement)?.closest("[data-reader-chrome]") !== null;
+      if (inChrome(range.commonAncestorContainer) || inChrome(range.startContainer) || inChrome(range.endContainer)) {
+        setPlacement(null);
+        return;
+      }
       const captured = capture(selection);
       if (!captured) { setPlacement(null); return; }
       // Positioned inside the reader frame (not the scrolled content), so viewport-relative

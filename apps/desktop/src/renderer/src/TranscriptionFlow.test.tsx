@@ -335,4 +335,38 @@ describe("Interactive ASR transcription & Agent transcript cleanup", () => {
     expect(within(usageList).getByText("Media")).toBeTruthy();
     expect(within(usageList).getByText("Models")).toBeTruthy();
   });
+
+  it("does not open SelectionToolbar when selecting text inside the transcription status banner", async () => {
+    api.read = mockRead({
+      getMaterial: vi.fn(async () => absentPodcast),
+      listAnnotations: vi.fn(async () => []),
+      resolveImage: vi.fn(async (u: string) => u),
+      getMediaState: vi.fn(async () => undefined),
+      saveMediaState: vi.fn(async () => undefined),
+      getUpdateState: vi.fn(async () => ({ phase: "idle" as const, current: "0.2.0" })),
+    });
+
+    render(
+      <MaterialReader id={ABSENT_ID} onOpenLink={() => undefined} onOpenMaterial={() => undefined} />,
+    );
+    await act(async () => {
+      await flush();
+      await flush();
+    });
+
+    const bannerText = screen.getByText(/No publisher transcript came with this episode/);
+    expect(bannerText.closest("[data-reader-chrome]")).toBeTruthy();
+
+    const range = document.createRange();
+    range.selectNodeContents(bannerText);
+    await act(async () => {
+      document.getSelection()?.removeAllRanges();
+      document.getSelection()?.addRange(range);
+      document.dispatchEvent(new Event("selectionchange"));
+      await flush();
+    });
+
+    expect(screen.queryByRole("toolbar", { name: "Selection" })).toBeNull();
+    document.getSelection()?.removeAllRanges();
+  });
 });

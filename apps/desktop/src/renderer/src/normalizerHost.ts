@@ -22,19 +22,37 @@ interface WorkerReply {
 }
 
 let worker: Worker | undefined;
-let inFlight = 0;
+const pendingIds = new Set<number>();
 let idleTimer: ReturnType<typeof setTimeout> | undefined;
 
 function scheduleIdleShutdown() {
   if (idleTimer !== undefined) clearTimeout(idleTimer);
-  if (inFlight > 0) return;
+  if (pendingIds.size > 0) return;
   idleTimer = setTimeout(() => {
     idleTimer = undefined;
-    if (inFlight === 0 && worker) {
+    if (pendingIds.size === 0 && worker) {
       worker.terminate();
       worker = undefined;
     }
   }, IDLE_TERMINATE_MS);
+}
+
+function failAllPending(message: string) {
+  const ids = [...pendingIds];
+  pendingIds.clear();
+  if (worker) {
+    worker.terminate();
+    worker = undefined;
+  }
+  for (const requestId of ids) {
+    void invoke("normalizer_reply", {
+      reply: {
+        requestId,
+        ok: false,
+        error: message,
+      },
+    });
+  }
 }
 
 function ensureWorker(): Worker {
@@ -45,12 +63,17 @@ function ensureWorker(): Worker {
   if (!worker) {
     worker = new NormalizerWorker();
     worker.addEventListener("message", (event: MessageEvent<WorkerReply>) => {
-      inFlight = Math.max(0, inFlight - 1);
+      pendingIds.delete(event.data.requestId);
       scheduleIdleShutdown();
       void invoke("normalizer_reply", { reply: event.data });
     });
     worker.addEventListener("error", (event) => {
-      console.error("[normalizer.worker]", event.message);
+      const detail = event.message || "Normalizer worker crashed.";
+      console.error("[normalizer.worker]", detail);
+      failAllPending(`Normalizer worker error: ${detail}`);
+    });
+    worker.addEventListener("messageerror", () => {
+      failAllPending("Normalizer worker message deserialization failed.");
     });
   }
   return worker;
@@ -62,7 +85,19 @@ export function startNormalizerHost(): void {
   if (started) return;
   started = true;
   void listen<BridgeRequest>("normalizer:request", (event) => {
-    inFlight += 1;
-    ensureWorker().postMessage(event.payload);
+    pendingIds.add(event.payload.requestId);
+    try {
+      ensureWorker().postMessage(event.payload);
+    } catch (err: unknown) {
+      pendingIds.delete(event.payload.requestId);
+      const message = err instanceof Error ? err.message : String(err);
+      void invoke("normalizer_reply", {
+        reply: {
+          requestId: event.payload.requestId,
+          ok: false,
+          error: message,
+        },
+      });
+    }
   });
 }

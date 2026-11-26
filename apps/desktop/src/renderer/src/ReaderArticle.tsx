@@ -163,6 +163,7 @@ export function ReaderArticle({ material, content, prefs, resolveImage, onOpenLi
         <button
           key={`${idx}-${part.seconds}`}
           type="button"
+          data-reader-searchable=""
           onClick={() => seekRef.current?.(part.seconds)}
           aria-label={`Jump to ${part.label}`}
           className="shownotes-timestamp mr-1 inline-flex cursor-pointer items-baseline rounded-[5px] border-0 bg-fill px-1.5 py-0.5 font-mono text-[0.82em] leading-[1.35] font-medium text-accent-text tabular-nums transition-colors hover:bg-accent-soft focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent-ring"
@@ -239,17 +240,17 @@ export function ReaderArticle({ material, content, prefs, resolveImage, onOpenLi
           </div>
         ) : null}
         {lineageCount && onShowSources
-          ? <button type="button" className="mb-3 block cursor-default border-0 bg-transparent p-0 text-[13px] font-medium text-accent-text hover:underline" onClick={onShowSources}>{host} · sources in Info</button>
-          : <p className="mb-3 text-[13px] font-medium text-accent-text">{host}</p>}
+          ? <button type="button" data-reader-chrome="" className="mb-3 block select-none cursor-default border-0 bg-transparent p-0 text-[13px] font-medium text-accent-text hover:underline" onClick={onShowSources}>{host} · sources in Info</button>
+          : <p data-reader-chrome="" className="mb-3 select-none text-[13px] font-medium text-accent-text">{host}</p>}
         <h1>{material.title}</h1>
-        <div className="mb-8 flex flex-wrap gap-x-3 text-[12.5px] text-label-2">
+        <div data-reader-chrome="" className="mb-8 flex select-none flex-wrap gap-x-3 text-[12.5px] text-label-2">
           {headerParts(material.meta).map((part, index) => <span key={`${index}-${part}`}>{part}</span>)}
           {artifactLabel(material.artifact) ? <span>{artifactLabel(material.artifact)}</span> : null}
           {material.origin === "agent" && material.artifact ? <span>{artifactDate(material.artifact.updatedAt)}</span> : null}
           <span>{content.readingMinutes} min</span>
           {bylineExtra}
         </div>
-        {banner}
+        {banner ? <div data-reader-chrome="" className="select-none [&_[role=alert]]:select-text">{banner}</div> : null}
         {content.artifactBody ? null : material.origin === "agent" && onOpenMaterial
           ? <ArtifactSurface material={material} markdown={content.markdown} onOpenMaterial={onOpenMaterial} {...surface} />
           : <ReaderDocumentSurface {...surface} />}

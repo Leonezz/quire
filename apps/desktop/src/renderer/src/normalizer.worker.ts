@@ -1,3 +1,4 @@
+import "./workerDomShim";
 import {
   extractDescriptionChapters,
   formatShowNotesMarkdown,

@@ -27,7 +27,7 @@ const BLOCKS = new Set([
   "HR",
 ]);
 const EXCLUDED =
-  'script, style, noscript, template, svg, math, button, input, textarea, select, [hidden], [aria-hidden="true"], .sr-only, [data-reader-math-status="rendered"], [data-footnote-ref], [data-footnote-backref]';
+  'script, style, noscript, template, svg, math, button:not([data-reader-searchable]), input, textarea, select, [hidden], [aria-hidden="true"], .sr-only, [data-reader-chrome], [data-reader-math-status="rendered"], [data-footnote-ref], [data-footnote-backref]';
 
 /** Index visible prose/code, preserving native text offsets and inline boundaries.
  * Separate blocks never concatenate into false phrases. No DOM nodes are changed.
