@@ -12,6 +12,8 @@ import { useMaterialView } from "./useMaterialView";
 import type { MaterialQuoteJump } from "./quoteJump";
 import type { ReportRequest } from "./reportRequest";
 
+import type { SettingsSection } from "./SettingsSheet";
+
 const FINISHED_AT = 0.95;
 /** Materials whose "finished" event was recorded in this session: once per material, whatever pane shows it. */
 const finished = new Set<string>();
@@ -23,7 +25,7 @@ export interface MaterialReaderProps {
   /** A passage to reveal once the body is up (a citation's quote); the reader ignores one for another material. */
   jumpToQuote?: MaterialQuoteJump | undefined;
   onBack?: (() => void) | undefined;
-  onOpenSettings?: (() => void) | undefined;
+  onOpenSettings?: ((section?: SettingsSection) => void) | undefined;
   /** The shell's Add · Search icons for the toolbar segment. */
   trailing?: ReactNode;
 }

@@ -556,6 +556,17 @@ pub fn whisper_model_candidates(model_name: &str) -> (&'static [&'static str], [
     }
 }
 
+pub fn local_whisper_runtime_ready() -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        return true;
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        local_whisper_binary().is_some()
+    }
+}
+
 pub fn local_whisper_binary() -> Option<String> {
     for candidate in [
         "/opt/homebrew/bin/whisper-cli",
@@ -598,7 +609,7 @@ pub fn check_asr_model_status(data_dir: &Path, model_name: &str) -> AsrModelStat
         model: normalized.into(),
         downloaded: size_bytes.is_some(),
         size_bytes,
-        local_runtime_ready: local_whisper_binary().is_some(),
+        local_runtime_ready: local_whisper_runtime_ready(),
     }
 }
 
@@ -753,16 +764,40 @@ pub async fn download_asr_model(
     Ok(check_asr_model_status(data_dir, normalized))
 }
 
+#[cfg(target_os = "macos")]
+fn cached_whisper_context(model_path: &Path) -> Result<Arc<whisper_rs::WhisperContext>, String> {
+    use std::sync::OnceLock;
+    static LOG_ONCE: OnceLock<()> = OnceLock::new();
+    static CTX_CACHE: OnceLock<Mutex<Option<(PathBuf, Arc<whisper_rs::WhisperContext>)>>> = OnceLock::new();
+
+    LOG_ONCE.get_or_init(|| {
+        whisper_rs::install_logging_hooks();
+    });
+
+    let cache = CTX_CACHE.get_or_init(|| Mutex::new(None));
+    let mut guard = cache
+        .lock()
+        .map_err(|_| "Whisper model cache lock poisoned.".to_string())?;
+    if let Some((ref cached_path, ref ctx)) = *guard {
+        if cached_path == model_path {
+            return Ok(ctx.clone());
+        }
+    }
+
+    let mut params = whisper_rs::WhisperContextParameters::default();
+    params.flash_attn(true);
+    let ctx = whisper_rs::WhisperContext::new_with_params(model_path, params)
+        .map_err(|e| format!("Failed to load local Whisper model: {e}"))?;
+    let shared = Arc::new(ctx);
+    *guard = Some((model_path.to_path_buf(), shared.clone()));
+    Ok(shared)
+}
+
 async fn transcribe_chunk_local_whisper(
     data_dir: &Path,
     model_name: &str,
     chunk: &AudioChunk,
 ) -> Result<Vec<TranscriptCueDto>, String> {
-    let Some(bin) = local_whisper_binary() else {
-        return Err(
-            "Local Whisper CLI is not installed (`brew install whisper-cpp`), or switch Settings › Transcription to an OpenAI-compatible ASR endpoint.".into(),
-        );
-    };
     let (file_names, _) = whisper_model_candidates(model_name);
     let models_dir = data_dir.join("models");
     let Some(model_path) = file_names
@@ -771,90 +806,160 @@ async fn transcribe_chunk_local_whisper(
         .find(|p| p.is_file())
     else {
         return Err(format!(
-            "Local Whisper model ({}) is not downloaded yet. Download it in Settings › Transcription first.",
+            "Local Whisper model ({}) is not downloaded yet. Click Download model in Settings › Transcription first.",
             file_names[0]
         ));
     };
 
-    let tmp_dir = data_dir.join("tmp-asr");
-    fs::create_dir_all(&tmp_dir).map_err(|e| e.to_string())?;
-    let token = random_hex_16();
-    let wav_path = tmp_dir.join(format!("{token}.wav"));
-    let out_prefix = tmp_dir.join(&token);
-    let json_path = tmp_dir.join(format!("{token}.json"));
-    fs::write(&wav_path, &chunk.wav_bytes).map_err(|e| e.to_string())?;
+    #[cfg(target_os = "macos")]
+    {
+        let pcm_i16 = parse_wav_pcm16_to_16k_mono(&chunk.wav_bytes)
+            .ok_or_else(|| "Invalid PCM16 WAV chunk.".to_string())?;
+        if pcm_i16.is_empty() {
+            return Ok(Vec::new());
+        }
+        let pcm_f32: Vec<f32> = pcm_i16.into_iter().map(|s| (s as f32) / 32768.0).collect();
+        let chunk_start = chunk.start_sec;
+        let chunk_end = chunk.end_sec;
 
-    let output = Command::new(&bin)
-        .arg("-m")
-        .arg(&model_path)
-        .arg("-f")
-        .arg(&wav_path)
-        .arg("-oj")
-        .arg("-of")
-        .arg(&out_prefix)
-        .arg("-l")
-        .arg("auto")
-        .output()
-        .await
-        .map_err(|e| format!("Failed to run local whisper: {e}"));
+        return tokio::task::spawn_blocking(move || {
+            let ctx = cached_whisper_context(&model_path)?;
+            let mut state = ctx
+                .create_state()
+                .map_err(|e| format!("Failed to initialize Whisper state: {e}"))?;
 
-    let _ = fs::remove_file(&wav_path);
-    let output = output?;
-    if !output.status.success() {
-        let _ = fs::remove_file(&json_path);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!(
-            "Local Whisper failed: {}",
-            stderr.chars().take(200).collect::<String>()
-        ));
-    }
+            let mut params = whisper_rs::FullParams::new(whisper_rs::SamplingStrategy::Greedy { best_of: 1 });
+            let n_threads = std::thread::available_parallelism()
+                .map(|n| n.get().clamp(2, 8) as i32)
+                .unwrap_or(4);
+            params.set_n_threads(n_threads);
+            params.set_language(None);
+            params.set_detect_language(true);
+            params.set_print_special(false);
+            params.set_print_progress(false);
+            params.set_print_realtime(false);
+            params.set_print_timestamps(false);
+            params.set_suppress_blank(true);
+            params.set_suppress_nst(true);
 
-    let raw_json = fs::read_to_string(&json_path).unwrap_or_default();
-    let _ = fs::remove_file(&json_path);
+            state
+                .full(params, &pcm_f32)
+                .map_err(|e| format!("Built-in Whisper inference failed: {e}"))?;
 
-    #[derive(Deserialize)]
-    struct WhisperCppJson {
-        #[serde(default)]
-        transcription: Vec<WhisperCppItem>,
-    }
-    #[derive(Deserialize)]
-    struct WhisperCppOffsets {
-        from: u64,
-        to: u64,
-    }
-    #[derive(Deserialize)]
-    struct WhisperCppItem {
-        offsets: Option<WhisperCppOffsets>,
-        text: String,
-    }
-
-    if let Ok(parsed) = serde_json::from_str::<WhisperCppJson>(&raw_json) {
-        let cues: Vec<TranscriptCueDto> = parsed
-            .transcription
-            .into_iter()
-            .filter_map(|item| {
-                let txt = item.text.trim().to_string();
-                if txt.is_empty() {
-                    return None;
+            let mut cues = Vec::new();
+            for seg in state.as_iter() {
+                let raw = seg.to_str_lossy().unwrap_or_default();
+                let txt = raw.trim().to_string();
+                if txt.is_empty()
+                    || txt.eq_ignore_ascii_case("[BLANK_AUDIO]")
+                    || txt.eq_ignore_ascii_case("(blank audio)")
+                {
+                    continue;
                 }
-                let (from_ms, to_ms) = item
-                    .offsets
-                    .map(|o| (o.from as f64, o.to as f64))
-                    .unwrap_or((0.0, (chunk.end_sec - chunk.start_sec) * 1000.0));
-                Some(TranscriptCueDto {
-                    start_sec: ((chunk.start_sec + from_ms / 1000.0) * 100.0).round() / 100.0,
-                    end_sec: ((chunk.start_sec + (to_ms / 1000.0).max(from_ms / 1000.0 + 0.2)) * 100.0).round()
-                        / 100.0,
+                let t0_sec = (seg.start_timestamp().max(0) as f64) / 100.0;
+                let t1_sec = (seg.end_timestamp().max(0) as f64) / 100.0;
+                let st = (chunk_start + t0_sec).min(chunk_end);
+                let en = (chunk_start + t1_sec.max(t0_sec + 0.2)).min(chunk_end + 1.0);
+                cues.push(TranscriptCueDto {
+                    start_sec: (st * 100.0).round() / 100.0,
+                    end_sec: (en * 100.0).round() / 100.0,
                     text: txt,
                     speaker: None,
-                })
-            })
-            .collect();
-        return Ok(cues);
+                });
+            }
+            Ok(cues)
+        })
+        .await
+        .map_err(|e| format!("Whisper worker panicked: {e}"))?;
     }
 
-    let fallback_txt = String::from_utf8_lossy(&output.stdout);
-    Ok(cues_from_plain_chunk_text(&fallback_txt, chunk.start_sec, chunk.end_sec))
+    #[cfg(not(target_os = "macos"))]
+    {
+        let Some(bin) = local_whisper_binary() else {
+            return Err(
+                "Local Whisper CLI is not installed, or switch Settings › Transcription to an OpenAI-compatible ASR endpoint.".into(),
+            );
+        };
+        let tmp_dir = data_dir.join("tmp-asr");
+        fs::create_dir_all(&tmp_dir).map_err(|e| e.to_string())?;
+        let token = random_hex_16();
+        let wav_path = tmp_dir.join(format!("{token}.wav"));
+        let out_prefix = tmp_dir.join(&token);
+        let json_path = tmp_dir.join(format!("{token}.json"));
+        fs::write(&wav_path, &chunk.wav_bytes).map_err(|e| e.to_string())?;
+
+        let output = Command::new(&bin)
+            .arg("-m")
+            .arg(&model_path)
+            .arg("-f")
+            .arg(&wav_path)
+            .arg("-oj")
+            .arg("-of")
+            .arg(&out_prefix)
+            .arg("-l")
+            .arg("auto")
+            .output()
+            .await
+            .map_err(|e| format!("Failed to run local whisper: {e}"));
+
+        let _ = fs::remove_file(&wav_path);
+        let output = output?;
+        if !output.status.success() {
+            let _ = fs::remove_file(&json_path);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!(
+                "Local Whisper failed: {}",
+                stderr.chars().take(200).collect::<String>()
+            ));
+        }
+
+        let raw_json = fs::read_to_string(&json_path).unwrap_or_default();
+        let _ = fs::remove_file(&json_path);
+
+        #[derive(Deserialize)]
+        struct WhisperCppJson {
+            #[serde(default)]
+            transcription: Vec<WhisperCppItem>,
+        }
+        #[derive(Deserialize)]
+        struct WhisperCppOffsets {
+            from: u64,
+            to: u64,
+        }
+        #[derive(Deserialize)]
+        struct WhisperCppItem {
+            offsets: Option<WhisperCppOffsets>,
+            text: String,
+        }
+
+        if let Ok(parsed) = serde_json::from_str::<WhisperCppJson>(&raw_json) {
+            let cues: Vec<TranscriptCueDto> = parsed
+                .transcription
+                .into_iter()
+                .filter_map(|item| {
+                    let txt = item.text.trim().to_string();
+                    if txt.is_empty() {
+                        return None;
+                    }
+                    let (from_ms, to_ms) = item
+                        .offsets
+                        .map(|o| (o.from as f64, o.to as f64))
+                        .unwrap_or((0.0, (chunk.end_sec - chunk.start_sec) * 1000.0));
+                    Some(TranscriptCueDto {
+                        start_sec: ((chunk.start_sec + from_ms / 1000.0) * 100.0).round() / 100.0,
+                        end_sec: ((chunk.start_sec + (to_ms / 1000.0).max(from_ms / 1000.0 + 0.2)) * 100.0).round()
+                            / 100.0,
+                        text: txt,
+                        speaker: None,
+                    })
+                })
+                .collect();
+            return Ok(cues);
+        }
+
+        let fallback_txt = String::from_utf8_lossy(&output.stdout);
+        Ok(cues_from_plain_chunk_text(&fallback_txt, chunk.start_sec, chunk.end_sec))
+    }
 }
 
 pub async fn test_asr_connection(settings: &SettingsStore) -> Result<AsrConnectionTestResult, String> {
@@ -1005,9 +1110,15 @@ impl TranscriptionService {
             }
         } else {
             let st = check_asr_model_status(&self.data_dir, &cur_settings.local_whisper_model);
-            if !st.local_runtime_ready || !st.downloaded {
+            if !st.downloaded {
+                return Err(format!(
+                    "Whisper model ({}) is not downloaded yet. Click Download model in Settings › Transcription first.",
+                    st.model
+                ));
+            }
+            if !st.local_runtime_ready {
                 return Err(
-                    "Local Whisper is not ready yet. Download a local model or configure an OpenAI-compatible ASR endpoint in Settings › Transcription.".into(),
+                    "Local Whisper runtime is not available on this system. Configure an OpenAI-compatible ASR endpoint in Settings › Transcription.".into(),
                 );
             }
         }
@@ -1123,12 +1234,7 @@ impl TranscriptionService {
                 return Err("Audio stream contained no audible samples.".into());
             }
             let total_chunks = chunks.len() as u32;
-            if let Ok(mut guard) = self.jobs.lock() {
-                if let Some(j) = guard.get_mut(&material_id) {
-                    j.snapshot.phase = "transcribing".into();
-                    j.snapshot.total_chunks = total_chunks;
-                }
-            }
+            self.update_job_progress(&material_id, &job_id, 0, total_chunks);
 
             let cur_settings = self.settings.get();
             let origin = if provider == "local" { "local_asr" } else { "cloud_asr" };
@@ -1190,7 +1296,7 @@ impl TranscriptionService {
                     }
                     let cues = transcribe_chunk_local_whisper(&self.data_dir, &cur_settings.local_whisper_model, ch).await?;
                     all_cues.extend(cues);
-                    if ((ch.index + 1) % 2 == 0 || ch.index + 1 == chunks.len()) && !all_cues.is_empty() {
+                    if (ch.index == 0 || (ch.index + 1) % 2 == 0 || ch.index + 1 == chunks.len()) && !all_cues.is_empty() {
                         self.flush_incremental_transcript(&material_id, &record.title, &media.chapters, &all_cues, origin)
                             .await?;
                     }

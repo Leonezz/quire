@@ -371,7 +371,7 @@ export function SettingsSheet({ open, onClose, section, onOpenLink }: { open: bo
                 <div className="flex flex-wrap items-center gap-2 pt-1 text-[12.5px] text-label-2">
                   <span>
                     {asrModelInfo?.downloaded
-                      ? `Downloaded${asrModelInfo.sizeBytes ? ` (${bytesLabel(asrModelInfo.sizeBytes)})` : ""}${asrModelInfo.localRuntimeReady ? " · whisper-cli ready" : " · install whisper-cli (`brew install whisper-cpp`) to run"}`
+                      ? `Downloaded${asrModelInfo.sizeBytes ? ` (${bytesLabel(asrModelInfo.sizeBytes)})` : ""} · Ready`
                       : downloadingModel && downloadProgress
                         ? `Downloading ${bytesLabel(downloadProgress.downloadedBytes)}${downloadProgress.totalBytes ? ` / ${bytesLabel(downloadProgress.totalBytes)} (${Math.min(100, Math.round((downloadProgress.downloadedBytes / downloadProgress.totalBytes) * 100))}%)` : ""}…`
                         : "Weights not downloaded yet."}

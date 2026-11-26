@@ -244,7 +244,7 @@ export function App() {
       case "queue":
         return <QueueView items={lists.queue} selectedId={queueSelected} onSelect={setQueueSelected} refresh={lists.refresh} onOpenLink={openLink} onOpenMaterial={showMaterial} shell={shell} error={shellError} />;
       case "library": case "tag":
-        return <LibraryView library={library} selected={librarySelected} onSelectionChange={(selection) => { setLibrarySelected(selection); setAddNotice(undefined); }} onOpenLink={openLink} onOpenMaterial={showMaterial} jumpToQuote={quoteJump} onOpenSettings={() => openSettings("agent")} shell={shell} narrowed={scope.kind === "tag" || scope.id !== "all"} notice={addNotice} />;
+        return <LibraryView library={library} selected={librarySelected} onSelectionChange={(selection) => { setLibrarySelected(selection); setAddNotice(undefined); }} onOpenLink={openLink} onOpenMaterial={showMaterial} jumpToQuote={quoteJump} onOpenSettings={(section) => openSettings(section ?? "agent")} shell={shell} narrowed={scope.kind === "tag" || scope.id !== "all"} notice={addNotice} />;
       case "agent":
         return <AgentView sessions={agentSessions} requestedSession={requestedSession} onOpenMaterial={showMaterial} onOpenLink={openLink} onOpenSettings={() => openSettings("agent")} shell={shell} />;
       case "sources":

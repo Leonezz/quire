@@ -11,6 +11,7 @@ import { hostLabel } from "./ArtifactLineage";
 import { QualityBanner, canRebuild, type RebuildState } from "./RebuildBanner";
 import { agentStore, useAgentRun } from "./agentStore";
 import { transcribeStore, useTranscriptionJob } from "./transcribeStore";
+import type { SettingsSection } from "./SettingsSheet";
 import { SelectionToolbar, type SelectionCapture } from "./SelectionToolbar";
 import type { AgentContext, Annotation } from "../../shared/contracts";
 import { FindBar } from "./FindBar";
@@ -85,7 +86,7 @@ export interface ReaderProps {
   onProgress?: ((fraction: number) => void) | undefined;
   /** The Info panel saved metadata: the owner replaces its record so the header and body follow. */
   onMaterialSaved: (record: MaterialRecord) => void;
-  onOpenSettings?: (() => void) | undefined;
+  onOpenSettings?: ((section?: SettingsSection) => void) | undefined;
   /**
    * "Report" (⌥⌘R, the selection toolbar, the quality pill, the Info panel, the quality banner): the owner opens the report
    * panel for the current view, with a way to measure this reader at submit time and the passage pointed at, if any.
@@ -514,7 +515,7 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
                     {transcription.error ? (
                       <div role="alert" className="flex flex-wrap items-center gap-2 text-red-text">
                         <span>{transcription.error}</span>
-                        {onOpenSettings ? <Button size="sm" variant="quiet" onPress={onOpenSettings}>Settings…</Button> : null}
+                        {onOpenSettings ? <Button size="sm" variant="quiet" onPress={() => onOpenSettings("transcription")}>Settings…</Button> : null}
                       </div>
                     ) : null}
                   </div>
@@ -576,7 +577,7 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
               onJump={(annotation) => { const shown = shownAnnotation(annotation); if (shown) jumpTo(shown); else onJumpAcross(annotation); }} onUpdateNote={(id, note) => void update(id, { note })} onDeleteAnnotation={(id) => void remove(id)}
               sectionFor={(annotation) => sectionOf(placedRange(annotation))} placementOf={(annotation) => placements.get(annotation.id)?.status}
               onPlayTime={hasMedia ? seekAndPlay : undefined}
-              onMaterialSaved={onMaterialSaved} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onOpenSettings={onOpenSettings} />
+              onMaterialSaved={onMaterialSaved} onOpenLink={onOpenLink} onOpenMaterial={onOpenMaterial} onOpenSettings={onOpenSettings ? () => onOpenSettings("agent") : undefined} />
           </SplitPanel>
         </>
       ) : null}
