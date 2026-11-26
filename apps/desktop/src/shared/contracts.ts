@@ -56,6 +56,12 @@ export interface AsrModelStatus {
   localRuntimeReady: boolean;
 }
 
+export interface AsrModelDownloadProgress {
+  model: string;
+  downloadedBytes: number;
+  totalBytes?: number;
+}
+
 export interface AsrConnectionTestResult {
   latencyMs: number;
   supportsVerboseJson: boolean;
@@ -75,6 +81,7 @@ export interface ReadApiMedia {
   onTranscribeEvent: (listener: (event: TranscribeEvent) => void) => () => void;
   asrModelStatus: () => Promise<AsrModelStatus>;
   downloadAsrModel: (model: string) => Promise<AsrModelStatus>;
+  onAsrModelProgress?: (listener: (progress: AsrModelDownloadProgress) => void) => () => void;
   testAsrConnection: () => Promise<AsrConnectionTestResult>;
 }
 

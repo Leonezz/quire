@@ -35,7 +35,7 @@ export function Segmented({ className, children, ...props }: ToggleButtonGroupPr
       ref={groupRef}
       selectionMode="single"
       disallowEmptySelection
-      className={composeRenderProps(className, (cls) => cx("relative inline-flex rounded-pill bg-fill p-[3px]", cls))}
+      className={composeRenderProps(className, (cls) => cx("relative inline-flex w-fit rounded-pill bg-fill p-[3px]", cls))}
     >
       {composeRenderProps(children, (child) => (
         <>

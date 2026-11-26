@@ -174,7 +174,7 @@ export function CompanionPlayer({
             </div>
             <SliderThumb
               aria-label="Seek"
-              className="top-1/2 size-3 -translate-y-1/2 rounded-full bg-accent outline-none transition-transform data-[dragging]:scale-125 data-[focus-visible]:ring-[3px] data-[focus-visible]:ring-accent-ring"
+              className="top-1/2 size-3 rounded-full bg-accent outline-none transition-[scale] data-[dragging]:scale-125 data-[focus-visible]:ring-[3px] data-[focus-visible]:ring-accent-ring"
             />
           </SliderTrack>
         </Slider>

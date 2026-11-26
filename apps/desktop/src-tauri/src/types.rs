@@ -153,6 +153,15 @@ pub struct AsrModelStatus {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
+pub struct AsrModelDownloadProgress {
+    pub model: String,
+    pub downloaded_bytes: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub total_bytes: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
 pub struct AsrConnectionTestResult {
     pub latency_ms: u64,
     pub supports_verbose_json: bool,

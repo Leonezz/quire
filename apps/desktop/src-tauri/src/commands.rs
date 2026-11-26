@@ -785,11 +785,16 @@ pub fn asr_model_status(state: State<'_, AppState>) -> Result<AsrModelStatus, St
 
 #[tauri::command]
 pub async fn asr_model_download(
+    app: AppHandle,
     state: State<'_, AppState>,
     model: String,
 ) -> Result<AsrModelStatus, String> {
     let m = bounded_str(&model, 32, "IPC_INVALID_MODEL")?;
-    download_asr_model(&state.http, &state.data_dir, &m).await
+    let app_ev = app.clone();
+    download_asr_model(&state.data_dir, &m, move |progress| {
+        let _ = app_ev.emit("asr:model:progress", &progress);
+    })
+    .await
 }
 
 #[tauri::command]

@@ -530,19 +530,28 @@ pub async fn transcribe_chunk_openai_compatible(
     ))
 }
 
-pub fn whisper_model_filename(model_name: &str) -> (&'static str, &'static str) {
+pub fn whisper_model_candidates(model_name: &str) -> (&'static [&'static str], [&'static str; 2]) {
     match model_name.trim() {
         "small" => (
-            "ggml-small.bin",
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
+            &["ggml-small.bin"],
+            [
+                "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
+                "https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-small.bin",
+            ],
         ),
         "large-v3-turbo" => (
-            "ggml-large-v3-turbo.bin",
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo.bin",
+            &["ggml-large-v3-turbo-q5_0.bin", "ggml-large-v3-turbo.bin"],
+            [
+                "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
+                "https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
+            ],
         ),
         _ => (
-            "ggml-base.bin",
-            "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
+            &["ggml-base.bin"],
+            [
+                "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
+                "https://hf-mirror.com/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
+            ],
         ),
     }
 }
@@ -558,6 +567,16 @@ pub fn local_whisper_binary() -> Option<String> {
             return Some(candidate.to_string());
         }
     }
+    if let Ok(path_env) = std::env::var("PATH") {
+        for dir in std::env::split_paths(&path_env) {
+            for bin in ["whisper-cli", "whisper-cpp"] {
+                let p = dir.join(bin);
+                if p.is_file() {
+                    return Some(p.to_string_lossy().to_string());
+                }
+            }
+        }
+    }
     None
 }
 
@@ -567,12 +586,14 @@ pub fn check_asr_model_status(data_dir: &Path, model_name: &str) -> AsrModelStat
         "large-v3-turbo" => "large-v3-turbo",
         _ => "base",
     };
-    let (file_name, _) = whisper_model_filename(normalized);
-    let model_path = data_dir.join("models").join(file_name);
-    let size_bytes = fs::metadata(&model_path)
-        .ok()
-        .filter(|m| m.is_file() && m.len() > 1024)
-        .map(|m| m.len());
+    let (file_names, _) = whisper_model_candidates(normalized);
+    let models_dir = data_dir.join("models");
+    let size_bytes = file_names.iter().find_map(|file_name| {
+        fs::metadata(models_dir.join(file_name))
+            .ok()
+            .filter(|m| m.is_file() && m.len() > 1024 * 1024)
+            .map(|m| m.len())
+    });
     AsrModelStatus {
         model: normalized.into(),
         downloaded: size_bytes.is_some(),
@@ -581,43 +602,155 @@ pub fn check_asr_model_status(data_dir: &Path, model_name: &str) -> AsrModelStat
     }
 }
 
+fn build_model_download_client() -> reqwest::Client {
+    let policy = reqwest::redirect::Policy::custom(|attempt| {
+        if attempt.previous().len() >= 10 {
+            return attempt.error("Too many redirects");
+        }
+        let next = attempt.url();
+        if next.scheme() != "https" && next.scheme() != "http" {
+            return attempt.error("Redirected to unsupported scheme");
+        }
+        if !next.username().is_empty() || next.password().is_some() {
+            return attempt.error("Redirected to URL with credentials");
+        }
+        let host = next.host_str().unwrap_or("");
+        if host.is_empty() || is_private_host(host) {
+            return attempt.error("Redirected to private network address");
+        }
+        attempt.follow()
+    });
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(10))
+        .read_timeout(Duration::from_secs(30))
+        .redirect(policy)
+        .build()
+        .expect("model download client")
+}
+
 pub async fn download_asr_model(
-    client: &reqwest::Client,
     data_dir: &Path,
     model_name: &str,
+    on_progress: impl Fn(crate::types::AsrModelDownloadProgress),
 ) -> Result<AsrModelStatus, String> {
-    let (file_name, url_str) = whisper_model_filename(model_name);
-    let url = assert_public_http_url(url_str).map_err(|e| e.message)?;
+    let normalized = match model_name.trim() {
+        "small" => "small",
+        "large-v3-turbo" => "large-v3-turbo",
+        _ => "base",
+    };
+    let existing = check_asr_model_status(data_dir, normalized);
+    if existing.downloaded {
+        return Ok(existing);
+    }
+
+    let (file_names, urls) = whisper_model_candidates(normalized);
+    let primary_file = file_names[0];
     let models_dir = data_dir.join("models");
     fs::create_dir_all(&models_dir).map_err(|e| e.to_string())?;
-    let part_path = models_dir.join(format!("{file_name}.part"));
-    let final_path = models_dir.join(file_name);
+    let part_path = models_dir.join(format!("{primary_file}.part"));
+    let final_path = models_dir.join(primary_file);
 
-    let resp = client
-        .get(url)
-        .header(reqwest::header::USER_AGENT, "Quire/0.2 (+reading-workbench)")
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-    if !resp.status().is_success() {
-        return Err(format!("Model download answered HTTP {}.", resp.status().as_u16()));
+    let client = build_model_download_client();
+    let resume_from = fs::metadata(&part_path)
+        .ok()
+        .filter(|m| m.is_file())
+        .map(|m| m.len())
+        .unwrap_or(0);
+
+    let mut connected_resp = None;
+    let mut last_err = String::new();
+    for url_str in urls {
+        let Ok(url) = assert_public_http_url(url_str) else {
+            continue;
+        };
+        let mut req = client
+            .get(url)
+            .header(reqwest::header::USER_AGENT, "Quire/0.2 (+reading-workbench)");
+        if resume_from > 0 {
+            req = req.header(reqwest::header::RANGE, format!("bytes={resume_from}-"));
+        }
+        match req.send().await {
+            Ok(resp) if resp.status().is_success() || resp.status().as_u16() == 206 => {
+                connected_resp = Some(resp);
+                break;
+            }
+            Ok(resp) if resp.status().as_u16() == 416 => {
+                // Range not satisfiable -> restart clean
+                let _ = fs::remove_file(&part_path);
+                if let Ok(fresh) = client
+                    .get(url_str)
+                    .header(reqwest::header::USER_AGENT, "Quire/0.2 (+reading-workbench)")
+                    .send()
+                    .await
+                {
+                    if fresh.status().is_success() {
+                        connected_resp = Some(fresh);
+                        break;
+                    }
+                }
+                last_err = format!("Model server answered HTTP {}.", resp.status().as_u16());
+            }
+            Ok(resp) => {
+                last_err = format!("Model server answered HTTP {}.", resp.status().as_u16());
+            }
+            Err(e) => {
+                last_err = format!("Could not reach model host: {e}");
+            }
+        }
     }
-    let mut file = File::create(&part_path).map_err(|e| e.to_string())?;
+
+    let resp = connected_resp.ok_or_else(|| {
+        if last_err.is_empty() {
+            "Could not connect to Hugging Face or mirror.".to_string()
+        } else {
+            last_err
+        }
+    })?;
+
+    let is_partial = resp.status().as_u16() == 206 && resume_from > 0;
+    let base_bytes = if is_partial { resume_from } else { 0 };
+    let total_bytes = resp.content_length().map(|len| base_bytes + len);
+
+    let mut file = if is_partial {
+        fs::OpenOptions::new()
+            .append(true)
+            .open(&part_path)
+            .map_err(|e| e.to_string())?
+    } else {
+        File::create(&part_path).map_err(|e| e.to_string())?
+    };
+
+    let mut downloaded_bytes = base_bytes;
+    on_progress(crate::types::AsrModelDownloadProgress {
+        model: normalized.into(),
+        downloaded_bytes,
+        total_bytes,
+    });
+
+    let mut last_emit = Instant::now();
     let mut stream = resp.bytes_stream();
     while let Some(chunk_res) = stream.next().await {
-        let chunk = chunk_res.map_err(|e| {
-            let _ = fs::remove_file(&part_path);
-            e.to_string()
-        })?;
-        file.write_all(&chunk).map_err(|e| {
-            let _ = fs::remove_file(&part_path);
-            e.to_string()
-        })?;
+        let chunk = chunk_res.map_err(|e| format!("Download interrupted ({downloaded_bytes} bytes saved, click Download again to resume): {e}"))?;
+        file.write_all(&chunk).map_err(|e| e.to_string())?;
+        downloaded_bytes += chunk.len() as u64;
+        if last_emit.elapsed() >= Duration::from_millis(200) {
+            last_emit = Instant::now();
+            on_progress(crate::types::AsrModelDownloadProgress {
+                model: normalized.into(),
+                downloaded_bytes,
+                total_bytes,
+            });
+        }
     }
     let _ = file.flush();
     drop(file);
     fs::rename(&part_path, &final_path).map_err(|e| e.to_string())?;
-    Ok(check_asr_model_status(data_dir, model_name))
+    on_progress(crate::types::AsrModelDownloadProgress {
+        model: normalized.into(),
+        downloaded_bytes,
+        total_bytes: Some(downloaded_bytes),
+    });
+    Ok(check_asr_model_status(data_dir, normalized))
 }
 
 async fn transcribe_chunk_local_whisper(
@@ -630,13 +763,18 @@ async fn transcribe_chunk_local_whisper(
             "Local Whisper CLI is not installed (`brew install whisper-cpp`), or switch Settings › Transcription to an OpenAI-compatible ASR endpoint.".into(),
         );
     };
-    let (file_name, _) = whisper_model_filename(model_name);
-    let model_path = data_dir.join("models").join(file_name);
-    if !model_path.is_file() {
+    let (file_names, _) = whisper_model_candidates(model_name);
+    let models_dir = data_dir.join("models");
+    let Some(model_path) = file_names
+        .iter()
+        .map(|f| models_dir.join(f))
+        .find(|p| p.is_file())
+    else {
         return Err(format!(
-            "Local Whisper model ({file_name}) is not downloaded yet. Download it in Settings › Transcription first."
+            "Local Whisper model ({}) is not downloaded yet. Download it in Settings › Transcription first.",
+            file_names[0]
         ));
-    }
+    };
 
     let tmp_dir = data_dir.join("tmp-asr");
     fs::create_dir_all(&tmp_dir).map_err(|e| e.to_string())?;

@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useState } from "react";
 import { Button, Kbd, NumberField, Segment, Segmented, Sheet, SheetDialog, Switch, TextField } from "@read/ui";
-import type { AgentStatus, AsrModelStatus, AsrProvider, Settings, SettingsPatch, StorageUsage } from "../../shared/contracts";
+import type { AgentStatus, AsrModelDownloadProgress, AsrModelStatus, AsrProvider, Settings, SettingsPatch, StorageUsage } from "../../shared/contracts";
 import { AboutSection } from "./AboutSection";
 import { FeedbackSection } from "./FeedbackSection";
 import { agentStore, needsSignIn, useAgentStatus } from "./agentStore";
@@ -89,6 +89,7 @@ export function SettingsSheet({ open, onClose, section, onOpenLink }: { open: bo
   const [usage, setUsage] = useState<{ value?: StorageUsage; error?: string }>({});
   const [asrModelInfo, setAsrModelInfo] = useState<AsrModelStatus | undefined>(undefined);
   const [downloadingModel, setDownloadingModel] = useState(false);
+  const [downloadProgress, setDownloadProgress] = useState<AsrModelDownloadProgress | undefined>(undefined);
   const [asrModelError, setAsrModelError] = useState<string | undefined>(undefined);
   const [asrTest, setAsrTest] = useState<{ busy?: boolean; ok?: string; error?: string } | undefined>(undefined);
   // Text fields are edited locally and saved on blur / Enter, so a half-typed path is not rejected mid-way.
@@ -211,16 +212,28 @@ export function SettingsSheet({ open, onClose, section, onOpenLink }: { open: bo
   const downloadWhisperModel = async () => {
     if (!settings) return;
     setDownloadingModel(true);
+    setDownloadProgress(undefined);
     setAsrModelError(undefined);
+    const unsub = read.onAsrModelProgress?.((progress) => {
+      setDownloadProgress(progress);
+    });
     try {
       const model = settings.localWhisperModel ?? "base";
       const status = await read.downloadAsrModel(model);
       setAsrModelInfo(status);
       read.storageUsage().then((value) => setUsage({ value })).catch(() => undefined);
     } catch (cause: unknown) {
-      setAsrModelError(cause instanceof Error ? cause.message : "Could not download Whisper model.");
+      const message =
+        cause instanceof Error
+          ? cause.message
+          : typeof cause === "string" && cause.trim()
+            ? cause
+            : "Could not download Whisper model.";
+      setAsrModelError(message);
     } finally {
+      unsub?.();
       setDownloadingModel(false);
+      setDownloadProgress(undefined);
     }
   };
 
@@ -358,8 +371,10 @@ export function SettingsSheet({ open, onClose, section, onOpenLink }: { open: bo
                 <div className="flex flex-wrap items-center gap-2 pt-1 text-[12.5px] text-label-2">
                   <span>
                     {asrModelInfo?.downloaded
-                      ? `Downloaded${asrModelInfo.sizeBytes ? ` (${bytesLabel(asrModelInfo.sizeBytes)})` : ""}${asrModelInfo.localRuntimeReady ? " · whisper-cli ready" : " · install whisper-cli to run"}`
-                      : "Weights not downloaded yet."}
+                      ? `Downloaded${asrModelInfo.sizeBytes ? ` (${bytesLabel(asrModelInfo.sizeBytes)})` : ""}${asrModelInfo.localRuntimeReady ? " · whisper-cli ready" : " · install whisper-cli (`brew install whisper-cpp`) to run"}`
+                      : downloadingModel && downloadProgress
+                        ? `Downloading ${bytesLabel(downloadProgress.downloadedBytes)}${downloadProgress.totalBytes ? ` / ${bytesLabel(downloadProgress.totalBytes)} (${Math.min(100, Math.round((downloadProgress.downloadedBytes / downloadProgress.totalBytes) * 100))}%)` : ""}…`
+                        : "Weights not downloaded yet."}
                   </span>
                   {!asrModelInfo?.downloaded ? (
                     <Button size="sm" isDisabled={!settings || downloadingModel} onPress={() => void downloadWhisperModel()}>
