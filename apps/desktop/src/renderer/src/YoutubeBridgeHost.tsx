@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { formatMediaClock } from "@read/ui";
 import { MEDIA_SCHEME, PLAYER_SCHEME } from "../../shared/contracts";
-import { isPreview } from "./api";
+import { isPreview, read } from "./api";
 import { activeChapterOf, mediaStore, useMediaPlayback } from "./mediaStore";
 
 export const VIDEO_DOCK_SLOT_ID = "quire-video-dock-slot";
@@ -18,6 +18,26 @@ export function YoutubeBridgeHost() {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [dockTarget, setDockTarget] = useState<HTMLElement | null>(null);
+  const [youtubeConnected, setYoutubeConnected] = useState(false);
+
+  useEffect(() => {
+    if (isPreview) return;
+    let cancelled = false;
+    const syncAuth = () => {
+      read
+        .getSettings()
+        .then((s) => {
+          if (!cancelled) setYoutubeConnected(Boolean(s.youtubeConnected));
+        })
+        .catch(() => undefined);
+    };
+    syncAuth();
+    const unsub = read.onLibraryChanged(syncAuth);
+    return () => {
+      cancelled = true;
+      unsub();
+    };
+  }, []);
 
   const isVideoActive = Boolean(
     playback.materialId &&
@@ -137,7 +157,7 @@ export function YoutubeBridgeHost() {
     <iframe
       ref={iframeRef}
       title="Companion video player"
-      src={`${PLAYER_SCHEME}://youtube/${playback.videoId}`}
+      src={`${PLAYER_SCHEME}://youtube/${playback.videoId}${youtubeConnected ? "?auth=1" : ""}`}
       allow="autoplay"
       className="h-full w-full border-0"
     />

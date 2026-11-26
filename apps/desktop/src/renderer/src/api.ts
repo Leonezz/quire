@@ -151,6 +151,8 @@ const browserPreview: ReadApi = {
   asrModelStatus: async () => ({ model: "base", downloaded: false, localRuntimeReady: false }),
   downloadAsrModel: async () => { throw new Error("Downloading local Whisper models requires the desktop app."); },
   testAsrConnection: async () => { throw new Error("Testing ASR endpoints requires the desktop app."); },
+  signInYoutube: async () => { throw new Error("Signing in to YouTube requires the desktop app."); },
+  signOutYoutube: async () => previewM3.getSettings(),
 };
 
 export const read: ReadApi = typeof window !== "undefined" && "read" in window && window.read ? window.read : browserPreview;

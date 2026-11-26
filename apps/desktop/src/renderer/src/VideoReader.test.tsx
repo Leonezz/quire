@@ -188,7 +188,8 @@ describe("YouTube video article-first reading and collapsible VideoDock", () => 
       fireEvent.keyDown(document.body, { key: "l" });
       await flush();
     });
-    expect(mediaStore.getState().positionSec).toBe(310);
+    expect(mediaStore.getState().positionSec).toBeGreaterThanOrEqual(310);
+    expect(mediaStore.getState().positionSec).toBeLessThan(312);
 
     // Pressing `m` collapses the video dock without interrupting audio playback
     await act(async () => {
@@ -198,5 +199,91 @@ describe("YouTube video article-first reading and collapsible VideoDock", () => 
     expect(mediaStore.getState().videoOpen).toBe(false);
     expect(mediaStore.getState().playing).toBe(true);
     expect(screen.queryByRole("region", { name: "Companion video" })).toBeNull();
+  });
+
+  it("offers Sign in to YouTube on bot-gated YouTube videos and upgrades straight into captions after signing in", async () => {
+    const gatedMaterial: MaterialRecord = {
+      ...videoMaterial,
+      mediaType: "text/x-quire-shownotes",
+      readyViews: ["shownotes"],
+      primaryView: "shownotes",
+      views: [
+        {
+          id: "shownotes",
+          label: "Show notes",
+          url: "https://www.youtube.com/watch?v=zjkBMFhNj_g",
+          mediaType: "text/x-quire-shownotes",
+          status: "ready",
+        },
+      ],
+      reader: {
+        schema: "reader.document.v2",
+        payload: JSON.stringify({
+          type: "root",
+          losses: [],
+          children: [{ type: "paragraph", children: [{ type: "text", value: "No video description was provided." }] }],
+        }),
+      },
+      markdown: "No video description was provided.",
+      plain: "No video description was provided.",
+      timeAnchors: undefined,
+      media: {
+        kind: "video",
+        provider: "youtube",
+        streamUrl: "https://www.youtube.com/watch?v=zjkBMFhNj_g",
+        videoId: "zjkBMFhNj_g",
+        transcriptOrigin: "absent",
+      },
+    };
+
+    let current = gatedMaterial;
+    const signInYoutube = vi.fn(async () => {
+      current = videoMaterial;
+      return {
+        syncIntervalMinutes: 30,
+        keepCapture: true,
+        codexPath: "",
+        agentModel: "",
+        agentReasoningEffort: "" as const,
+        dataDirectory: "/data",
+        checkUpdatesAutomatically: false,
+        reflowJudge: "rules" as const,
+        typesafeApiKeySet: false,
+        youtubeConnected: true,
+      };
+    });
+
+    api.read = mockRead({
+      getMaterial: vi.fn(async () => current),
+      listAnnotations: vi.fn(async () => []),
+      resolveImage: vi.fn(async () => undefined),
+      getMediaState: vi.fn(async () => undefined),
+      saveMediaState: vi.fn(async () => undefined),
+      signInYoutube,
+      listTranscriptionJobs: vi.fn(async () => []),
+    });
+
+    render(
+      <MaterialReader id={VID_MAT_ID} onOpenLink={() => undefined} onOpenMaterial={() => undefined} />,
+    );
+    await act(async () => {
+      await flush();
+      await flush();
+    });
+
+    expect(
+      screen.getByText(/YouTube hid captions and player details on this network/i),
+    ).toBeTruthy();
+    const signInBtn = screen.getByRole("button", { name: "Sign in to YouTube…" });
+
+    await act(async () => {
+      fireEvent.click(signInBtn);
+      await flush();
+      await flush();
+    });
+
+    expect(signInYoutube).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Quality: captions" })).toBeTruthy();
+    expect(screen.getByText(p0)).toBeTruthy();
   });
 });

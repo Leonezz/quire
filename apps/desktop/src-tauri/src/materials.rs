@@ -1075,6 +1075,7 @@ pub struct MaterialStore {
     normalizer: Arc<dyn Normalizer>,
     keep_capture: Arc<dyn Fn() -> bool + Send + Sync>,
     reflow_judge: Arc<dyn Fn() -> Result<(String, Option<String>), String> + Send + Sync>,
+    youtube_cookies: Arc<dyn Fn() -> Option<String> + Send + Sync>,
     figures: FigureStore,
     identities: Mutex<IdentityIndex>,
 }
@@ -1212,9 +1213,18 @@ impl MaterialStore {
             normalizer,
             keep_capture,
             reflow_judge,
+            youtube_cookies: Arc::new(|| None),
             figures,
             identities: Mutex::new(IdentityIndex::default()),
         }
+    }
+
+    pub fn with_youtube_cookies(
+        mut self,
+        provider: Arc<dyn Fn() -> Option<String> + Send + Sync>,
+    ) -> Self {
+        self.youtube_cookies = provider;
+        self
     }
 
     pub fn dir(&self) -> PathBuf {
@@ -3023,20 +3033,38 @@ impl MaterialStore {
     ) -> Result<OpenUrlResult, (String, String)> {
         let watch_url = crate::youtube::canonical_youtube_watch_url(video_id);
         let parsed_watch = Url::parse(&watch_url).map_err(|_| ("URL_INVALID".into(), "Invalid YouTube URL.".into()))?;
-        if let Some(existing) = self.find_by_url(&parsed_watch).map_err(|e| ("NORMALIZE_FAILED".into(), e))? {
-            if existing.media.is_some() && !is_legacy_collapsed_shownotes(&existing) {
+        let yt_cookies = (self.youtube_cookies)();
+        let yt_cookie_hdr = yt_cookies
+            .as_deref()
+            .and_then(crate::youtube::cookie_header_for_youtube);
+        let previous = self.find_by_url(&parsed_watch).map_err(|e| ("NORMALIZE_FAILED".into(), e))?;
+        if let Some(ref existing) = previous {
+            let needs_cookie_upgrade = yt_cookie_hdr.is_some()
+                && existing.media.as_ref().is_some_and(|m| {
+                    m.provider == "youtube"
+                        && m.transcript_origin == "absent"
+                        && m.duration_sec.is_none()
+                });
+            if existing.media.is_some() && !is_legacy_collapsed_shownotes(existing) && !needs_cookie_upgrade {
                 return self
-                    .existing_result(existing, override_meta.as_ref(), &[requested_url.to_string(), watch_url])
+                    .existing_result(existing.clone(), override_meta.as_ref(), &[requested_url.to_string(), watch_url])
                     .await
                     .map_err(|e| ("NORMALIZE_FAILED".into(), e));
             }
         }
 
-        let id = material_id_of(&parsed_watch);
+        let id = previous
+            .as_ref()
+            .map(|p| p.id.clone())
+            .unwrap_or_else(|| material_id_of(&parsed_watch));
         let fetched_at = now_iso();
-        let mut yt = crate::youtube::fetch_youtube_watch_metadata(&self.http, video_id)
-            .await
-            .map_err(|e| (e.code, e.message))?;
+        let mut yt = crate::youtube::fetch_youtube_watch_metadata_with_cookies(
+            &self.http,
+            video_id,
+            yt_cookies.as_deref(),
+        )
+        .await
+        .map_err(|e| (e.code, e.message))?;
 
         // 1. Build video Show notes view from video description (or Atom feed content)
         let mut notes_reader: Option<ReaderPayload> = None;
@@ -3173,7 +3201,14 @@ impl MaterialStore {
                 let Ok(cu) = assert_public_http_url(candidate_url) else {
                     continue;
                 };
-                let Ok(cap_page) = fetch_page(&self.http, &cu, "*/*").await else {
+                let Ok(cap_page) = crate::youtube::fetch_youtube_page_with_cookies(
+                    &self.http,
+                    &cu,
+                    "*/*",
+                    yt_cookie_hdr.as_deref(),
+                )
+                .await
+                else {
                     continue;
                 };
                 let raw_text = String::from_utf8_lossy(&cap_page.bytes).to_string();
@@ -3308,8 +3343,8 @@ impl MaterialStore {
             origin: origin.to_string(),
             media_type,
             quality: ContentNormalizationQuality::default(),
-            lineage: None,
-            rebuilt_as: None,
+            lineage: previous.as_ref().and_then(|p| p.lineage.clone()),
+            rebuilt_as: previous.as_ref().and_then(|p| p.rebuilt_as.clone()),
             artifact: None,
             aliases: None,
             canonical_url: None,
@@ -3320,7 +3355,7 @@ impl MaterialStore {
                 stream_url: watch_url,
                 video_id: Some(yt.video_id),
                 duration_sec: yt.duration_sec,
-                cached_bytes: None,
+                cached_bytes: previous.as_ref().and_then(|p| p.media.as_ref()).and_then(|m| m.cached_bytes),
                 transcript_origin,
                 chapters: if yt.chapters.is_empty() { None } else { Some(yt.chapters) },
             }),
@@ -3340,6 +3375,9 @@ impl MaterialStore {
             artifact_source: None,
         };
         rec.extracted = Some(fallback_extracted_for(&rec));
+        if let Some(ref prev) = previous {
+            rec = with_names_of(prev, rec);
+        }
         rec = with_aliases(rec, &[requested_url.to_string()]);
         let saved = self.save_stored(rec).map_err(|e| ("NORMALIZE_FAILED".into(), e))?;
         Ok(OpenUrlResult::success(

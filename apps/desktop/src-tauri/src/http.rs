@@ -680,6 +680,14 @@ async fn detect_apple_podcast(
 }
 
 pub async fn detect_source(client: &reqwest::Client, input: &str) -> Result<SourceDetection, FetchError> {
+    detect_source_with_cookies(client, input, None).await
+}
+
+pub async fn detect_source_with_cookies(
+    client: &reqwest::Client,
+    input: &str,
+    youtube_cookies: Option<&str>,
+) -> Result<SourceDetection, FetchError> {
     let value = input.trim();
     if let Some(category) = arxiv_category_from_input(value) {
         return Ok(SourceDetection::Arxiv {
@@ -697,7 +705,7 @@ pub async fn detect_source(client: &reqwest::Client, input: &str) -> Result<Sour
         return detect_apple_podcast(client, &apple, url.as_str()).await;
     }
     if let Some(yt_target) = crate::youtube::classify_youtube_url(&url) {
-        return crate::youtube::detect_youtube_target(client, yt_target).await;
+        return crate::youtube::detect_youtube_target_with_cookies(client, yt_target, youtube_cookies).await;
     }
     if is_audio_stream_url(&url) {
         let seg_title = url

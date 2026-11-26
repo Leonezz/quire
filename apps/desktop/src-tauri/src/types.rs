@@ -824,6 +824,8 @@ pub struct Settings {
     pub asr_api_key_set: bool,
     pub local_whisper_model: String,
     pub remove_cached_media_after_finish: bool,
+    #[serde(default)]
+    pub youtube_connected: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]

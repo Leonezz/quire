@@ -223,6 +223,8 @@ if (isTauriRuntime() && !window.read) {
     downloadAsrModel: (model) => call("asr_model_download", { model }),
     onAsrModelProgress: (listener) => subscribePayload<AsrModelDownloadProgress>("asr:model:progress", listener),
     testAsrConnection: () => call("asr_test_connection"),
+    signInYoutube: () => call("youtube_sign_in"),
+    signOutYoutube: () => call("youtube_sign_out"),
   };
 
   window.read = api;

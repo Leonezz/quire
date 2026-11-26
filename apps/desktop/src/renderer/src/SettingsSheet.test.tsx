@@ -251,6 +251,34 @@ describe("SettingsSheet › Feedback", () => {
   });
 });
 
+describe("SettingsSheet › Sources › YouTube account", () => {
+  it("signs in to YouTube and disconnects cleanly from Settings › Sources", async () => {
+    engine(base);
+    api.read.signInYoutube = vi.fn(async () => ({ ...base, youtubeConnected: true }));
+    api.read.signOutYoutube = vi.fn(async () => ({ ...base, youtubeConnected: false }));
+
+    render(<SettingsSheet open onClose={() => undefined} section="sources" onOpenLink={() => undefined} />);
+    await act(flush);
+
+    expect(screen.getByText("Not signed in")).toBeTruthy();
+    const signInBtn = screen.getByRole("button", { name: "Sign in to YouTube…" });
+    await act(async () => {
+      fireEvent.click(signInBtn);
+      await flush();
+    });
+    expect(api.read.signInYoutube).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Signed in")).toBeTruthy();
+
+    const disconnectBtn = screen.getByRole("button", { name: "Disconnect" });
+    await act(async () => {
+      fireEvent.click(disconnectBtn);
+      await flush();
+    });
+    expect(api.read.signOutYoutube).toHaveBeenCalledTimes(1);
+    expect(screen.getByText("Not signed in")).toBeTruthy();
+  });
+});
+
 describe("SettingsSheet › Keyboard", () => {
   it("lists the report shortcut with the reader's keys", async () => {
     engine(base);

@@ -1229,7 +1229,14 @@ impl TranscriptionService {
                         .clone()
                         .or_else(|| crate::youtube::parse_youtube_video_id(&media.stream_url))
                         .ok_or_else(|| "Missing YouTube video id.".to_string())?;
-                    crate::youtube::resolve_ytdlp_stream(&vid, None).await?
+                    let yt_cookies = self.settings.optional_secret("youtubeCookies").ok().flatten();
+                    crate::youtube::resolve_ytdlp_stream_with_cookies(
+                        &vid,
+                        None,
+                        yt_cookies.as_deref(),
+                        Some(&work_dir),
+                    )
+                    .await?
                 } else {
                     media.stream_url.clone()
                 };

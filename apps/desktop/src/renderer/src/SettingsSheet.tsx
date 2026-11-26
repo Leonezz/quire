@@ -92,6 +92,7 @@ export function SettingsSheet({ open, onClose, section, onOpenLink }: { open: bo
   const [downloadProgress, setDownloadProgress] = useState<AsrModelDownloadProgress | undefined>(undefined);
   const [asrModelError, setAsrModelError] = useState<string | undefined>(undefined);
   const [asrTest, setAsrTest] = useState<{ busy?: boolean; ok?: string; error?: string } | undefined>(undefined);
+  const [youtubeAuth, setYoutubeAuth] = useState<{ busy?: boolean; error?: string } | undefined>(undefined);
   // Text fields are edited locally and saved on blur / Enter, so a half-typed path is not rejected mid-way.
   const [drafts, setDrafts] = useState<{
     codexPath: string;
@@ -115,7 +116,7 @@ export function SettingsSheet({ open, onClose, section, onOpenLink }: { open: bo
     if (!open) return;
     let cancelled = false;
     setLoadError(undefined); setErrors({}); setSaved(undefined); setCopied(false); setUsage({});
-    setAsrModelInfo(undefined); setAsrModelError(undefined); setAsrTest(undefined);
+    setAsrModelInfo(undefined); setAsrModelError(undefined); setAsrTest(undefined); setYoutubeAuth(undefined);
     read.getSettings()
       .then((loaded) => {
         if (cancelled) return;
@@ -247,6 +248,33 @@ export function SettingsSheet({ open, onClose, section, onOpenLink }: { open: bo
     }
   };
 
+  const connectYoutube = async () => {
+    setYoutubeAuth({ busy: true });
+    try {
+      const next = await read.signInYoutube();
+      setSettings(next);
+      setYoutubeAuth(undefined);
+    } catch (cause: unknown) {
+      const msg = cause instanceof Error ? cause.message : "Could not sign in to YouTube.";
+      if (/cancelled/i.test(msg)) {
+        setYoutubeAuth(undefined);
+      } else {
+        setYoutubeAuth({ error: msg });
+      }
+    }
+  };
+
+  const disconnectYoutube = async () => {
+    setYoutubeAuth({ busy: true });
+    try {
+      const next = await read.signOutYoutube();
+      setSettings(next);
+      setYoutubeAuth(undefined);
+    } catch (cause: unknown) {
+      setYoutubeAuth({ error: cause instanceof Error ? cause.message : "Could not disconnect YouTube." });
+    }
+  };
+
   return (
     <Sheet isOpen={open} onOpenChange={(next) => { if (!next) onClose(); }} size="lg">
       <SheetDialog title="Settings" className="max-h-[84vh] gap-3">
@@ -265,6 +293,26 @@ export function SettingsSheet({ open, onClose, section, onOpenLink }: { open: bo
               {/* The number field commits on blur, Enter and the steppers (never per keystroke), so its onChange is the save. */}
               <NumberField aria-label="Sync interval in minutes" value={drafts.syncIntervalMinutes} onChange={(value) => { setDrafts((current) => ({ ...current, syncIntervalMinutes: value })); void save("syncIntervalMinutes", value); }}
                 formatOptions={{ maximumFractionDigits: 0 }} unit="min" isDisabled={!settings} errorMessage={errors.syncIntervalMinutes} description={savedNote("syncIntervalMinutes")} />
+            </Row>
+            <Row label="YouTube account" hint="Optional sign-in when your network or proxy triggers YouTube bot checks; unlocks captions, keyframes and audio.">
+              <div className="flex flex-wrap items-center gap-2 pt-2 text-[13px] text-label">
+                {settings?.youtubeConnected ? (
+                  <>
+                    <span>Signed in</span>
+                    <Button size="sm" variant="quiet" isDisabled={youtubeAuth?.busy === true} onPress={() => void disconnectYoutube()}>
+                      {youtubeAuth?.busy ? "Disconnecting…" : "Disconnect"}
+                    </Button>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-label-2">Not signed in</span>
+                    <Button size="sm" isDisabled={!settings || youtubeAuth?.busy === true} onPress={() => void connectYoutube()}>
+                      {youtubeAuth?.busy ? "Waiting for sign-in…" : "Sign in to YouTube…"}
+                    </Button>
+                  </>
+                )}
+              </div>
+              {youtubeAuth?.error ? <p role="alert" className="t-text-in m-0 text-[12px] text-red-text">{youtubeAuth.error}</p> : null}
             </Row>
           </Section>
 

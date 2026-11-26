@@ -159,12 +159,37 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
   const [rebuildSession, setRebuildSession] = useState<string | undefined>(undefined);
   const [rebuildPhase, setRebuildPhase] = useState<{ kind: "idle" } | { kind: "starting" } | { kind: "failed"; error?: string | undefined }>({ kind: "idle" });
   const [cleanupError, setCleanupError] = useState<string | undefined>(undefined);
+  const [youtubeSignIn, setYoutubeSignIn] = useState<{ busy?: boolean; error?: string } | undefined>(undefined);
   const rebuildRun = useAgentRun(rebuildSession);
-  useEffect(() => { setRebuildSession(undefined); setRebuildPhase({ kind: "idle" }); setCleanupError(undefined); }, [material.id]);
+  useEffect(() => { setRebuildSession(undefined); setRebuildPhase({ kind: "idle" }); setCleanupError(undefined); setYoutubeSignIn(undefined); }, [material.id]);
   const rebuildOutcome = rebuildRun?.outcome;
   useEffect(() => { if (rebuildOutcome && rebuildOutcome.status !== "done") setRebuildPhase({ kind: "failed", error: rebuildOutcome.message }); }, [rebuildOutcome]);
   const rebuild: RebuildState = rebuildPhase.kind === "starting" || (rebuildRun !== undefined && rebuildOutcome === undefined) ? "running" : rebuildPhase.kind === "failed" ? "failed" : "idle";
   const transcription = useTranscriptionJob(hasMedia ? material.id : undefined);
+  const isYoutubeMaterial = material.media?.provider === "youtube";
+  const isBotGatedYoutube = isYoutubeMaterial && material.media?.transcriptOrigin === "absent" && material.media?.durationSec === undefined;
+  const isYoutubeAuthError = Boolean(transcription.error && /(sign in to youtube|not a bot|youtube account)/i.test(transcription.error));
+  const signInAndRefreshYoutube = useCallback(async () => {
+    setYoutubeSignIn({ busy: true });
+    try {
+      await read.signInYoutube();
+      const rec = await read.getMaterial(material.id);
+      if (rec) {
+        onMaterialSaved(rec);
+        if (rec.readyViews.includes("transcript") && views.view !== "transcript") {
+          views.select("transcript");
+        }
+      }
+      setYoutubeSignIn(undefined);
+    } catch (cause: unknown) {
+      const msg = cause instanceof Error ? cause.message : "Could not sign in to YouTube.";
+      if (/cancelled/i.test(msg)) {
+        setYoutubeSignIn(undefined);
+      } else {
+        setYoutubeSignIn({ error: msg });
+      }
+    }
+  }, [material.id, onMaterialSaved, views]);
   useEffect(() => {
     const completedChunks = transcription.job?.completedChunks ?? 0;
     if (transcription.completedNonce === undefined && completedChunks === 0) return;
@@ -518,14 +543,33 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
                 ) : material.media?.transcriptOrigin === "absent" ? (
                   <div role="status" className="mb-6 grid gap-2 rounded-card bg-fill px-3.5 py-2.5 text-[12.5px] text-label-2">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span>No publisher transcript came with this episode. Listen below while reading the show notes.</span>
-                      <Button size="sm" onPress={() => void transcribeStore.start(material.id)}>Transcribe</Button>
+                      <span>
+                        {isBotGatedYoutube
+                          ? "YouTube hid captions and player details on this network. Sign in to YouTube to load captions, or transcribe the audio."
+                          : "No publisher transcript came with this episode. Listen below while reading the show notes."}
+                      </span>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {isBotGatedYoutube ? (
+                          <Button size="sm" variant="primary" isDisabled={youtubeSignIn?.busy === true} onPress={() => void signInAndRefreshYoutube()}>
+                            {youtubeSignIn?.busy ? "Waiting for sign-in…" : "Sign in to YouTube…"}
+                          </Button>
+                        ) : null}
+                        <Button size="sm" onPress={() => void transcribeStore.start(material.id)}>Transcribe</Button>
+                      </div>
                     </div>
                     {transcription.error ? (
                       <div role="alert" className="flex flex-wrap items-center gap-2 text-red-text">
                         <span>{transcription.error}</span>
-                        {onOpenSettings ? <Button size="sm" variant="quiet" onPress={() => onOpenSettings("transcription")}>Settings…</Button> : null}
+                        {isYoutubeAuthError && !isBotGatedYoutube ? (
+                          <Button size="sm" isDisabled={youtubeSignIn?.busy === true} onPress={() => void signInAndRefreshYoutube()}>
+                            {youtubeSignIn?.busy ? "Waiting for sign-in…" : "Sign in to YouTube…"}
+                          </Button>
+                        ) : null}
+                        {onOpenSettings ? <Button size="sm" variant="quiet" onPress={() => onOpenSettings(isYoutubeAuthError ? "sources" : "transcription")}>Settings…</Button> : null}
                       </div>
+                    ) : null}
+                    {youtubeSignIn?.error ? (
+                      <p role="alert" className="m-0 text-red-text">{youtubeSignIn.error}</p>
                     ) : null}
                   </div>
                 ) : material.media?.transcriptOrigin === "auto_captions" || material.media?.transcriptOrigin === "local_asr" || material.media?.transcriptOrigin === "cloud_asr" ? (

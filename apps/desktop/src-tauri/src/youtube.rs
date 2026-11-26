@@ -1,13 +1,424 @@
-use crate::http::{assert_public_http_url, fetch_page, FetchError, PAGE_ACCEPT};
-use crate::types::{MediaChapter, SourceDetection};
+use crate::http::{assert_public_http_url, fetch_page, is_private_host, FetchError, FetchedPage, PAGE_ACCEPT};
+use crate::settings::SettingsStore;
+use crate::types::{MediaChapter, Settings, SourceDetection};
+use futures_util::StreamExt;
+use rand::RngCore;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-use std::path::Path;
-use std::time::Duration;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tauri::http::{header, Response, StatusCode};
+use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tokio::process::Command;
 use url::Url;
+
+const SAFARI_MACOS_UA: &str =
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Safari/605.1.15";
+const YOUTUBE_AUTH_WINDOW_LABEL: &str = "youtube-auth";
+const YOUTUBE_LOGIN_URL: &str = "https://accounts.google.com/ServiceLogin?service=youtube&uilel=3&passive=true&hl=en&continue=https%3A%2F%2Fwww.youtube.com%2F";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct StoredYoutubeCookie {
+    pub name: String,
+    pub value: String,
+    pub domain: String,
+    pub path: String,
+    pub secure: bool,
+    pub http_only: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub expires_unix: Option<i64>,
+}
+
+pub fn is_youtube_cookie_domain(domain: &str) -> bool {
+    let bare = domain.trim().trim_start_matches('.').to_ascii_lowercase();
+    bare == "youtube.com" || bare.ends_with(".youtube.com")
+}
+
+pub fn is_youtube_or_google_cookie_domain(domain: &str) -> bool {
+    let bare = domain.trim().trim_start_matches('.').to_ascii_lowercase();
+    is_youtube_cookie_domain(&bare) || bare == "google.com" || bare.ends_with(".google.com")
+}
+
+pub fn has_youtube_auth_cookies(cookies: &[StoredYoutubeCookie]) -> bool {
+    let yt_only: Vec<&StoredYoutubeCookie> = cookies
+        .iter()
+        .filter(|c| is_youtube_cookie_domain(&c.domain) && !c.value.trim().is_empty())
+        .collect();
+    let has_primary = yt_only.iter().any(|c| {
+        matches!(
+            c.name.as_str(),
+            "SAPISID" | "__Secure-1PSID" | "__Secure-3PSID" | "__Secure-1PAPISID" | "__Secure-3PAPISID"
+        )
+    });
+    let has_session = yt_only.iter().any(|c| {
+        matches!(
+            c.name.as_str(),
+            "LOGIN_INFO" | "SID" | "HSID" | "SSID" | "__Secure-1PSIDTS" | "__Secure-3PSIDTS"
+        )
+    });
+    has_primary && has_session
+}
+
+fn current_unix_seconds() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+pub fn cookie_header_for_youtube(cookies_json: &str) -> Option<String> {
+    let parsed: Vec<StoredYoutubeCookie> = serde_json::from_str(cookies_json).ok()?;
+    let now = current_unix_seconds();
+    let mut seen = std::collections::HashSet::new();
+    let mut pairs = Vec::new();
+    for c in parsed {
+        if !is_youtube_cookie_domain(&c.domain) {
+            continue;
+        }
+        let bare = c.domain.trim().trim_start_matches('.').to_ascii_lowercase();
+        if bare != "youtube.com" && bare != "www.youtube.com" {
+            continue;
+        }
+        if let Some(exp) = c.expires_unix {
+            if exp > 0 && exp + 60 < now {
+                continue;
+            }
+        }
+        let name = c.name.trim();
+        let value = c.value.trim();
+        if name.is_empty()
+            || name.contains([';', '\r', '\n', ' ', '\t'])
+            || value.contains([';', '\r', '\n'])
+        {
+            continue;
+        }
+        if seen.insert(name.to_string()) {
+            pairs.push(format!("{name}={value}"));
+        }
+    }
+    if pairs.is_empty() {
+        None
+    } else {
+        Some(pairs.join("; "))
+    }
+}
+
+pub fn format_netscape_cookies_txt(cookies_json: &str, now_unix: i64) -> Option<String> {
+    let parsed: Vec<StoredYoutubeCookie> = serde_json::from_str(cookies_json).ok()?;
+    let mut lines = Vec::new();
+    for c in parsed {
+        if !is_youtube_or_google_cookie_domain(&c.domain) {
+            continue;
+        }
+        if let Some(exp) = c.expires_unix {
+            if exp > 0 && exp + 60 < now_unix {
+                continue;
+            }
+        }
+        let raw_dom = c.domain.trim().to_ascii_lowercase();
+        if raw_dom.is_empty() || raw_dom.contains(['\t', '\r', '\n']) {
+            continue;
+        }
+        // MozillaCookieJar requires `domain.startswith('.') == (include_subdomains == 'TRUE')`.
+        let domain = if raw_dom == "youtube.com" || raw_dom == "google.com" {
+            format!(".{raw_dom}")
+        } else {
+            raw_dom
+        };
+        let include_subdomains = if domain.starts_with('.') { "TRUE" } else { "FALSE" };
+        let path = if c.path.trim().is_empty() || c.path.contains(['\t', '\r', '\n']) {
+            "/"
+        } else {
+            c.path.trim()
+        };
+        let secure = if c.secure { "TRUE" } else { "FALSE" };
+        let expires = c
+            .expires_unix
+            .filter(|&ts| ts > now_unix)
+            .unwrap_or(now_unix + 86_400);
+        let name = c.name.trim();
+        let value = c.value.trim();
+        if name.is_empty()
+            || name.contains(['\t', '\r', '\n'])
+            || value.contains(['\t', '\r', '\n'])
+        {
+            continue;
+        }
+        lines.push(format!(
+            "{domain}\t{include_subdomains}\t{path}\t{secure}\t{expires}\t{name}\t{value}"
+        ));
+    }
+    if lines.is_empty() {
+        return None;
+    }
+    let mut out = String::from("# Netscape HTTP Cookie File\n# Ephemeral Quire YouTube cookie file\n\n");
+    for l in lines {
+        out.push_str(&l);
+        out.push('\n');
+    }
+    Some(out)
+}
+
+fn write_temp_netscape_cookies(work_dir: &Path, cookies_json: &str) -> Option<PathBuf> {
+    let body = format_netscape_cookies_txt(cookies_json, current_unix_seconds())?;
+    fs::create_dir_all(work_dir).ok()?;
+    let mut rnd = [0u8; 8];
+    rand::thread_rng().fill_bytes(&mut rnd);
+    let hex: String = rnd.iter().map(|b| format!("{b:02x}")).collect();
+    let path = work_dir.join(format!("yt-cookies-{hex}.txt"));
+    let mut opts = OpenOptions::new();
+    opts.create_new(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.mode(0o600);
+    }
+    let mut file = opts.open(&path).ok()?;
+    if file.write_all(body.as_bytes()).is_err() {
+        let _ = fs::remove_file(&path);
+        return None;
+    }
+    let _ = file.flush();
+    Some(path)
+}
+
+fn youtube_cookie_http_client() -> &'static reqwest::Client {
+    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    CLIENT.get_or_init(|| {
+        let policy = reqwest::redirect::Policy::custom(|attempt| {
+            if attempt.previous().len() >= 8 {
+                return attempt.error("Too many redirects");
+            }
+            let next = attempt.url();
+            if next.scheme() != "https" {
+                return attempt.error("Refusing non-HTTPS redirect with YouTube session");
+            }
+            let host = next.host_str().unwrap_or("").to_ascii_lowercase();
+            let allowed = host == "youtube.com"
+                || host.ends_with(".youtube.com")
+                || host.ends_with(".googlevideo.com");
+            if !allowed || is_private_host(&host) {
+                return attempt.error("Refusing cross-domain redirect with YouTube session");
+            }
+            attempt.follow()
+        });
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(20))
+            .redirect(policy)
+            .build()
+            .expect("youtube cookie reqwest client")
+    })
+}
+
+pub async fn fetch_youtube_page_with_cookies(
+    default_client: &reqwest::Client,
+    url: &Url,
+    accept: &str,
+    cookie_header: Option<&str>,
+) -> Result<FetchedPage, FetchError> {
+    let host = url.host_str().unwrap_or("").to_ascii_lowercase();
+    let can_attach = cookie_header.is_some()
+        && url.scheme() == "https"
+        && (host == "www.youtube.com" || host == "youtube.com" || host == "m.youtube.com");
+    let Some(hdr) = cookie_header.filter(|_| can_attach) else {
+        return fetch_page(default_client, url, accept).await;
+    };
+
+    let response = youtube_cookie_http_client()
+        .get(url.clone())
+        .header(reqwest::header::ACCEPT, accept)
+        .header(reqwest::header::ACCEPT_LANGUAGE, "en-US,en;q=0.9,zh-CN;q=0.8,zh;q=0.7")
+        .header(reqwest::header::USER_AGENT, SAFARI_MACOS_UA)
+        .header(reqwest::header::REFERER, "https://www.youtube.com/")
+        .header(reqwest::header::ORIGIN, "https://www.youtube.com")
+        .header(reqwest::header::COOKIE, hdr)
+        .send()
+        .await
+        .map_err(|e| {
+            if e.is_timeout() {
+                FetchError::new("TIMEOUT", "The page took longer than 20 seconds.")
+            } else {
+                FetchError::new("NETWORK", e.to_string())
+            }
+        })?;
+
+    if !response.status().is_success() {
+        let code = response.status().as_u16();
+        return Err(FetchError::new(format!("HTTP_{code}"), format!("The page answered {code}.")));
+    }
+    let final_url = response.url().clone();
+    if let Some(h) = final_url.host_str() {
+        if is_private_host(h) {
+            return Err(FetchError::new("URL_PRIVATE", "The page redirected to a private address."));
+        }
+    }
+    let media_type = response
+        .headers()
+        .get(reqwest::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .split(';')
+        .next()
+        .unwrap_or("application/octet-stream")
+        .trim()
+        .to_lowercase();
+
+    let mut stream = response.bytes_stream();
+    let mut bytes = Vec::new();
+    while let Some(chunk) = stream.next().await {
+        let data = chunk.map_err(|e| FetchError::new("NETWORK", e.to_string()))?;
+        if bytes.len() + data.len() > crate::http::MAX_BYTES {
+            return Err(FetchError::new("PAGE_TOO_LARGE", "The page is larger than 32 MB."));
+        }
+        bytes.extend_from_slice(&data);
+    }
+    Ok(FetchedPage {
+        bytes,
+        media_type,
+        final_url: final_url.to_string(),
+    })
+}
+
+fn collect_stored_cookies(win: &tauri::WebviewWindow) -> Vec<StoredYoutubeCookie> {
+    let Ok(raw_cookies) = win.cookies() else {
+        return Vec::new();
+    };
+    raw_cookies
+        .into_iter()
+        .filter_map(|c| {
+            let domain = c.domain().unwrap_or("").trim().to_string();
+            if domain.is_empty() || !is_youtube_or_google_cookie_domain(&domain) {
+                return None;
+            }
+            let name = c.name().trim().to_string();
+            if name.is_empty() {
+                return None;
+            }
+            let expires_unix = c.expires_datetime().map(|dt| dt.unix_timestamp());
+            Some(StoredYoutubeCookie {
+                name,
+                value: c.value().to_string(),
+                domain,
+                path: c.path().unwrap_or("/").to_string(),
+                secure: c.secure().unwrap_or(true),
+                http_only: c.http_only().unwrap_or(false),
+                expires_unix,
+            })
+        })
+        .collect()
+}
+
+pub async fn sign_in_youtube_window(
+    app: &AppHandle,
+    settings: &SettingsStore,
+) -> Result<Settings, String> {
+    let login_url = Url::parse(YOUTUBE_LOGIN_URL).map_err(|e| e.to_string())?;
+    let auth_win = if let Some(existing) = app.get_webview_window(YOUTUBE_AUTH_WINDOW_LABEL) {
+        let _ = existing.show();
+        let _ = existing.set_focus();
+        existing
+    } else {
+        WebviewWindowBuilder::new(app, YOUTUBE_AUTH_WINDOW_LABEL, WebviewUrl::External(login_url))
+            .title("Sign in to YouTube — Quire")
+            .inner_size(520.0, 680.0)
+            .min_inner_size(420.0, 520.0)
+            .resizable(true)
+            .center()
+            .build()
+            .map_err(|e| format!("Could not open YouTube sign-in window: {e}"))?
+    };
+    let _ = auth_win.set_focus();
+
+    let started = Instant::now();
+    let timeout = Duration::from_secs(300);
+
+    while started.elapsed() < timeout {
+        tokio::time::sleep(Duration::from_millis(750)).await;
+
+        let Some(win) = app.get_webview_window(YOUTUBE_AUTH_WINDOW_LABEL) else {
+            // Window was closed by the user — check shared WKWebsiteDataStore via main window once
+            // in case they closed right after finishing login.
+            if let Some(main_win) = app.get_webview_window("main") {
+                let captured = tokio::task::spawn_blocking(move || collect_stored_cookies(&main_win))
+                    .await
+                    .unwrap_or_default();
+                if has_youtube_auth_cookies(&captured) {
+                    let json = serde_json::to_string(&captured).map_err(|e| e.to_string())?;
+                    return settings.set_youtube_cookies(Some(&json));
+                }
+            }
+            return Err("YouTube sign-in was cancelled.".into());
+        };
+
+        let on_youtube_home = win
+            .url()
+            .ok()
+            .and_then(|u| u.host_str().map(|h| h.to_ascii_lowercase()))
+            .is_some_and(|h| {
+                (h == "www.youtube.com" || h == "youtube.com" || h == "m.youtube.com")
+                    && h != "accounts.youtube.com"
+            });
+
+        let win_probe = win.clone();
+        let captured = tokio::task::spawn_blocking(move || collect_stored_cookies(&win_probe))
+            .await
+            .unwrap_or_default();
+
+        if has_youtube_auth_cookies(&captured) && on_youtube_home {
+            // Give YouTube 900ms to finish setting __Secure-1PSIDTS / LOGIN_INFO cookies after redirect.
+            tokio::time::sleep(Duration::from_millis(900)).await;
+            let final_cookies = if let Some(w2) = app.get_webview_window(YOUTUBE_AUTH_WINDOW_LABEL) {
+                let w2_probe = w2.clone();
+                let latest = tokio::task::spawn_blocking(move || collect_stored_cookies(&w2_probe))
+                    .await
+                    .unwrap_or_default();
+                let _ = w2.close();
+                if has_youtube_auth_cookies(&latest) {
+                    latest
+                } else {
+                    captured
+                }
+            } else {
+                captured
+            };
+            let json = serde_json::to_string(&final_cookies).map_err(|e| e.to_string())?;
+            return settings.set_youtube_cookies(Some(&json));
+        }
+    }
+
+    if let Some(win) = app.get_webview_window(YOUTUBE_AUTH_WINDOW_LABEL) {
+        let _ = win.close();
+    }
+    Err("YouTube sign-in timed out after 5 minutes.".into())
+}
+
+pub async fn disconnect_youtube_session(
+    app: &AppHandle,
+    settings: &SettingsStore,
+) -> Result<Settings, String> {
+    if let Some(auth_win) = app.get_webview_window(YOUTUBE_AUTH_WINDOW_LABEL) {
+        let _ = auth_win.close();
+    }
+    if let Some(main_win) = app.get_webview_window("main") {
+        let _ = tokio::task::spawn_blocking(move || {
+            if let Ok(cookies) = main_win.cookies() {
+                for c in cookies {
+                    let dom = c.domain().unwrap_or("");
+                    if is_youtube_or_google_cookie_domain(dom) {
+                        let _ = main_win.delete_cookie(c);
+                    }
+                }
+            }
+        })
+        .await;
+    }
+    settings.set_youtube_cookies(None)
+}
 
 pub const PLAYER_CSP: &str = "default-src 'none'; script-src 'unsafe-inline' https://www.youtube.com https://www.youtube-nocookie.com https://s.ytimg.com; frame-src https://www.youtube-nocookie.com https://www.youtube.com; style-src 'unsafe-inline'; img-src https://i.ytimg.com data:; connect-src https://www.youtube.com https://www.youtube-nocookie.com";
 
@@ -841,9 +1252,25 @@ pub async fn fetch_youtube_watch_metadata(
     client: &reqwest::Client,
     video_id: &str,
 ) -> Result<YoutubeWatchMetadata, FetchError> {
+    fetch_youtube_watch_metadata_with_cookies(client, video_id, None).await
+}
+
+pub async fn fetch_youtube_watch_metadata_with_cookies(
+    client: &reqwest::Client,
+    video_id: &str,
+    youtube_cookies_json: Option<&str>,
+) -> Result<YoutubeWatchMetadata, FetchError> {
+    let cookie_hdr = youtube_cookies_json.and_then(cookie_header_for_youtube);
     let watch_url = canonical_youtube_watch_url(video_id);
     let parsed_watch = assert_public_http_url(&watch_url)?;
-    let mut meta = match fetch_page(client, &parsed_watch, PAGE_ACCEPT).await {
+    let mut meta = match fetch_youtube_page_with_cookies(
+        client,
+        &parsed_watch,
+        PAGE_ACCEPT,
+        cookie_hdr.as_deref(),
+    )
+    .await
+    {
         Ok(page) => {
             let html = String::from_utf8_lossy(&page.bytes);
             parse_youtube_watch_html(&html, video_id)
@@ -895,7 +1322,14 @@ pub async fn fetch_youtube_watch_metadata(
             if let Ok(parsed_au) = assert_public_http_url(au) {
                 if let Some(YoutubeTarget::ChannelId { channel_id, .. }) = classify_youtube_url(&parsed_au) {
                     meta.channel_id = Some(channel_id);
-                } else if let Ok(ch_page) = fetch_page(client, &parsed_au, PAGE_ACCEPT).await {
+                } else if let Ok(ch_page) = fetch_youtube_page_with_cookies(
+                    client,
+                    &parsed_au,
+                    PAGE_ACCEPT,
+                    cookie_hdr.as_deref(),
+                )
+                .await
+                {
                     let ch_html = String::from_utf8_lossy(&ch_page.bytes);
                     if let Some((cid, _)) = extract_channel_id_from_html(&ch_html) {
                         meta.channel_id = Some(cid);
@@ -951,6 +1385,15 @@ pub async fn detect_youtube_target(
     client: &reqwest::Client,
     target: YoutubeTarget,
 ) -> Result<SourceDetection, FetchError> {
+    detect_youtube_target_with_cookies(client, target, None).await
+}
+
+pub async fn detect_youtube_target_with_cookies(
+    client: &reqwest::Client,
+    target: YoutubeTarget,
+    youtube_cookies_json: Option<&str>,
+) -> Result<SourceDetection, FetchError> {
+    let cookie_hdr = youtube_cookies_json.and_then(cookie_header_for_youtube);
     match target {
         YoutubeTarget::DirectFeed { feed_url, channel_id } => {
             let u = assert_public_http_url(&feed_url)?;
@@ -1011,7 +1454,7 @@ pub async fn detect_youtube_target(
         }
         YoutubeTarget::ChannelPage { page_url } => {
             let u = assert_public_http_url(&page_url)?;
-            let page = fetch_page(client, &u, PAGE_ACCEPT).await?;
+            let page = fetch_youtube_page_with_cookies(client, &u, PAGE_ACCEPT, cookie_hdr.as_deref()).await?;
             let html = String::from_utf8_lossy(&page.bytes);
             let Some((cid, title)) = extract_channel_id_from_html(&html) else {
                 return Err(FetchError::new(
@@ -1027,14 +1470,15 @@ pub async fn detect_youtube_target(
         }
         YoutubeTarget::Video { video_id, watch_url } => {
             let placeholder = format!("YouTube video {video_id}");
-            let (title, duration_sec, feed, feed_title) = match fetch_youtube_watch_metadata(client, &video_id).await {
-                Ok(meta) => {
-                    let feed = meta.channel_id.as_deref().map(youtube_channel_feed_url);
-                    let clean_title = if meta.title == placeholder { None } else { Some(meta.title) };
-                    (clean_title, meta.duration_sec, feed, meta.author)
-                }
-                Err(_) => (None, None, None, None),
-            };
+            let (title, duration_sec, feed, feed_title) =
+                match fetch_youtube_watch_metadata_with_cookies(client, &video_id, youtube_cookies_json).await {
+                    Ok(meta) => {
+                        let feed = meta.channel_id.as_deref().map(youtube_channel_feed_url);
+                        let clean_title = if meta.title == placeholder { None } else { Some(meta.title) };
+                        (clean_title, meta.duration_sec, feed, meta.author)
+                    }
+                    Err(_) => (None, None, None, None),
+                };
             Ok(SourceDetection::Episode {
                 url: watch_url,
                 media_kind: "video".into(),
@@ -1067,6 +1511,15 @@ fn augmented_gui_path() -> String {
 /// Optional Tier-2 local enhancement: uses local `yt-dlp` when present on the machine
 /// to resolve a direct audio/MP4 stream URL for ASR transcription or offline caching.
 pub async fn resolve_ytdlp_stream(video_id: &str, custom_path: Option<&str>) -> Result<String, String> {
+    resolve_ytdlp_stream_with_cookies(video_id, custom_path, None, None).await
+}
+
+pub async fn resolve_ytdlp_stream_with_cookies(
+    video_id: &str,
+    custom_path: Option<&str>,
+    youtube_cookies_json: Option<&str>,
+    work_dir: Option<&Path>,
+) -> Result<String, String> {
     if !valid_youtube_video_id(video_id) {
         return Err("Invalid YouTube video ID.".into());
     }
@@ -1081,24 +1534,32 @@ pub async fn resolve_ytdlp_stream(video_id: &str, custom_path: Option<&str>) -> 
     }
     candidates.push("yt-dlp".into());
 
+    let fallback_tmp = std::env::temp_dir().join("quire-yt");
+    let cookie_dir = work_dir.unwrap_or(&fallback_tmp);
+    let temp_cookie_file = youtube_cookies_json
+        .and_then(|raw| write_temp_netscape_cookies(cookie_dir, raw));
+
     let watch_url = canonical_youtube_watch_url(video_id);
     let gui_path = augmented_gui_path();
     let mut ran_binary = false;
     let mut last_error = String::new();
+    let mut resolved_url: Option<String> = None;
 
     for bin in candidates {
-        let fut = Command::new(&bin)
-            .env("PATH", &gui_path)
-            .args([
-                "--no-playlist",
-                "--no-warnings",
-                "-f",
-                "bestaudio[ext=m4a]/bestaudio/best[ext=mp4]/best",
-                "-g",
-                &watch_url,
-            ])
-            .output();
-        match tokio::time::timeout(Duration::from_secs(25), fut).await {
+        let mut cmd = Command::new(&bin);
+        cmd.env("PATH", &gui_path)
+            .args(["--no-playlist", "--no-warnings"]);
+        if let Some(ref cookie_path) = temp_cookie_file {
+            cmd.arg("--cookies").arg(cookie_path);
+        }
+        cmd.args([
+            "-f",
+            "bestaudio[ext=m4a]/bestaudio/best[ext=mp4]/best",
+            "-g",
+            &watch_url,
+        ]);
+
+        match tokio::time::timeout(Duration::from_secs(25), cmd.output()).await {
             Ok(Ok(out)) => {
                 ran_binary = true;
                 if out.status.success() {
@@ -1106,8 +1567,12 @@ pub async fn resolve_ytdlp_stream(video_id: &str, custom_path: Option<&str>) -> 
                     for line in stdout.lines() {
                         let trimmed = line.trim();
                         if let Ok(u) = assert_public_http_url(trimmed) {
-                            return Ok(u.to_string());
+                            resolved_url = Some(u.to_string());
+                            break;
                         }
+                    }
+                    if resolved_url.is_some() {
+                        break;
                     }
                 } else {
                     let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
@@ -1130,6 +1595,14 @@ pub async fn resolve_ytdlp_stream(video_id: &str, custom_path: Option<&str>) -> 
         }
     }
 
+    if let Some(ref cookie_path) = temp_cookie_file {
+        let _ = fs::remove_file(cookie_path);
+    }
+
+    if let Some(url) = resolved_url {
+        return Ok(url);
+    }
+
     if !ran_binary {
         return Err(
             "Install yt-dlp (`brew install yt-dlp`) to extract audio from YouTube videos without public captions."
@@ -1139,8 +1612,14 @@ pub async fn resolve_ytdlp_stream(video_id: &str, custom_path: Option<&str>) -> 
 
     let lower = last_error.to_ascii_lowercase();
     if lower.contains("sign in to confirm") || lower.contains("not a bot") {
+        if youtube_cookies_json.is_some() {
+            return Err(
+                "YouTube rejected the stored session (\"Sign in to confirm you're not a bot\"). Reconnect your YouTube account in Settings › Sources."
+                    .into(),
+            );
+        }
         return Err(
-            "YouTube blocked anonymous audio extraction on your current network/proxy (\"Sign in to confirm you're not a bot\"). Switch proxy node, or add `--cookies-from-browser safari` (or `chrome`) to `~/.config/yt-dlp/config`."
+            "YouTube blocked anonymous audio extraction on your current network/proxy (\"Sign in to confirm you're not a bot\"). Click \"Sign in to YouTube…\" or connect your YouTube account in Settings › Sources."
                 .into(),
         );
     }
@@ -1173,7 +1652,12 @@ pub fn parse_player_youtube_id(raw: &str) -> Option<String> {
     valid_youtube_video_id(id).then(|| id.to_string())
 }
 
-pub fn youtube_player_html(video_id: &str) -> String {
+pub fn youtube_player_html(video_id: &str, youtube_connected: bool) -> String {
+    let embed_host = if youtube_connected {
+        "https://www.youtube.com"
+    } else {
+        "https://www.youtube-nocookie.com"
+    };
     format!(
         r#"<!doctype html>
 <html lang="en">
@@ -1190,6 +1674,7 @@ pub fn youtube_player_html(video_id: &str) -> String {
 <script>
 (() => {{
   const videoId = {video_id:?};
+  const embedHost = {embed_host:?};
   const post = (payload) => parent.postMessage({{ quirePlayer: 1, videoId, ...payload }}, "*");
   let player = null;
   let ready = false;
@@ -1227,7 +1712,7 @@ pub fn youtube_player_html(video_id: &str) -> String {
 
   window.onYouTubeIframeAPIReady = () => {{
     player = new window.YT.Player("player", {{
-      host: "https://www.youtube-nocookie.com",
+      host: embedHost,
       videoId,
       playerVars: {{
         autoplay: 0,
@@ -1276,7 +1761,7 @@ pub fn youtube_player_html(video_id: &str) -> String {
     )
 }
 
-pub fn player_protocol_response(raw_url: &str) -> Response<Vec<u8>> {
+pub fn player_protocol_response(raw_url: &str, youtube_connected: bool) -> Response<Vec<u8>> {
     let Some(video_id) = parse_player_youtube_id(raw_url) else {
         return Response::builder()
             .status(StatusCode::NOT_FOUND)
@@ -1285,7 +1770,7 @@ pub fn player_protocol_response(raw_url: &str) -> Response<Vec<u8>> {
             .body(b"Not found".to_vec())
             .unwrap();
     };
-    let html = youtube_player_html(&video_id);
+    let html = youtube_player_html(&video_id, youtube_connected);
     Response::builder()
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, "text/html; charset=utf-8")
@@ -1376,7 +1861,7 @@ mod tests {
 
     #[test]
     fn serves_quire_player_html_with_strict_csp() {
-        let resp = player_protocol_response("quire-player://youtube/zjkBMFhNj_g");
+        let resp = player_protocol_response("quire-player://youtube/zjkBMFhNj_g", false);
         assert_eq!(resp.status(), StatusCode::OK);
         assert_eq!(
             resp.headers().get(header::CONTENT_SECURITY_POLICY).unwrap().to_str().unwrap(),
@@ -1386,8 +1871,61 @@ mod tests {
         assert!(body.contains("youtube-nocookie.com"));
         assert!(body.contains("zjkBMFhNj_g"));
 
-        let bad = player_protocol_response("quire-player://youtube/../../etc/passwd");
+        let signed_in_resp = player_protocol_response("quire-player://youtube/zjkBMFhNj_g", true);
+        let signed_in_body = String::from_utf8_lossy(signed_in_resp.body());
+        assert!(signed_in_body.contains("https://www.youtube.com"));
+        assert!(!signed_in_body.contains("youtube-nocookie.com"));
+
+        let bad = player_protocol_response("quire-player://youtube/../../etc/passwd", false);
         assert_eq!(bad.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn formats_youtube_cookie_headers_and_mozilla_netscape_file() {
+        let cookies = vec![
+            StoredYoutubeCookie {
+                name: "SAPISID".into(),
+                value: "sapi_val".into(),
+                domain: ".youtube.com".into(),
+                path: "/".into(),
+                secure: true,
+                http_only: false,
+                expires_unix: Some(4_102_444_800),
+            },
+            StoredYoutubeCookie {
+                name: "LOGIN_INFO".into(),
+                value: "login_tok".into(),
+                domain: "youtube.com".into(),
+                path: "/".into(),
+                secure: true,
+                http_only: true,
+                expires_unix: None,
+            },
+            StoredYoutubeCookie {
+                name: "SID".into(),
+                value: "google_sid".into(),
+                domain: ".google.com".into(),
+                path: "/".into(),
+                secure: true,
+                http_only: true,
+                expires_unix: Some(4_102_444_800),
+            },
+        ];
+        assert!(has_youtube_auth_cookies(&cookies));
+        let json = serde_json::to_string(&cookies).unwrap();
+
+        let hdr = cookie_header_for_youtube(&json).expect("cookie header");
+        assert!(hdr.contains("SAPISID=sapi_val"));
+        assert!(hdr.contains("LOGIN_INFO=login_tok"));
+        assert!(!hdr.contains("google_sid"));
+
+        let netscape = format_netscape_cookies_txt(&json, 1_800_000_000).expect("netscape");
+        assert!(netscape.starts_with("# Netscape HTTP Cookie File\n"));
+        for line in netscape.lines().filter(|l| !l.is_empty() && !l.starts_with('#')) {
+            let cols: Vec<&str> = line.split('\t').collect();
+            assert_eq!(cols.len(), 7);
+            assert_eq!(cols[0].starts_with('.'), cols[1] == "TRUE");
+        }
     }
 
     #[test]

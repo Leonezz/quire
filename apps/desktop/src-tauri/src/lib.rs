@@ -145,9 +145,14 @@ pub fn run() {
                 responder.respond(resp);
             });
         })
-        .register_asynchronous_uri_scheme_protocol(PLAYER_SCHEME, |_ctx, request, responder| {
+        .register_asynchronous_uri_scheme_protocol(PLAYER_SCHEME, |ctx, request, responder| {
             let url = request.uri().to_string();
-            responder.respond(player_protocol_response(&url));
+            let connected = ctx
+                .app_handle()
+                .try_state::<AppState>()
+                .map(|s| s.settings.get().youtube_connected)
+                .unwrap_or(false);
+            responder.respond(player_protocol_response(&url, connected));
         })
         .setup(|app| {
             let handle = app.handle().clone();
@@ -192,27 +197,36 @@ pub fn run() {
             let sessions = SessionStore::new(db.clone());
             let media_states = MediaStateStore::new(db.clone());
             let images = ImageCache::new(&data_dir);
-            let media_cache = MediaCache::new(&data_dir);
+            let settings_yt_media = settings.clone();
+            let media_cache = MediaCache::new(&data_dir).with_youtube_cookies(Arc::new(move || {
+                settings_yt_media.optional_secret("youtubeCookies").ok().flatten()
+            }));
             let annotations = AnnotationStore::new(&data_dir);
 
             let settings_keep = settings.clone();
             let settings_judge = settings.clone();
-            let store = Arc::new(MaterialStore::new(
-                &data_dir,
-                http.clone(),
-                meta.clone(),
-                normalizer.clone(),
-                Arc::new(move || settings_keep.get().keep_capture),
-                Arc::new(move || {
-                    let s = settings_judge.get();
-                    if s.reflow_judge == "jev" {
-                        let key = settings_judge.secret("typesafeApiKey")?;
-                        Ok(("jev".into(), Some(key)))
-                    } else {
-                        Ok(("rules".into(), None))
-                    }
-                }),
-            ));
+            let settings_yt_store = settings.clone();
+            let store = Arc::new(
+                MaterialStore::new(
+                    &data_dir,
+                    http.clone(),
+                    meta.clone(),
+                    normalizer.clone(),
+                    Arc::new(move || settings_keep.get().keep_capture),
+                    Arc::new(move || {
+                        let s = settings_judge.get();
+                        if s.reflow_judge == "jev" {
+                            let key = settings_judge.secret("typesafeApiKey")?;
+                            Ok(("jev".into(), Some(key)))
+                        } else {
+                            Ok(("rules".into(), None))
+                        }
+                    }),
+                )
+                .with_youtube_cookies(Arc::new(move || {
+                    settings_yt_store.optional_secret("youtubeCookies").ok().flatten()
+                })),
+            );
 
             let sync_coord = Arc::new(SyncCoordinator::new());
 
@@ -474,6 +488,8 @@ pub fn run() {
             commands::asr_model_status,
             commands::asr_model_download,
             commands::asr_test_connection,
+            commands::youtube_sign_in,
+            commands::youtube_sign_out,
             commands::agent_sessions_list,
             commands::agent_sessions_get,
             commands::agent_sessions_delete,

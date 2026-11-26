@@ -2,7 +2,7 @@ use crate::agent::AgentService;
 use crate::codex::CodexClient;
 use crate::db::Db;
 use crate::feedback::{copy_png_to_clipboard, issue_url_for, FeedbackStore};
-use crate::http::{detect_source, MAX_BYTES};
+use crate::http::{detect_source_with_cookies, MAX_BYTES};
 use crate::images::ImageCache;
 use crate::materials::{
     delete_materials, image_urls_of_record, is_material_view_id, query_library, search_hits,
@@ -216,9 +216,11 @@ pub async fn material_get(
     let current = state.store.get(&cid)?;
     if let Some(ref rec) = current {
         let trimmed = rec.title.trim();
+        let has_yt_cookies = state.settings.get().youtube_connected;
         let is_placeholder_yt = (trimmed.eq_ignore_ascii_case("- youtube")
             || trimmed.eq_ignore_ascii_case("youtube")
-            || trimmed.starts_with("YouTube video "))
+            || trimmed.starts_with("YouTube video ")
+            || (has_yt_cookies && rec.media.as_ref().is_some_and(|m| m.duration_sec.is_none())))
             && rec.media.as_ref().is_some_and(|m| m.provider == "youtube" && m.transcript_origin == "absent");
         if is_placeholder_yt {
             let vid = rec
@@ -314,7 +316,8 @@ pub async fn source_detect(
     input: String,
 ) -> Result<SourceDetection, String> {
     let text = bounded_str(&input, 4096, "IPC_INVALID_INPUT")?;
-    detect_source(&state.http, &text)
+    let yt_cookies = state.settings.optional_secret("youtubeCookies").ok().flatten();
+    detect_source_with_cookies(&state.http, &text, yt_cookies.as_deref())
         .await
         .map_err(|e| e.message)
 }
@@ -826,6 +829,25 @@ pub async fn asr_model_download(
 #[tauri::command]
 pub async fn asr_test_connection(state: State<'_, AppState>) -> Result<AsrConnectionTestResult, String> {
     test_asr_connection(&state.settings).await
+}
+
+#[tauri::command]
+pub async fn youtube_sign_in(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Settings, String> {
+    let updated = crate::youtube::sign_in_youtube_window(&app, &state.settings).await?;
+    let _ = app.emit("library:changed", ());
+    Ok(updated)
+}
+
+#[tauri::command]
+pub async fn youtube_sign_out(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Settings, String> {
+    let updated = crate::youtube::disconnect_youtube_session(&app, &state.settings).await?;
+    Ok(updated)
 }
 
 #[tauri::command]

@@ -5,6 +5,7 @@ use futures_util::StreamExt;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::http::{header, Request, Response, StatusCode};
 use url::Url;
@@ -162,6 +163,7 @@ pub fn remove_cached_media_files(data_dir: &Path, material_id: &str) -> Result<u
 pub struct MediaCache {
     root: PathBuf,
     client: reqwest::Client,
+    youtube_cookies: Arc<dyn Fn() -> Option<String> + Send + Sync>,
 }
 
 impl MediaCache {
@@ -169,7 +171,24 @@ impl MediaCache {
         Self {
             root: root.into(),
             client: build_media_http_client(),
+            youtube_cookies: Arc::new(|| None),
         }
+    }
+
+    pub fn with_youtube_cookies(
+        mut self,
+        provider: Arc<dyn Fn() -> Option<String> + Send + Sync>,
+    ) -> Self {
+        self.youtube_cookies = provider;
+        self
+    }
+
+    pub fn youtube_cookies_json(&self) -> Option<String> {
+        (self.youtube_cookies)()
+    }
+
+    pub fn tmp_dir(&self) -> PathBuf {
+        self.root.join("tmp-asr")
     }
 
     pub fn client(&self) -> &reqwest::Client {
@@ -225,7 +244,16 @@ impl MediaCache {
             return Ok(bytes);
         }
         let resolved_stream = if let Some(vid) = crate::youtube::parse_youtube_video_id(stream_url) {
-            match crate::youtube::resolve_ytdlp_stream(&vid, None).await {
+            let cookies = self.youtube_cookies_json();
+            let tmp_dir = self.tmp_dir();
+            match crate::youtube::resolve_ytdlp_stream_with_cookies(
+                &vid,
+                None,
+                cookies.as_deref(),
+                Some(&tmp_dir),
+            )
+            .await
+            {
                 Ok(direct) => direct,
                 Err(msg) => {
                     on_progress(MediaCacheProgress {
@@ -460,12 +488,23 @@ pub async fn media_protocol_response<T>(
             .clone()
             .or_else(|| crate::youtube::parse_youtube_video_id(&media.stream_url));
         match vid {
-            Some(v) => match crate::youtube::resolve_ytdlp_stream(&v, None).await {
-                Ok(u) => u,
-                Err(msg) => {
-                    return plain_response(StatusCode::NOT_FOUND, &msg);
+            Some(v) => {
+                let cookies = cache.youtube_cookies_json();
+                let tmp_dir = cache.tmp_dir();
+                match crate::youtube::resolve_ytdlp_stream_with_cookies(
+                    &v,
+                    None,
+                    cookies.as_deref(),
+                    Some(&tmp_dir),
+                )
+                .await
+                {
+                    Ok(u) => u,
+                    Err(msg) => {
+                        return plain_response(StatusCode::NOT_FOUND, &msg);
+                    }
                 }
-            },
+            }
             None => media.stream_url.clone(),
         }
     } else {

@@ -83,6 +83,8 @@ export interface ReadApiMedia {
   downloadAsrModel: (model: string) => Promise<AsrModelStatus>;
   onAsrModelProgress?: (listener: (progress: AsrModelDownloadProgress) => void) => () => void;
   testAsrConnection: () => Promise<AsrConnectionTestResult>;
+  signInYoutube: () => Promise<Settings>;
+  signOutYoutube: () => Promise<Settings>;
 }
 
 export interface MediaInfo {
@@ -644,10 +646,12 @@ export interface Settings {
   localWhisperModel?: string;
   /** Automatically remove downloaded offline audio/video files once an episode is marked finished. */
   removeCachedMediaAfterFinish?: boolean;
+  /** Whether a YouTube session is stored encrypted in the system Keychain for captions, storyboards, and yt-dlp audio extraction. */
+  youtubeConnected?: boolean;
 }
 
 /** What updateSettings accepts: every editable field, plus the write-only keys ("" removes them). */
-export type SettingsPatch = Partial<Omit<Settings, "dataDirectory" | "typesafeApiKeySet" | "asrApiKeySet">> & {
+export type SettingsPatch = Partial<Omit<Settings, "dataDirectory" | "typesafeApiKeySet" | "asrApiKeySet" | "youtubeConnected">> & {
   typesafeApiKey?: string;
   asrApiKey?: string;
 };
