@@ -198,4 +198,93 @@ describe("Podcast reading and companion player", () => {
     fireEvent.click(within(nowPlaying).getByText("Ilya Sutskever — Scaling"));
     expect(onOpenMaterial).toHaveBeenCalledWith(ID);
   });
+
+  it("upgrades collapsed podcast show notes into headings and clickable timestamp outline items while deduplicating identical host/publication", async () => {
+    const collapsedNotes =
+      "本期嘉宾 Oliver Schusser 负责 Apple Music 副总裁 赛博对话官 电动Emma 节目介绍 从iPod到AI音乐创作。 核心议题01:14 AI生成音乐浪潮下如何应对挑战 04:08 音乐行业真正稀缺的价值是什么";
+    const showNotesOnly: MaterialRecord = {
+      ...podcastMaterial,
+      id: "b2c3d4e5f6071829",
+      title: "vol.62 | 播客到底怎么赚钱？",
+      byline: "赛博对话",
+      publication: "赛博对话",
+      mediaType: "text/x-quire-shownotes",
+      primaryView: "shownotes",
+      readyViews: ["shownotes"],
+      views: [
+        {
+          id: "shownotes",
+          label: "Show notes",
+          url: "https://podcasts.apple.com/cn/podcast/id1?i=2",
+          mediaType: "text/x-quire-shownotes",
+          status: "ready",
+        },
+      ],
+      extracted: {
+        kind: "podcastEpisode",
+        title: "vol.62 | 播客到底怎么赚钱？",
+        publication: "赛博对话",
+        creators: [{ role: "host", name: "赛博对话" }],
+        date: "2026-11-24",
+      },
+      meta: {
+        kind: "podcastEpisode",
+        title: "vol.62 | 播客到底怎么赚钱？",
+        publication: "赛博对话",
+        creators: [{ role: "host", name: "赛博对话" }],
+        date: "2026-11-24",
+      },
+      reader: {
+        schema: "reader.document.v2",
+        payload: JSON.stringify({
+          type: "root",
+          losses: [],
+          children: [{ type: "paragraph", children: [{ type: "text", value: collapsedNotes }] }],
+        }),
+      },
+      markdown: collapsedNotes,
+      plain: collapsedNotes,
+      timeAnchors: undefined,
+      media: {
+        kind: "audio",
+        provider: "podcast",
+        streamUrl: "https://cdn.example.test/ep62.m4a",
+        durationSec: 1635,
+        transcriptOrigin: "absent",
+      },
+    };
+
+    api.read = mockRead({
+      getMaterial: vi.fn(async () => showNotesOnly),
+      listAnnotations: vi.fn(async () => []),
+      resolveImage: vi.fn(async (u: string) => u),
+      getMediaState: vi.fn(async () => undefined),
+      saveMediaState: vi.fn(async () => undefined),
+      getUpdateState: vi.fn(async () => ({ phase: "idle" as const, current: "0.2.0" })),
+    });
+
+    render(
+      <MaterialReader id={showNotesOnly.id} onOpenLink={() => undefined} onOpenMaterial={() => undefined} />,
+    );
+    await act(async () => {
+      await flush();
+      await flush();
+    });
+
+    // Host and publication ("赛博对话") appear once in the header byline, not twice
+    expect(screen.getAllByText("赛博对话")).toHaveLength(1);
+
+    // Structured headings and list items are rendered instead of one collapsed paragraph
+    expect(screen.getByRole("heading", { name: "本期嘉宾" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "节目介绍" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "核心议题" })).toBeTruthy();
+
+    const jumpBtn = screen.getByRole("button", { name: "Jump to 04:08" });
+    await act(async () => {
+      fireEvent.click(jumpBtn);
+      await flush();
+    });
+    expect(mediaStore.getState().playing).toBe(true);
+    expect(mediaStore.getState().positionSec).toBe(248);
+  });
 });

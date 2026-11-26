@@ -1091,6 +1091,96 @@ fn is_fallback_copy(record: &StoredRecord) -> bool {
     is_unreadable_page(record) || is_feed_copy(record)
 }
 
+fn is_single_paragraph_reader(reader: &Option<ReaderPayload>) -> bool {
+    let Some(ref rp) = reader else {
+        return true;
+    };
+    let Ok(val) = serde_json::from_str::<serde_json::Value>(&rp.payload) else {
+        return true;
+    };
+    let Some(children) = val.get("children").and_then(|c| c.as_array()) else {
+        return true;
+    };
+    if children.is_empty() {
+        return true;
+    }
+    let has_rich = children.iter().any(|c| {
+        matches!(
+            c.get("type").and_then(|t| t.as_str()),
+            Some("heading" | "list" | "blockquote" | "table")
+        )
+    });
+    !has_rich && children.len() <= 1
+}
+
+fn is_legacy_collapsed_shownotes(record: &StoredRecord) -> bool {
+    let is_absent_tx = record
+        .media
+        .as_ref()
+        .is_some_and(|m| m.transcript_origin == "absent");
+    if !is_absent_tx || primary_view_of(record) != "shownotes" {
+        return false;
+    }
+    let text_len = record
+        .markdown
+        .as_deref()
+        .or(record.plain.as_deref())
+        .map_or(0, |s| s.chars().count());
+    text_len >= 80 && is_single_paragraph_reader(&record.reader)
+}
+
+fn normalize_episode_title_key(raw: &str) -> String {
+    raw.replace('｜', "|")
+        .replace('：', ":")
+        .replace('\u{00a0}', " ")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+fn audio_asset_stem(url_str: &str) -> Option<String> {
+    let parsed = Url::parse(url_str).ok()?;
+    let last = parsed.path_segments()?.next_back()?;
+    let stem = last
+        .rsplit_once('.')
+        .map(|(s, _)| s)
+        .unwrap_or(last)
+        .trim()
+        .to_ascii_lowercase();
+    if stem.len() >= 12 {
+        Some(stem)
+    } else {
+        None
+    }
+}
+
+fn podcast_episode_matches(
+    item_enclosure: Option<&str>,
+    item_title: &str,
+    ep_stream: &str,
+    ep_title: &str,
+) -> bool {
+    if let Some(enc) = item_enclosure {
+        if enc == ep_stream {
+            return true;
+        }
+        if let (Ok(u1), Ok(u2)) = (Url::parse(enc), Url::parse(ep_stream)) {
+            if u1.host_str() == u2.host_str() && u1.path() == u2.path() {
+                return true;
+            }
+        }
+        if let (Some(s1), Some(s2)) = (audio_asset_stem(enc), audio_asset_stem(ep_stream)) {
+            if s1 == s2 {
+                return true;
+            }
+        }
+    }
+    let t1 = normalize_episode_title_key(item_title);
+    let t2 = normalize_episode_title_key(ep_title);
+    !t1.is_empty() && t1 == t2
+}
+
 impl MaterialStore {
     pub fn new(
         root: impl Into<PathBuf>,
@@ -1322,7 +1412,7 @@ impl MaterialStore {
         let url = assert_public_http_url(raw).map_err(|e| (e.code, e.message))?;
         let known = self.find_by_url(&url).map_err(|e| ("NORMALIZE_FAILED".into(), e))?;
         if let Some(ref k) = known {
-            if !is_fallback_copy(k) {
+            if !is_fallback_copy(k) && !is_legacy_collapsed_shownotes(k) {
                 return self
                     .existing_result(k.clone(), item.as_ref(), &[raw.to_string()])
                     .await
@@ -2494,8 +2584,12 @@ impl MaterialStore {
                         .await
                     {
                         if let Some(matched) = parsed.items.into_iter().find(|it| {
-                            it.signals.enclosure_url.as_deref() == Some(ep.stream_url.as_str())
-                                || it.title.eq_ignore_ascii_case(&ep.title)
+                            podcast_episode_matches(
+                                it.signals.enclosure_url.as_deref(),
+                                &it.title,
+                                &ep.stream_url,
+                                &ep.title,
+                            )
                         }) {
                             transcripts = matched.signals.transcripts.unwrap_or_default();
                             chapters_url = matched.signals.chapters_url;
@@ -2585,19 +2679,38 @@ impl MaterialStore {
             notes_reader = sc.reader;
             notes_md = sc.markdown;
             notes_plain = sc.plain;
-            if notes_reader.is_none() {
-                if let Some(ref md) = notes_md.as_ref().or(notes_plain.as_ref()) {
-                    if let Ok(parts) = self.normalizer.normalize_markdown(md, &input.url).await {
-                        notes_reader = parts.reader;
+            if notes_reader.is_none() || is_single_paragraph_reader(&notes_reader) {
+                if let Some(md) = notes_md.clone().or_else(|| notes_plain.clone()) {
+                    if let Ok(parts) = self.normalizer.normalize_shownotes(&md, &input.url).await {
+                        if parts.reader.is_some() {
+                            notes_reader = parts.reader;
+                        }
+                        if let Some(formatted) = parts.markdown {
+                            notes_md = Some(formatted);
+                        }
+                        if chapters.is_empty() {
+                            if let Some(ch) = parts.chapters {
+                                chapters = ch;
+                            }
+                        }
                     }
                 }
             }
         } else if let Some(desc) = input.shownotes_markdown.filter(|s| !s.trim().is_empty()) {
-            if let Ok(parts) = self.normalizer.normalize_markdown(&desc, &input.url).await {
+            let mut formatted_md = desc.clone();
+            if let Ok(parts) = self.normalizer.normalize_shownotes(&desc, &input.url).await {
                 notes_reader = parts.reader;
+                if let Some(formatted) = parts.markdown {
+                    formatted_md = formatted;
+                }
+                if chapters.is_empty() {
+                    if let Some(ch) = parts.chapters {
+                        chapters = ch;
+                    }
+                }
             }
-            notes_plain = Some(desc.clone());
-            notes_md = Some(desc);
+            notes_plain = Some(desc);
+            notes_md = Some(formatted_md);
         } else if let Some(ref page_u) = input.page_url {
             if let Ok(u) = assert_public_http_url(page_u) {
                 if !is_audio_stream_url(&u) {
@@ -2898,7 +3011,7 @@ impl MaterialStore {
         let watch_url = crate::youtube::canonical_youtube_watch_url(video_id);
         let parsed_watch = Url::parse(&watch_url).map_err(|_| ("URL_INVALID".into(), "Invalid YouTube URL.".into()))?;
         if let Some(existing) = self.find_by_url(&parsed_watch).map_err(|e| ("NORMALIZE_FAILED".into(), e))? {
-            if existing.media.is_some() {
+            if existing.media.is_some() && !is_legacy_collapsed_shownotes(&existing) {
                 return self
                     .existing_result(existing, override_meta.as_ref(), &[requested_url.to_string(), watch_url])
                     .await
@@ -2912,7 +3025,7 @@ impl MaterialStore {
             .await
             .map_err(|e| (e.code, e.message))?;
         let html = String::from_utf8_lossy(&watch_page.bytes);
-        let yt = crate::youtube::parse_youtube_watch_html(&html, video_id);
+        let mut yt = crate::youtube::parse_youtube_watch_html(&html, video_id);
 
         // 1. Build video Show notes view from video description (or Atom feed content)
         let mut notes_reader: Option<ReaderPayload> = None;
@@ -2920,16 +3033,20 @@ impl MaterialStore {
         let mut notes_plain: Option<String> = None;
 
         if let Some(ref desc) = yt.description {
-            let md = desc
-                .lines()
-                .map(str::trim_end)
-                .collect::<Vec<_>>()
-                .join("\n\n");
-            if let Ok(parts) = self.normalizer.normalize_markdown(&md, &watch_url).await {
+            let mut formatted_md = desc.clone();
+            if let Ok(parts) = self.normalizer.normalize_shownotes(desc, &watch_url).await {
                 notes_reader = parts.reader;
+                if let Some(formatted) = parts.markdown {
+                    formatted_md = formatted;
+                }
+                if yt.chapters.is_empty() {
+                    if let Some(ch) = parts.chapters {
+                        yt.chapters = ch;
+                    }
+                }
             }
             notes_plain = Some(desc.clone());
-            notes_md = Some(md);
+            notes_md = Some(formatted_md);
         } else if let Some(fc) = fallback_content {
             notes_reader = fc.reader;
             notes_md = fc.markdown;
@@ -4060,5 +4177,27 @@ mod tests {
         assert_eq!(store.list("fedcba9876543210").unwrap().len(), 1);
         store.delete("fedcba9876543210", "0123456789abcdef").unwrap();
         assert_eq!(store.list("fedcba9876543210").unwrap().len(), 0);
+    }
+
+    #[test]
+    fn podcast_episode_matching_handles_redirects_and_cjk_titles() {
+        assert!(podcast_episode_matches(
+            Some("https://dts.podtrac.com/redirect.m4a/media.xyzcdn.net/65a1b2c3d4e5f6071890abcd.m4a?source=rss"),
+            "Other Title",
+            "https://media.xyzcdn.net/65a1b2c3d4e5f6071890abcd.m4a?token=apple",
+            "Episode Title",
+        ));
+        assert!(podcast_episode_matches(
+            Some("https://cdn.example.com/a.mp3"),
+            "vol.62 ｜ 播客到底怎么赚钱？  这次把问题问到了苹果副总裁面前",
+            "https://cdn.example.com/b.mp3",
+            "vol.62 | 播客到底怎么赚钱？ 这次把问题问到了苹果副总裁面前 ",
+        ));
+        assert!(!podcast_episode_matches(
+            Some("https://cdn.example.com/episode1.mp3"),
+            "Episode 1",
+            "https://other.example.com/episode1.mp3",
+            "Episode 2",
+        ));
     }
 }

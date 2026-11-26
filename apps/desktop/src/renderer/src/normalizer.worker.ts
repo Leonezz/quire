@@ -1,4 +1,6 @@
 import {
+  extractDescriptionChapters,
+  formatShowNotesMarkdown,
   normalizeArticleCapture,
   normalizeTranscript,
   parseTranscriptCues,
@@ -153,12 +155,17 @@ async function runJob(op: string, payload: Record<string, unknown>): Promise<unk
   }
 
   if (op === "normalizeMarkdown") {
-    const content = String(payload.content ?? "");
+    const raw = String(payload.content ?? "");
+    const isShowNotes = Boolean(payload.showNotes);
+    const content = isShowNotes ? formatShowNotesMarkdown(raw) : raw;
     const baseUri = String(payload.baseUri ?? "https://file.local/");
     const parts = markdownParts(content, baseUri);
+    const chapters = isShowNotes ? extractDescriptionChapters(content) : undefined;
     return {
       ...(parts.reader ? { reader: parts.reader } : {}),
+      markdown: content,
       readingMinutes: parts.readingMinutes,
+      ...(chapters?.length ? { chapters } : {}),
     };
   }
 

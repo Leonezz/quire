@@ -14,6 +14,7 @@ import type {
 import {
   extractDescriptionChapters,
   extractEntryMedia,
+  formatShowNotesMarkdown,
   mediaGroupDescription,
   parseDurationSeconds,
   stripShowNotesBoilerplate,
@@ -655,10 +656,13 @@ function contentCandidates(entry: XmlNode, dialect: "atom" | "rss", producer: Pr
     if (full && text(full)) values.push({ baseUri: link || entry.baseUri, content: text(full), mediaType: "text/html", role: "full", sourcePath: "rss.channel.item.content:encoded" });
     const description = child(entry, "description", "");
     if (description && text(description)) {
+      const descContent = text(description);
+      const hasEnclosure = entry.children.some((item) => item.namespaceUri === "" && item.localName === "enclosure");
+      const isPlainMediaNotes = hasEnclosure && !/<[a-z!/][\s\S]*>/iu.test(descContent);
       values.push({
         baseUri: link || entry.baseUri,
-        content: text(description),
-        mediaType: "text/html",
+        content: descContent,
+        mediaType: isPlainMediaNotes ? "text/plain" : "text/html",
         role: rssDescriptionRole(producer.key),
         sourcePath: "rss.channel.item.description",
       });
@@ -1075,6 +1079,7 @@ export function normalizeFeedCapture(input: FeedCaptureInput): FeedNormalization
 
 export {
   extractDescriptionChapters,
+  formatShowNotesMarkdown,
   parseDurationSeconds,
   stripShowNotesBoilerplate,
 } from "./feed-media";

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { extractDescriptionChapters } from "@read/normalize/contract";
 import { Button, CompanionPlayer, Presence, ShimmerText, SplitGroup, SplitPanel, TocRail, VideoDockFrame, useSplitSizes, type MediaCacheBadgeState } from "@read/ui";
 import { ColumnSeparator, PAGE_MIN, PANEL_DEFAULT, PANEL_MAX, PANEL_MIN } from "./ContentPane";
 import { ReaderToolbar } from "./ReaderToolbar";
@@ -435,7 +436,15 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
   const panelOpen = panel !== null && !prefs.focus;
   const mediaPosition = isCurrentMedia ? playback.positionSec : 0;
   const mediaDuration = (isCurrentMedia && playback.durationSec > 0 ? playback.durationSec : material.media?.durationSec) ?? 0;
-  const mediaChapter = activeChapterOf(material.media?.chapters, mediaPosition)?.title;
+  const effectiveChapters = useMemo(() => {
+    if (material.media?.chapters?.length) return material.media.chapters;
+    if (content.view === "shownotes") {
+      const derived = extractDescriptionChapters(content.markdown ?? content.plain ?? "");
+      return derived.length > 0 ? derived : undefined;
+    }
+    return undefined;
+  }, [content.markdown, content.plain, content.view, material.media?.chapters]);
+  const mediaChapter = activeChapterOf(effectiveChapters, mediaPosition)?.title;
   const cacheState: MediaCacheBadgeState | undefined = hasMedia
     ? playback.cacheProgress?.materialId === material.id && playback.cacheProgress.phase === "downloading"
       ? {

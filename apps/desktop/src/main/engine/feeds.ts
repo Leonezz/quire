@@ -1,5 +1,7 @@
 import { readingMinutes, wordCount } from "./reading-time";
+import { markdownParts } from "./material-content";
 import {
+  formatShowNotesMarkdown,
   normalizeFeedCapture,
   sha256Hex,
   stripShowNotesBoilerplate,
@@ -147,7 +149,19 @@ function contentOf(entry: NormalizedFeedEntry): ItemContent {
 }
 
 export function itemOf(entry: NormalizedFeedEntry, lang: string | undefined, now: () => Date): ItemInput {
-  const content = contentOf(entry);
+  let content = contentOf(entry);
+  if (entry.media && (content.markdown || content.plain)) {
+    const rawNotes = content.markdown ?? content.plain ?? "";
+    const formatted = formatShowNotesMarkdown(rawNotes);
+    if (formatted && (formatted !== content.markdown || !content.reader)) {
+      const rebuilt = markdownParts(formatted, entry.link || "https://feed.local/");
+      content = {
+        ...(rebuilt.reader ? { reader: rebuilt.reader } : content.reader ? { reader: content.reader } : {}),
+        markdown: formatted,
+        ...(content.plain ? { plain: content.plain } : {}),
+      };
+    }
+  }
   const plain = content.plain ?? content.markdown ?? "";
   // `selection.text.v1` concatenates paragraphs without newlines; `agent.gfm.v1` preserves line breaks for chapter/sponsor stripping.
   const gistSource = entry.media ? stripShowNotesBoilerplate(content.markdown ?? plain) || plain : plain;

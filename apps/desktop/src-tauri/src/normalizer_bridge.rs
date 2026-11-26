@@ -54,7 +54,11 @@ pub struct ExtractedPageMeta {
 pub struct NormalizedMarkdown {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reader: Option<ReaderPayload>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub markdown: Option<String>,
     pub reading_minutes: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chapters: Option<Vec<MediaChapter>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -221,6 +225,14 @@ pub trait Normalizer: Send + Sync {
         content: &'a str,
         base_uri: &'a str,
     ) -> BoxFuture<'a, Result<NormalizedMarkdown, String>>;
+
+    fn normalize_shownotes<'a>(
+        &'a self,
+        content: &'a str,
+        base_uri: &'a str,
+    ) -> BoxFuture<'a, Result<NormalizedMarkdown, String>> {
+        self.normalize_markdown(content, base_uri)
+    }
 
     fn inspect_pdf<'a>(&'a self, bytes: &'a [u8]) -> BoxFuture<'a, Result<PdfInspection, String>>;
 
@@ -410,6 +422,19 @@ impl Normalizer for TauriNormalizerBridge {
         let payload = serde_json::json!({
             "content": content,
             "baseUri": base_uri,
+        });
+        Box::pin(async move { self.call("normalizeMarkdown", payload, 20).await })
+    }
+
+    fn normalize_shownotes<'a>(
+        &'a self,
+        content: &'a str,
+        base_uri: &'a str,
+    ) -> BoxFuture<'a, Result<NormalizedMarkdown, String>> {
+        let payload = serde_json::json!({
+            "content": content,
+            "baseUri": base_uri,
+            "showNotes": true,
         });
         Box::pin(async move { self.call("normalizeMarkdown", payload, 20).await })
     }

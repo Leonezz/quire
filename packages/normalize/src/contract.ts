@@ -21,3 +21,11 @@ export type {
   TranscriptKeyframe,
   TranscriptOrigin,
 } from "./transcript-contract";
+export {
+  extractDescriptionChapters,
+  formatShowNotesMarkdown,
+  isCollapsedShowNotesReader,
+  parseShowNotesTimestamp,
+  splitShowNotesTimestamps,
+  type ShowNotesTextPart,
+} from "./shownotes";

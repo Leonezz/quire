@@ -2,11 +2,16 @@ import { describe, expect, it } from "vitest";
 
 import {
   extractDescriptionChapters,
+  formatShowNotesMarkdown,
   normalizeFeedCapture,
   parseDurationSeconds,
   sha256Hex,
   stripShowNotesBoilerplate,
 } from "./index";
+import {
+  isCollapsedShowNotesReader,
+  splitShowNotesTimestamps,
+} from "./contract";
 
 const BUDGET = {
   maxBytes: 2 * 1024 * 1024,
@@ -197,5 +202,68 @@ describe("feed-media normalization", () => {
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
     expect(outcome.feed.entries[0]?.media).toBeUndefined();
+  });
+
+  it("structures collapsed Chinese/Apple Podcasts show notes into headings, credits, chapter list and clean chapters", () => {
+    const collapsed =
+      "本期嘉宾 Oliver Schusser 负责 Apple Music、Apple 播客和其他国际内容业务的副总裁 赛博对话官 电动Emma 节目介绍 从iPod、iTunes改写音乐收听方式，到如今AI席卷内容创作，Apple Music 已走过11年。 核心议题01:14 AI生成音乐浪潮下Apple Music如何应对新技术挑战 04:08 AI降低创作门槛，音乐行业真正稀缺的价值是什么 27:22 播客行业处在什么阶段，未来的发展方向是什么 期待关注：微博@赛博对话 获取最新前沿科技讯息 在小宇宙查看该单集文稿";
+
+    const md = formatShowNotesMarkdown(collapsed);
+    expect(md).toContain("### 本期嘉宾");
+    expect(md).toContain("**赛博对话官**：电动Emma");
+    expect(md).toContain("### 节目介绍");
+    expect(md).toContain("### 核心议题");
+    expect(md).toContain("- 01:14 AI生成音乐浪潮下Apple Music如何应对新技术挑战");
+    expect(md).toContain("- 04:08 AI降低创作门槛，音乐行业真正稀缺的价值是什么");
+    expect(md).toContain("- 27:22 播客行业处在什么阶段，未来的发展方向是什么");
+    expect(md).toContain("---\n\n期待关注：微博@赛博对话");
+    expect(md).toContain("\n\n在小宇宙查看该单集文稿");
+
+    const chapters = extractDescriptionChapters(collapsed);
+    expect(chapters).toEqual([
+      { startSec: 74, title: "AI生成音乐浪潮下Apple Music如何应对新技术挑战" },
+      { startSec: 248, title: "AI降低创作门槛，音乐行业真正稀缺的价值是什么" },
+      { startSec: 1642, title: "播客行业处在什么阶段，未来的发展方向是什么" },
+    ]);
+
+    const flatPayload = JSON.stringify({
+      type: "root",
+      losses: [],
+      children: [{ type: "paragraph", children: [{ type: "text", value: collapsed }] }],
+    });
+    expect(isCollapsedShowNotesReader(flatPayload, md)).toBe(true);
+
+    const parts = splitShowNotesTimestamps("01:14 AI生成音乐浪潮下");
+    expect(parts).toEqual([
+      { label: "01:14", raw: "01:14", seconds: 74 },
+      " AI生成音乐浪潮下",
+    ]);
+    expect(parts.map((p) => (typeof p === "string" ? p : p.raw)).join("")).toBe("01:14 AI生成音乐浪潮下");
+  });
+
+  it("preserves line breaks in plain-text podcast RSS descriptions instead of collapsing as HTML", () => {
+    const rss = `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd">
+  <channel>
+    <title>Cyber Dialogue</title>
+    <link>https://example.com</link>
+    <description>Tech podcast</description>
+    <item>
+      <title>Episode 62</title>
+      <link>https://example.com/ep/62</link>
+      <guid isPermaLink="false">ep-62</guid>
+      <enclosure url="https://cdn.example.com/ep62.m4a" type="audio/mp4" />
+      <description><![CDATA[本期嘉宾
+Oliver Schusser
+节目介绍
+探讨播客商业化。]]></description>
+    </item>
+  </channel>
+</rss>`;
+    const outcome = normalizeFeedCapture(captureOf(rss));
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const gfm = outcome.feed.entries[0]?.materialization.representations.find((r) => r.schema === "agent.gfm.v1");
+    expect(gfm?.content).toContain("本期嘉宾\nOliver Schusser");
   });
 });

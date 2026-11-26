@@ -108,9 +108,14 @@ export function citationMarkdown(meta: MaterialMeta, fallback: { title: string; 
   return `${parts.join(" ")}${url ? ` <${url}>` : ""}`;
 }
 
-/** The header line under a title: creators · publication · date. */
+/** The header line under a title: creators · publication · date (deduplicated when host/channel and publication match). */
 export function headerParts(meta: MaterialMeta): string[] {
-  return [creatorsText(meta.creators), meta.publication ?? "", displayDate(meta.date)].filter(Boolean);
+  const creators = creatorsText(meta.creators);
+  const publication = meta.publication ?? "";
+  const sameSource = Boolean(
+    creators && publication && creators.trim().toLowerCase() === publication.trim().toLowerCase(),
+  );
+  return [creators, sameSource ? "" : publication, displayDate(meta.date)].filter(Boolean);
 }
 
 /** The "extracted: …" text for a field, or undefined when nothing was extracted. */

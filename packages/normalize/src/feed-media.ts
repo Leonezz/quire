@@ -3,7 +3,13 @@ import type {
   NormalizedFeedTranscriptRef,
   NormalizedMediaChapter,
 } from "./model";
+import {
+  extractDescriptionChapters,
+  formatShowNotesMarkdown,
+} from "./shownotes";
 import { ATOM_NAMESPACE, attribute, type XmlNode } from "./xml";
+
+export { extractDescriptionChapters, formatShowNotesMarkdown };
 
 const ITUNES_NAMESPACES = new Set([
   "http://www.itunes.com/dtds/podcast-1.0.dtd",
@@ -62,82 +68,21 @@ export function parseDurationSeconds(raw: string | undefined): number | undefine
   return rounded > 0 && rounded <= MAX_DURATION_SECONDS ? rounded : undefined;
 }
 
-function parseTimestampLineSeconds(token: string): number | undefined {
-  const match = /^(\d{1,2}):([0-5]\d)(?::([0-5]\d))?$/u.exec(token.trim());
-  if (!match) return undefined;
-  const [, first, second, third] = match;
-  return third !== undefined
-    ? Number(first) * 3600 + Number(second) * 60 + Number(third)
-    : Number(first) * 60 + Number(second);
-}
-
 const LEADING_CHAPTER_LINE =
-  /^(?:[-*•]\s*)?(?:\[|\()?(\d{1,2}:[0-5]\d(?::[0-5]\d)?)(?:\]|\))?(?:\s*[-–—:·|]\s*|\s+)(.+)$/u;
+  /^(?:[-*•]\s*)?(?:\[|\()?(\d{1,2}:[0-5]\d(?::[0-5]\d)?)(?:\]|\))?(?:\s*[-–—:：·|]\s*|\s+)(.+)$/u;
 const TRAILING_CHAPTER_LINE =
-  /^(?:[-*•]\s*)?(.+?)(?:\s*[-–—:·|]\s*|\s+)(?:\[|\()?(\d{1,2}:[0-5]\d(?::[0-5]\d)?)(?:\]|\))?$/u;
-
-function decodeBasicHtmlToLines(input: string): string[] {
-  const withBreaks = input
-    .replace(/<\s*br\s*\/?>/giu, "\n")
-    .replace(/<\/\s*(?:p|div|li|h[1-6]|tr)\s*>/giu, "\n")
-    .replace(/<[^>]+>/gu, " ")
-    .replace(/&amp;/giu, "&")
-    .replace(/&lt;/giu, "<")
-    .replace(/&gt;/giu, ">")
-    .replace(/&quot;/giu, '"')
-    .replace(/&#39;|&apos;/giu, "'")
-    .replace(/&nbsp;/giu, " ");
-  return withBreaks
-    .split(/\r?\n/u)
-    .map((line) => line.replace(/[ \t]+/gu, " ").trim())
-    .filter(Boolean);
-}
-
-/**
- * Extracts strictly monotonic chapter markers (`00:00 Intro`, `14:20 Scaling Laws`) from show notes
- * or video descriptions. Requires at least 2 markers and the first within 10:00 so incidental prose
- * times ("at 3:30 PM") are never mistaken for an outline.
- */
-export function extractDescriptionChapters(source: string): NormalizedMediaChapter[] {
-  if (!source.trim()) return [];
-  const lines = /<[a-z][\s\S]*>/iu.test(source)
-    ? decodeBasicHtmlToLines(source)
-    : source.split(/\r?\n/u).map((line) => line.replace(/[ \t]+/gu, " ").trim()).filter(Boolean);
-
-  const candidates: NormalizedMediaChapter[] = [];
-  for (const line of lines) {
-    const lead = LEADING_CHAPTER_LINE.exec(line);
-    const trail = lead ? null : TRAILING_CHAPTER_LINE.exec(line);
-    const rawTime = lead?.[1] ?? trail?.[2];
-    const rawTitle = (lead?.[2] ?? trail?.[1] ?? "")
-      .replace(/^[-–—:·|\s]+|[-–—:·|\s]+$/gu, "")
-      .trim();
-    if (!rawTime || !rawTitle || /^https?:\/\//iu.test(rawTitle)) continue;
-    const startSec = parseTimestampLineSeconds(rawTime);
-    if (startSec === undefined) continue;
-    const prev = candidates[candidates.length - 1];
-    if (prev && startSec <= prev.startSec) continue;
-    candidates.push({
-      startSec,
-      title: rawTitle.length > 160 ? `${rawTitle.slice(0, 159).trimEnd()}…` : rawTitle,
-    });
-  }
-
-  if (candidates.length < 2 || (candidates[0]?.startSec ?? 9999) > 600) {
-    return [];
-  }
-  return candidates;
-}
+  /^(?:[-*•]\s*)?(.+?)(?:\s*[-–—:：·|]\s*|\s+)(?:\[|\()?(\d{1,2}:[0-5]\d(?::[0-5]\d)?)(?:\]|\))?$/u;
 
 const SPONSOR_HEADING =
-  /^(?:sponsors?|sponsored by|supported by|brought to you by|connect with|follow us|social links|赞助商?|本期赞助|关注我们)(?:\b|(?=\s|[:：\-–—]|$))/iu;
+  /^(?:sponsors?|sponsored by|supported by|brought to you by|connect with|follow us|social links|赞助商?|本期赞助|关注我们|期待关注|欢迎关注|联系我们|商务合作|商业合作)(?:\b|(?=\s|[:：\-–—]|$))/iu;
 
 /**
  * Drops chapter timestamp tables and trailing sponsor/social link blocks when building a concise
  * single-line Inbox gist for a podcast episode or video.
  */
 export function stripShowNotesBoilerplate(markdownOrText: string): string {
-  const withoutTitleHeading = markdownOrText.replace(/^\s*#\s+[^\n]+\n+/u, "");
+  const structured = formatShowNotesMarkdown(markdownOrText);
+  const withoutTitleHeading = structured.replace(/^\s*#\s+[^\n]+\n+/u, "");
   const lines = withoutTitleHeading
     .split(/\r?\n/u)
     .map((line) =>
@@ -152,9 +97,11 @@ export function stripShowNotesBoilerplate(markdownOrText: string): string {
     .filter(Boolean);
   const kept: string[] = [];
   for (const line of lines) {
+    if (line === "---") continue;
     if (SPONSOR_HEADING.test(line)) break;
     if (LEADING_CHAPTER_LINE.test(line) || TRAILING_CHAPTER_LINE.test(line)) continue;
     if (/^(?:subscribe|listen)\s+on\s*:/iu.test(line)) continue;
+    if (/^在(?:小宇宙|苹果播客|喜马拉雅)查看/u.test(line)) continue;
     kept.push(line);
   }
   return kept.join(" ").replace(/\s+/gu, " ").trim();
