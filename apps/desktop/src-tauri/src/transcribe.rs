@@ -1221,25 +1221,28 @@ impl TranscriptionService {
             let mut temp_audio: Option<PathBuf> = None;
             let audio_path = if let Some((cached_path, _, _)) = self.media_cache.stored(&material_id) {
                 cached_path
+            } else if media.provider == "youtube" {
+                let vid = media
+                    .video_id
+                    .clone()
+                    .or_else(|| crate::youtube::parse_youtube_video_id(&media.stream_url))
+                    .ok_or_else(|| "Missing YouTube video id.".to_string())?;
+                let yt_cookies = self.settings.optional_secret("youtubeCookies").ok().flatten();
+                let stem = format!("src-{material_id}-{job_id}");
+                let (downloaded_path, _) = crate::youtube::download_ytdlp_media(
+                    &vid,
+                    &work_dir,
+                    &stem,
+                    yt_cookies.as_deref(),
+                    &work_dir,
+                    true,
+                    Some(&cancelled),
+                )
+                .await?;
+                temp_audio = Some(downloaded_path.clone());
+                downloaded_path
             } else {
-                let is_youtube = media.provider == "youtube";
-                let stream_url = if is_youtube {
-                    let vid = media
-                        .video_id
-                        .clone()
-                        .or_else(|| crate::youtube::parse_youtube_video_id(&media.stream_url))
-                        .ok_or_else(|| "Missing YouTube video id.".to_string())?;
-                    let yt_cookies = self.settings.optional_secret("youtubeCookies").ok().flatten();
-                    crate::youtube::resolve_ytdlp_stream_with_cookies(
-                        &vid,
-                        None,
-                        yt_cookies.as_deref(),
-                        Some(&work_dir),
-                    )
-                    .await?
-                } else {
-                    media.stream_url.clone()
-                };
+                let stream_url = media.stream_url.clone();
                 let valid = assert_public_http_url(&stream_url).map_err(|e| e.message)?;
                 let resp = self
                     .media_cache
@@ -1273,19 +1276,12 @@ impl TranscriptionService {
                 let _ = f.flush();
                 drop(f);
 
-                if !is_youtube {
-                    let media_dir = self.media_cache.dir();
-                    let _ = fs::create_dir_all(&media_dir);
-                    let cached_dest = media_dir.join(format!("{material_id}.{ext}"));
-                    if fs::rename(&part_path, &cached_dest).is_ok() {
-                        (self.on_library_changed)();
-                        cached_dest
-                    } else {
-                        let fallback_path = work_dir.join(format!("src-{material_id}-{job_id}.{ext}"));
-                        fs::rename(&part_path, &fallback_path).map_err(|e| e.to_string())?;
-                        temp_audio = Some(fallback_path.clone());
-                        fallback_path
-                    }
+                let media_dir = self.media_cache.dir();
+                let _ = fs::create_dir_all(&media_dir);
+                let cached_dest = media_dir.join(format!("{material_id}.{ext}"));
+                if fs::rename(&part_path, &cached_dest).is_ok() {
+                    (self.on_library_changed)();
+                    cached_dest
                 } else {
                     let fallback_path = work_dir.join(format!("src-{material_id}-{job_id}.{ext}"));
                     fs::rename(&part_path, &fallback_path).map_err(|e| e.to_string())?;

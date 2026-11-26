@@ -1491,11 +1491,37 @@ pub async fn detect_youtube_target_with_cookies(
     }
 }
 
+const YTDLP_AUTHED_EXTRACTOR_ARGS: &str =
+    "youtube:player_client=web_safari,mweb,tv,web_creator,web,-tv_downgraded";
+const YTDLP_ANON_EXTRACTOR_ARGS: &str =
+    "youtube:player_client=visionos,android_vr,web_safari,mweb,-tv_downgraded";
+
+fn push_unique_dir(parts: &mut Vec<String>, candidate: &Path) {
+    if candidate.is_dir() {
+        let s = candidate.to_string_lossy().to_string();
+        if !s.is_empty() && !parts.iter().any(|x| x == &s) {
+            parts.push(s);
+        }
+    }
+}
+
 fn augmented_gui_path() -> String {
-    let mut parts: Vec<String> = vec![
-        "/opt/homebrew/bin".into(),
-        "/usr/local/bin".into(),
-    ];
+    let mut parts: Vec<String> = vec!["/opt/homebrew/bin".into(), "/usr/local/bin".into()];
+    if let Ok(home) = std::env::var("HOME") {
+        let home_p = Path::new(&home);
+        push_unique_dir(&mut parts, &home_p.join(".deno/bin"));
+        push_unique_dir(&mut parts, &home_p.join(".bun/bin"));
+        push_unique_dir(&mut parts, &home_p.join(".volta/bin"));
+        let nvm_nodes = home_p.join(".nvm/versions/node");
+        if let Ok(entries) = fs::read_dir(&nvm_nodes) {
+            let mut vers: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+            vers.sort();
+            vers.reverse();
+            for v in vers {
+                push_unique_dir(&mut parts, &v.join("bin"));
+            }
+        }
+    }
     if let Ok(existing) = std::env::var("PATH") {
         for p in existing.split(':').filter(|s| !s.is_empty()) {
             if !parts.iter().any(|x| x == p) {
@@ -1508,8 +1534,61 @@ fn augmented_gui_path() -> String {
     parts.join(":")
 }
 
+fn ytdlp_candidates(custom_path: Option<&str>) -> Vec<String> {
+    let mut candidates: Vec<String> = Vec::new();
+    if let Some(p) = custom_path.map(str::trim).filter(|s| !s.is_empty()) {
+        candidates.push(p.to_string());
+    }
+    for fixed in ["/opt/homebrew/bin/yt-dlp", "/usr/local/bin/yt-dlp"] {
+        if Path::new(fixed).is_file() {
+            candidates.push(fixed.to_string());
+        }
+    }
+    candidates.push("yt-dlp".into());
+    candidates
+}
+
+fn configure_ytdlp_base_args(cmd: &mut Command, gui_path: &str) {
+    cmd.env("PATH", gui_path).args([
+        "--no-playlist",
+        "--no-warnings",
+        "--js-runtimes",
+        "deno",
+        "--js-runtimes",
+        "node",
+        "--js-runtimes",
+        "bun",
+    ]);
+}
+
+fn format_ytdlp_error(last_error: &str, had_cookies: bool) -> String {
+    let lower = last_error.to_ascii_lowercase();
+    if lower.contains("sign in to confirm") || lower.contains("not a bot") {
+        if had_cookies {
+            return "YouTube rejected the stored session (\"Sign in to confirm you're not a bot\"). Reconnect your YouTube account in Settings › Sources.".into();
+        }
+        return "YouTube blocked anonymous audio extraction on your current network/proxy (\"Sign in to confirm you're not a bot\"). Click \"Sign in to YouTube…\" or connect your YouTube account in Settings › Sources.".into();
+    }
+    if lower.contains("page needs to be reloaded") {
+        return "YouTube rejected yt-dlp's player session (\"The page needs to be reloaded\"). Run `brew upgrade yt-dlp` or reconnect your YouTube account in Settings › Sources.".into();
+    }
+    if last_error.trim().is_empty() {
+        return "yt-dlp could not extract media from this YouTube video.".into();
+    }
+    let clean_err = last_error
+        .lines()
+        .rfind(|l| l.contains("ERROR:"))
+        .unwrap_or(last_error)
+        .trim_start_matches("ERROR:")
+        .trim();
+    format!(
+        "yt-dlp failed to extract YouTube audio: {}",
+        clean_err.chars().take(240).collect::<String>()
+    )
+}
+
 /// Optional Tier-2 local enhancement: uses local `yt-dlp` when present on the machine
-/// to resolve a direct audio/MP4 stream URL for ASR transcription or offline caching.
+/// to resolve a direct audio/MP4 stream URL for live Range streaming.
 pub async fn resolve_ytdlp_stream(video_id: &str, custom_path: Option<&str>) -> Result<String, String> {
     resolve_ytdlp_stream_with_cookies(video_id, custom_path, None, None).await
 }
@@ -1523,17 +1602,7 @@ pub async fn resolve_ytdlp_stream_with_cookies(
     if !valid_youtube_video_id(video_id) {
         return Err("Invalid YouTube video ID.".into());
     }
-    let mut candidates: Vec<String> = Vec::new();
-    if let Some(p) = custom_path.map(str::trim).filter(|s| !s.is_empty()) {
-        candidates.push(p.to_string());
-    }
-    for fixed in ["/opt/homebrew/bin/yt-dlp", "/usr/local/bin/yt-dlp"] {
-        if Path::new(fixed).is_file() {
-            candidates.push(fixed.to_string());
-        }
-    }
-    candidates.push("yt-dlp".into());
-
+    let candidates = ytdlp_candidates(custom_path);
     let fallback_tmp = std::env::temp_dir().join("quire-yt");
     let cookie_dir = work_dir.unwrap_or(&fallback_tmp);
     let temp_cookie_file = youtube_cookies_json
@@ -1545,52 +1614,60 @@ pub async fn resolve_ytdlp_stream_with_cookies(
     let mut last_error = String::new();
     let mut resolved_url: Option<String> = None;
 
-    for bin in candidates {
-        let mut cmd = Command::new(&bin);
-        cmd.env("PATH", &gui_path)
-            .args(["--no-playlist", "--no-warnings"]);
-        if let Some(ref cookie_path) = temp_cookie_file {
-            cmd.arg("--cookies").arg(cookie_path);
-        }
-        cmd.args([
-            "-f",
-            "bestaudio[ext=m4a]/bestaudio/best[ext=mp4]/best",
-            "-g",
-            &watch_url,
-        ]);
+    let mut passes: Vec<(Option<&Path>, &str)> = Vec::new();
+    if let Some(ref cookie_path) = temp_cookie_file {
+        passes.push((Some(cookie_path.as_path()), YTDLP_AUTHED_EXTRACTOR_ARGS));
+    }
+    passes.push((None, YTDLP_ANON_EXTRACTOR_ARGS));
 
-        match tokio::time::timeout(Duration::from_secs(25), cmd.output()).await {
-            Ok(Ok(out)) => {
-                ran_binary = true;
-                if out.status.success() {
-                    let stdout = String::from_utf8_lossy(&out.stdout);
-                    for line in stdout.lines() {
-                        let trimmed = line.trim();
-                        if let Ok(u) = assert_public_http_url(trimmed) {
-                            resolved_url = Some(u.to_string());
-                            break;
+    'outer: for (cookie_opt, extractor_args) in passes {
+        for bin in &candidates {
+            let mut cmd = Command::new(bin);
+            configure_ytdlp_base_args(&mut cmd, &gui_path);
+            cmd.args(["--extractor-args", extractor_args]);
+            if let Some(cookie_path) = cookie_opt {
+                cmd.arg("--cookies").arg(cookie_path);
+            }
+            cmd.args([
+                "-f",
+                "bestaudio[ext=m4a]/bestaudio/best[ext=mp4]/best",
+                "-g",
+                &watch_url,
+            ]);
+
+            match tokio::time::timeout(Duration::from_secs(30), cmd.output()).await {
+                Ok(Ok(out)) => {
+                    ran_binary = true;
+                    if out.status.success() {
+                        let stdout = String::from_utf8_lossy(&out.stdout);
+                        for line in stdout.lines() {
+                            let trimmed = line.trim();
+                            if let Ok(u) = assert_public_http_url(trimmed) {
+                                resolved_url = Some(u.to_string());
+                                break 'outer;
+                            }
+                        }
+                    } else {
+                        let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                        if !stderr.is_empty() {
+                            last_error = stderr;
                         }
                     }
-                    if resolved_url.is_some() {
-                        break;
-                    }
-                } else {
-                    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
-                    if !stderr.is_empty() {
-                        last_error = stderr;
-                    }
+                    break;
                 }
-            }
-            Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => {
-                continue;
-            }
-            Ok(Err(e)) => {
-                ran_binary = true;
-                last_error = e.to_string();
-            }
-            Err(_) => {
-                ran_binary = true;
-                last_error = "yt-dlp timed out after 25s while contacting YouTube.".into();
+                Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+                    continue;
+                }
+                Ok(Err(e)) => {
+                    ran_binary = true;
+                    last_error = e.to_string();
+                    break;
+                }
+                Err(_) => {
+                    ran_binary = true;
+                    last_error = "yt-dlp timed out after 30s while contacting YouTube.".into();
+                    break;
+                }
             }
         }
     }
@@ -1610,32 +1687,300 @@ pub async fn resolve_ytdlp_stream_with_cookies(
         );
     }
 
-    let lower = last_error.to_ascii_lowercase();
-    if lower.contains("sign in to confirm") || lower.contains("not a bot") {
-        if youtube_cookies_json.is_some() {
-            return Err(
-                "YouTube rejected the stored session (\"Sign in to confirm you're not a bot\"). Reconnect your YouTube account in Settings › Sources."
-                    .into(),
-            );
+    Err(format_ytdlp_error(&last_error, youtube_cookies_json.is_some()))
+}
+
+fn find_downloaded_media_file(dest_dir: &Path, file_stem: &str) -> Option<(PathBuf, u64)> {
+    let prefix = format!("{file_stem}.");
+    let entries = fs::read_dir(dest_dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !name.starts_with(&prefix) {
+            continue;
         }
+        let lower = name.to_ascii_lowercase();
+        if lower.ends_with(".part")
+            || lower.ends_with(".ytdl")
+            || lower.ends_with(".temp")
+            || lower.ends_with(".txt")
+            || lower.ends_with(".vtt")
+            || lower.ends_with(".srv3")
+        {
+            continue;
+        }
+        if let Ok(meta) = entry.metadata() {
+            if meta.is_file() && meta.len() > 0 {
+                return Some((path, meta.len()));
+            }
+        }
+    }
+    None
+}
+
+fn cleanup_partial_stem_files(dest_dir: &Path, file_stem: &str) {
+    let prefix = format!("{file_stem}.");
+    if let Ok(entries) = fs::read_dir(dest_dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with(&prefix))
+            {
+                let _ = fs::remove_file(p);
+            }
+        }
+    }
+}
+
+/// Downloads YouTube audio/video directly to disk through `yt-dlp`, supporting HLS (`m3u8_native`
+/// from `web_safari` / `mweb`, which do not require GVS PO tokens), `tv`, and `visionos` fallback.
+pub async fn download_ytdlp_media(
+    video_id: &str,
+    dest_dir: &Path,
+    file_stem: &str,
+    youtube_cookies_json: Option<&str>,
+    work_dir: &Path,
+    audio_only: bool,
+    cancelled: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<(PathBuf, u64), String> {
+    if !valid_youtube_video_id(video_id) {
+        return Err("Invalid YouTube video ID.".into());
+    }
+    fs::create_dir_all(dest_dir).map_err(|e| e.to_string())?;
+    fs::create_dir_all(work_dir).map_err(|e| e.to_string())?;
+    cleanup_partial_stem_files(dest_dir, file_stem);
+
+    let temp_cookie_file = youtube_cookies_json
+        .and_then(|raw| write_temp_netscape_cookies(work_dir, raw));
+    let candidates = ytdlp_candidates(None);
+    let gui_path = augmented_gui_path();
+    let watch_url = canonical_youtube_watch_url(video_id);
+    let out_template = dest_dir
+        .join(format!("{file_stem}.%(ext)s"))
+        .to_string_lossy()
+        .to_string();
+    let fmt_selector = if audio_only {
+        "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best[height<=360]/best[height<=480]/best"
+    } else {
+        "best[ext=mp4][height<=720]/best[ext=webm][height<=720]/best[height<=720]/best"
+    };
+
+    let mut passes: Vec<(Option<&Path>, &str)> = Vec::new();
+    if let Some(ref cookie_path) = temp_cookie_file {
+        passes.push((Some(cookie_path.as_path()), YTDLP_AUTHED_EXTRACTOR_ARGS));
+    }
+    passes.push((None, YTDLP_ANON_EXTRACTOR_ARGS));
+
+    let mut ran_binary = false;
+    let mut last_error = String::new();
+
+    'passes: for (cookie_opt, extractor_args) in passes {
+        cleanup_partial_stem_files(dest_dir, file_stem);
+        for bin in &candidates {
+            let mut cmd = Command::new(bin);
+            configure_ytdlp_base_args(&mut cmd, &gui_path);
+            cmd.args([
+                "--no-part",
+                "--extractor-args",
+                extractor_args,
+                "-f",
+                fmt_selector,
+                "-o",
+                &out_template,
+            ]);
+            if let Some(cookie_path) = cookie_opt {
+                cmd.arg("--cookies").arg(cookie_path);
+            }
+            cmd.arg(&watch_url);
+            cmd.stdout(std::process::Stdio::null());
+            cmd.stderr(std::process::Stdio::piped());
+            cmd.kill_on_drop(true);
+
+            let mut child = match cmd.spawn() {
+                Ok(c) => {
+                    ran_binary = true;
+                    c
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+                Err(e) => {
+                    ran_binary = true;
+                    last_error = e.to_string();
+                    break;
+                }
+            };
+
+            let started = Instant::now();
+            let timeout = Duration::from_secs(600);
+            loop {
+                if cancelled.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+                    let _ = child.kill().await;
+                    cleanup_partial_stem_files(dest_dir, file_stem);
+                    if let Some(ref cp) = temp_cookie_file {
+                        let _ = fs::remove_file(cp);
+                    }
+                    return Err("Cancelled.".into());
+                }
+                if started.elapsed() > timeout {
+                    let _ = child.kill().await;
+                    last_error = "yt-dlp timed out while downloading YouTube audio.".into();
+                    break;
+                }
+                match child.try_wait() {
+                    Ok(Some(status)) => {
+                        if let Some(mut stderr_pipe) = child.stderr.take() {
+                            use tokio::io::AsyncReadExt;
+                            let mut buf = Vec::new();
+                            let _ = stderr_pipe.read_to_end(&mut buf).await;
+                            let err_txt = String::from_utf8_lossy(&buf).trim().to_string();
+                            if !err_txt.is_empty() {
+                                last_error = err_txt;
+                            }
+                        }
+                        if status.success() {
+                            if let Some(found) = find_downloaded_media_file(dest_dir, file_stem) {
+                                if let Some(ref cp) = temp_cookie_file {
+                                    let _ = fs::remove_file(cp);
+                                }
+                                return Ok(found);
+                            }
+                        }
+                        break;
+                    }
+                    Ok(None) => {
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                    }
+                    Err(e) => {
+                        last_error = e.to_string();
+                        break;
+                    }
+                }
+            }
+            // Binary existed and ran for this pass; move to next pass if it failed
+            continue 'passes;
+        }
+    }
+
+    cleanup_partial_stem_files(dest_dir, file_stem);
+    if let Some(ref cp) = temp_cookie_file {
+        let _ = fs::remove_file(cp);
+    }
+
+    if !ran_binary {
         return Err(
-            "YouTube blocked anonymous audio extraction on your current network/proxy (\"Sign in to confirm you're not a bot\"). Click \"Sign in to YouTube…\" or connect your YouTube account in Settings › Sources."
+            "Install yt-dlp (`brew install yt-dlp`) to extract audio from YouTube videos without public captions."
                 .into(),
         );
     }
-    if last_error.is_empty() {
-        return Err("yt-dlp could not resolve a direct audio stream URL for this YouTube video.".into());
+
+    Err(format_ytdlp_error(&last_error, youtube_cookies_json.is_some()))
+}
+
+fn is_likely_auto_subtitle(lower_filename: &str, content: &str) -> bool {
+    lower_filename.contains("-orig.")
+        || lower_filename.contains(".orig.")
+        || content.contains("<s ac=\"")
+        || content.contains("<c>")
+}
+
+/// Fallback subtitle extraction via `yt-dlp` (`mweb`/`tv`/`web_safari`) when YouTube's `WEB`
+/// `captionTracks` URLs carry `exp=xpe` PO-token experiments and answer empty over direct HTTP.
+pub async fn fetch_ytdlp_subtitles(
+    video_id: &str,
+    youtube_cookies_json: Option<&str>,
+    work_dir: &Path,
+) -> Option<(String, String, bool)> {
+    if !valid_youtube_video_id(video_id) {
+        return None;
     }
-    let clean_err = last_error
-        .lines()
-        .find(|l| l.contains("ERROR:"))
-        .unwrap_or(&last_error)
-        .trim_start_matches("ERROR:")
-        .trim();
-    Err(format!(
-        "yt-dlp failed to extract YouTube audio: {}",
-        clean_err.chars().take(240).collect::<String>()
-    ))
+    let mut rnd = [0u8; 6];
+    rand::thread_rng().fill_bytes(&mut rnd);
+    let hex: String = rnd.iter().map(|b| format!("{b:02x}")).collect();
+    let sub_dir = work_dir.join(format!("yt-subs-{hex}"));
+    fs::create_dir_all(&sub_dir).ok()?;
+
+    let temp_cookie_file = youtube_cookies_json
+        .and_then(|raw| write_temp_netscape_cookies(work_dir, raw));
+    let candidates = ytdlp_candidates(None);
+    let gui_path = augmented_gui_path();
+    let watch_url = canonical_youtube_watch_url(video_id);
+    let out_template = sub_dir.join("sub").to_string_lossy().to_string();
+    let extractor_args = if temp_cookie_file.is_some() {
+        YTDLP_AUTHED_EXTRACTOR_ARGS
+    } else {
+        YTDLP_ANON_EXTRACTOR_ARGS
+    };
+
+    for bin in &candidates {
+        let mut cmd = Command::new(bin);
+        configure_ytdlp_base_args(&mut cmd, &gui_path);
+        cmd.args([
+            "--skip-download",
+            "--write-subs",
+            "--write-auto-subs",
+            "--sub-langs",
+            "en.*,zh.*,en,zh",
+            "--sub-format",
+            "srv3/vtt",
+            "--extractor-args",
+            extractor_args,
+            "-o",
+            &out_template,
+        ]);
+        if let Some(ref cp) = temp_cookie_file {
+            cmd.arg("--cookies").arg(cp);
+        }
+        cmd.arg(&watch_url);
+
+        match tokio::time::timeout(Duration::from_secs(22), cmd.output()).await {
+            Ok(Ok(_)) => break,
+            Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            _ => break,
+        }
+    }
+
+    if let Some(ref cp) = temp_cookie_file {
+        let _ = fs::remove_file(cp);
+    }
+
+    let mut best: Option<(usize, String, String, bool)> = None;
+    if let Ok(entries) = fs::read_dir(&sub_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
+                continue;
+            };
+            let lower = name.to_ascii_lowercase();
+            let media_type = if lower.ends_with(".srv3") {
+                "text/xml"
+            } else if lower.ends_with(".vtt") {
+                "text/vtt"
+            } else {
+                continue;
+            };
+            let Ok(text) = fs::read_to_string(&path) else {
+                continue;
+            };
+            if text.trim().is_empty() {
+                continue;
+            }
+            let is_auto = is_likely_auto_subtitle(&lower, &text);
+            let rank = match (is_auto, lower.ends_with(".srv3")) {
+                (false, true) => 0,
+                (false, false) => 1,
+                (true, true) => 2,
+                (true, false) => 3,
+            };
+            if best.as_ref().is_none_or(|b| rank < b.0) {
+                best = Some((rank, text, media_type.to_string(), is_auto));
+            }
+        }
+    }
+
+    let _ = fs::remove_dir_all(&sub_dir);
+    best.map(|(_, txt, mt, is_auto)| (txt, mt, is_auto))
 }
 
 pub fn parse_player_youtube_id(raw: &str) -> Option<String> {
@@ -1955,5 +2300,53 @@ mod tests {
         assert_eq!(parsed.1.as_deref(), Some("Andrej Karpathy"));
         assert_eq!(parsed.2.as_deref(), Some("2023-11-23T02:27:48+00:00"));
         assert_eq!(parsed.3.as_deref(), Some("00:00 Intro & Motivation\n05:10 LLM Inference"));
+    }
+
+    #[test]
+    fn excludes_deprecated_tv_downgraded_and_formats_ytdlp_diagnostics() {
+        assert!(YTDLP_AUTHED_EXTRACTOR_ARGS.contains("web_safari"));
+        assert!(YTDLP_AUTHED_EXTRACTOR_ARGS.contains("-tv_downgraded"));
+        assert!(YTDLP_ANON_EXTRACTOR_ARGS.contains("visionos"));
+        assert!(YTDLP_ANON_EXTRACTOR_ARGS.contains("-tv_downgraded"));
+
+        let reload_msg = format_ytdlp_error(
+            "ERROR: [youtube] nqEwi-DU2oo: The page needs to be reloaded.",
+            true,
+        );
+        assert!(reload_msg.contains("brew upgrade yt-dlp"));
+
+        let bot_anon = format_ytdlp_error(
+            "ERROR: [youtube] nqEwi-DU2oo: Sign in to confirm you're not a bot",
+            false,
+        );
+        assert!(bot_anon.contains("Sign in to YouTube"));
+
+        let bot_authed = format_ytdlp_error(
+            "ERROR: [youtube] nqEwi-DU2oo: Sign in to confirm you're not a bot",
+            true,
+        );
+        assert!(bot_authed.contains("Reconnect your YouTube account"));
+
+        assert!(is_likely_auto_subtitle(
+            "sub.en.srv3",
+            r#"<timedtext format="3"><body><p t="0" d="2000"><s ac="252">hello</s></p></body></timedtext>"#
+        ));
+        assert!(!is_likely_auto_subtitle(
+            "sub.en.srv3",
+            r#"<timedtext format="3"><body><p t="0" d="2000">Hello world.</p></body></timedtext>"#
+        ));
+
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("yt-job.m4a.part"), b"partial").unwrap();
+        fs::write(tmp.path().join("yt-job.en.srv3"), b"<timedtext/>").unwrap();
+        assert!(find_downloaded_media_file(tmp.path(), "yt-job").is_none());
+
+        fs::write(tmp.path().join("yt-job.m4a"), b"audio-bytes").unwrap();
+        let (found_path, len) = find_downloaded_media_file(tmp.path(), "yt-job").expect("media file");
+        assert_eq!(found_path.file_name().and_then(|s| s.to_str()), Some("yt-job.m4a"));
+        assert_eq!(len, 11);
+
+        cleanup_partial_stem_files(tmp.path(), "yt-job");
+        assert!(find_downloaded_media_file(tmp.path(), "yt-job").is_none());
     }
 }

@@ -243,18 +243,37 @@ impl MediaCache {
             });
             return Ok(bytes);
         }
-        let resolved_stream = if let Some(vid) = crate::youtube::parse_youtube_video_id(stream_url) {
+        if let Some(vid) = crate::youtube::parse_youtube_video_id(stream_url) {
             let cookies = self.youtube_cookies_json();
             let tmp_dir = self.tmp_dir();
-            match crate::youtube::resolve_ytdlp_stream_with_cookies(
+            on_progress(MediaCacheProgress {
+                material_id: material_id.to_string(),
+                downloaded_bytes: 0,
+                total_bytes: None,
+                phase: "downloading".into(),
+                error: None,
+            });
+            match crate::youtube::download_ytdlp_media(
                 &vid,
-                None,
+                &self.dir(),
+                material_id,
                 cookies.as_deref(),
-                Some(&tmp_dir),
+                &tmp_dir,
+                false,
+                None,
             )
             .await
             {
-                Ok(direct) => direct,
+                Ok((_, bytes)) => {
+                    on_progress(MediaCacheProgress {
+                        material_id: material_id.to_string(),
+                        downloaded_bytes: bytes,
+                        total_bytes: Some(bytes),
+                        phase: "done".into(),
+                        error: None,
+                    });
+                    return Ok(bytes);
+                }
                 Err(msg) => {
                     on_progress(MediaCacheProgress {
                         material_id: material_id.to_string(),
@@ -266,10 +285,8 @@ impl MediaCache {
                     return Err(msg);
                 }
             }
-        } else {
-            stream_url.to_string()
-        };
-        let valid_url = assert_public_http_url(&resolved_stream).map_err(|e| e.message)?;
+        }
+        let valid_url = assert_public_http_url(stream_url).map_err(|e| e.message)?;
         fs::create_dir_all(self.dir()).map_err(|e| e.to_string())?;
 
         let resp = self

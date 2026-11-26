@@ -3315,6 +3315,41 @@ impl MaterialStore {
             }
         }
 
+        // Fallback when WEB `captionTracks` carry `exp=xpe` PO-token experiments and answer 0 bytes
+        // (or when the watch page itself was bot-gated so `yt.duration_sec` is absent).
+        if normalized_tx.is_none() && (!yt.captions.is_empty() || yt.duration_sec.is_none()) {
+            let all_declared_auto = !yt.captions.is_empty() && yt.captions.iter().all(|c| c.is_auto);
+            if let Some((raw_text, cap_media_type, is_auto)) = crate::youtube::fetch_ytdlp_subtitles(
+                video_id,
+                yt_cookies.as_deref(),
+                &self.root.join("tmp-asr"),
+            )
+            .await
+            {
+                if let Ok(tx) = self
+                    .normalizer
+                    .normalize_transcript(NormalizeTranscriptInput {
+                        raw_text: Some(raw_text),
+                        media_type: Some(cap_media_type),
+                        cues: None,
+                        chapters: if yt.chapters.is_empty() { None } else { Some(yt.chapters.clone()) },
+                        keyframes: if keyframes.is_empty() { None } else { Some(keyframes.clone()) },
+                        title: Some(yt.title.clone()),
+                    })
+                    .await
+                {
+                    if !tx.time_anchors.is_empty() {
+                        transcript_origin = if is_auto || all_declared_auto {
+                            "auto_captions".into()
+                        } else {
+                            "captions".into()
+                        };
+                        normalized_tx = Some(tx);
+                    }
+                }
+            }
+        }
+
         let (
             primary_view,
             media_type,
