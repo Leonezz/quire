@@ -146,6 +146,8 @@ pub struct NormalizedTranscriptResult {
     pub reading_minutes: u32,
     pub time_anchors: Vec<TranscriptAnchor>,
     pub cues: Vec<TranscriptCueDto>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chapters: Option<Vec<MediaChapter>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

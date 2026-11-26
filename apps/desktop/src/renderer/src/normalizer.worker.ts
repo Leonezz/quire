@@ -295,6 +295,7 @@ async function runJob(op: string, payload: Record<string, unknown>): Promise<unk
     }
     const normalized = normalizeTranscript(checked.cues, {
       chapters: checked.chapters,
+      preserveParagraphs: true,
       ...(keyframes ? { keyframes } : {}),
       ...(title ? { title } : {}),
     });
@@ -305,6 +306,7 @@ async function runJob(op: string, payload: Record<string, unknown>): Promise<unk
       readingMinutes: readingMinutes(normalized.plain),
       timeAnchors: normalized.anchors,
       cues: checked.cues,
+      ...(checked.chapters.length > 0 ? { chapters: checked.chapters } : {}),
     };
   }
 

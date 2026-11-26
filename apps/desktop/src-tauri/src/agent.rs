@@ -53,13 +53,13 @@ fn task_instruction(task: &str, material_id: Option<&str>) -> Option<String> {
         "cleanup_transcript" => {
             let target_id = material_id.unwrap_or("<id>");
             Some(format!(
-                "Clean up the machine-generated transcript of material {target_id} into calm, readable prose WITHOUT summarising or dropping content.\n\
-                1. Read the complete raw cues with transcript_read_raw (id \"{target_id}\", paging with nextOffset until nextOffset is null).\n\
-                2. Merge fragmented caption lines into natural 80–160 word paragraphs, restore punctuation, capitalisation, and domain terms (using the title, creators, and show notes for spelling), and add clear `## Section Title` headings at major topic shifts.\n\
-                3. Every paragraph MUST begin with its exact `[MM:SS]` (or `[H:MM:SS]`) start timestamp from the raw cues in monotonically non-decreasing order, optionally followed by `**Speaker Name**: ` when speaker turns are clear, e.g.:\n\
-                   `[04:38] **Ilya Sutskever**: Pre-training as we knew it had one special property...`\n\
-                4. Keep total word count within ±20% of the raw cues — never condense, skip sections, or summarise.\n\
-                5. Save the result in place with transcript_save_refined (id \"{target_id}\") and reply in one sentence confirming the transcript was cleaned up."
+                "Refine the machine-generated transcript of material {target_id} into clean, speaker-attributed, semantically structured prose WITHOUT summarising or dropping substance.\n\
+                1. Read all raw cues with transcript_read_raw (id \"{target_id}\", starting at offset 0 — which also returns `showNotes` with host/guest names and topic clues — and paging with nextOffset until nextOffset is null).\n\
+                2. Split by speaker turns: infer speaker switches from questions vs answers, forms of address, and names in `showNotes`/`byline`. Start EVERY speaker turn on its own new paragraph prefixed with `[MM:SS] **Speaker**: ` (use real names from `showNotes`/`byline` when clear, otherwise `**主持人**` / `**嘉宾**` for Chinese or `**Host**` / `**Guest**` for English).\n\
+                3. Split by semantics & restore sentences: break run-on ASR streams into complete, properly punctuated sentences (`。？！` / `. ? !`), and split long monologues into focused single-idea paragraphs (~40–90 words or ~60–160 Chinese characters per paragraph). Give each split paragraph the exact `[MM:SS]` (or `[H:MM:SS]`) timestamp from the raw cue where that sentence/idea starts, strictly non-decreasing.\n\
+                4. Repair homophones, proper nouns, technical terms, and mixed CJK/English spacing using `title` and `showNotes`; trim only pure non-lexical stutters (`嗯嗯`, `uh`, repeated false starts) while keeping word count within 70%–125% of the raw cues — never condense or skip sections.\n\
+                5. Insert descriptive `## Section Title` headings at major topic transitions.\n\
+                6. Save in place with transcript_save_refined (id \"{target_id}\") and reply in one sentence confirming how many sections/turns were refined."
             ))
         }
         _ => None,
@@ -401,7 +401,7 @@ To cite inside html or react, link the claim: <a href=\"quire:material/ID\" data
         },
         DynamicTool {
             name: "transcript_save_refined".into(),
-            description: "Save a cleaned-up, punctuated, naturally paragraphed transcript back onto a podcast or video material while preserving its raw cues and highlight anchors. Every paragraph must begin with a monotonic `[MM:SS]` (or `[H:MM:SS]`) timestamp within the original timeline, optional `## Heading` lines mark chapters, and total word count must stay within ±20% of the raw cues (never summarise).".into(),
+            description: "Save a refined, punctuated, speaker-attributed, semantically paragraphed transcript back onto a podcast or video material while preserving its raw cues, timestamps, and highlight anchors. Every paragraph and speaker turn must begin on its own line with a monotonic `[MM:SS]` (or `[H:MM:SS]`) timestamp and optional `**Speaker**: ` label, `## Heading` lines mark topic sections, and total word count must stay within 70%–125% of the raw cues (never summarise).".into(),
             input_schema: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -1020,6 +1020,16 @@ impl TurnExecutionContext {
                     out.insert("publication".into(), serde_json::json!(pub_name));
                 }
                 out.insert("cueCount".into(), serde_json::json!(raw_cues.len()));
+                if offset == 0 {
+                    if let Ok(Some(notes_view)) = self.store.get_view(&id, "shownotes") {
+                        if let Some(notes_txt) = notes_view.markdown.or(notes_view.plain) {
+                            let snippet: String = notes_txt.chars().take(6000).collect();
+                            if !snippet.trim().is_empty() {
+                                out.insert("showNotes".into(), serde_json::json!(snippet));
+                            }
+                        }
+                    }
+                }
                 if let Some(po) = paged.as_object() {
                     for (k, v) in po {
                         out.insert(k.clone(), v.clone());

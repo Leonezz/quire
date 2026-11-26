@@ -104,7 +104,10 @@ export function ReaderArticle({ material, content, prefs, resolveImage, onOpenLi
       return;
     }
     const syncLayout = () => {
-      const paragraphs = article.querySelectorAll<HTMLParagraphElement>(".reader-document > p");
+      const paragraphs = article.querySelectorAll<HTMLParagraphElement>(
+        ".reader-document > p, .reader-document > section > p",
+      );
+      const artRect = article.getBoundingClientRect();
       let prevSpeaker: string | undefined;
       const measured: MarginStamp[] = [];
       paragraphs.forEach((p) => p.removeAttribute("data-speaker"));
@@ -115,10 +118,12 @@ export function ReaderArticle({ material, content, prefs, resolveImage, onOpenLi
           p.setAttribute("data-speaker", anchor.speaker);
         }
         prevSpeaker = anchor.speaker;
+        const pRect = p.getBoundingClientRect();
+        const top = artRect.height > 0 || pRect.height > 0 ? pRect.top - artRect.top : p.offsetTop;
         measured.push({
           paragraphIndex: anchor.paragraphIndex,
           startSec: anchor.startSec,
-          top: p.offsetTop,
+          top,
         });
       }
       setStamps(measured);
@@ -139,7 +144,9 @@ export function ReaderArticle({ material, content, prefs, resolveImage, onOpenLi
   useEffect(() => {
     const article = articleRef.current;
     if (!article) return;
-    const paragraphs = article.querySelectorAll<HTMLParagraphElement>(".reader-document > p");
+    const paragraphs = article.querySelectorAll<HTMLParagraphElement>(
+      ".reader-document > p, .reader-document > section > p",
+    );
     paragraphs.forEach((p, idx) => {
       if (activeParagraphIndex !== undefined && idx === activeParagraphIndex) {
         p.setAttribute("data-active-turn", "true");

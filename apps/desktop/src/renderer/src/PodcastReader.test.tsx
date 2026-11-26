@@ -287,4 +287,107 @@ describe("Podcast reading and companion player", () => {
     expect(mediaStore.getState().playing).toBe(true);
     expect(mediaStore.getState().positionSec).toBe(248);
   });
+
+  it("renders margin timestamps and speaker labels inside sectioned agent-refined transcripts and protects cached media behind a confirmation menu", async () => {
+    const refinedP0 = "今天我们聊聊双十一最早是怎么从校园光棍节变成线上促销的。";
+    const refinedP1 = "其实最早做打折专场的并不是电商平台，而是盛大游戏的点卡充值活动。";
+    const refinedPlain = `促销起源\n\n${refinedP0}\n\n${refinedP1}`;
+    const refinedMaterial: MaterialRecord = {
+      ...podcastMaterial,
+      id: "c3d4e5f60718293a",
+      reader: {
+        schema: "reader.document.v2",
+        payload: JSON.stringify({
+          type: "root",
+          losses: [],
+          children: [
+            {
+              type: "section",
+              anchor: "t-0",
+              children: [
+                { type: "heading", depth: 2, anchor: "t-0", children: [{ type: "text", value: "促销起源" }] },
+                { type: "paragraph", children: [{ type: "text", value: refinedP0 }] },
+                { type: "paragraph", children: [{ type: "text", value: refinedP1 }] },
+              ],
+            },
+          ],
+        }),
+      },
+      markdown: `## 促销起源\n\n[00:12] **主持人**: ${refinedP0}\n\n[00:45] **嘉宾**: ${refinedP1}`,
+      plain: refinedPlain,
+      timeAnchors: [
+        { paragraphIndex: 0, start: 6, end: 6 + refinedP0.length, startSec: 12, endSec: 45, speaker: "主持人" },
+        {
+          paragraphIndex: 1,
+          start: refinedPlain.length - refinedP1.length,
+          end: refinedPlain.length,
+          startSec: 45,
+          endSec: 90,
+          speaker: "嘉宾",
+        },
+      ],
+      media: {
+        kind: "audio",
+        provider: "podcast",
+        streamUrl: "https://cdn.example.test/ep-refined.m4a",
+        durationSec: 4642,
+        cachedBytes: 65_011_712,
+        transcriptOrigin: "agent_refined",
+      },
+    };
+
+    const removeMediaCache = vi.fn(async () => ({
+      ...refinedMaterial,
+      media: { ...refinedMaterial.media!, cachedBytes: undefined },
+    }));
+
+    api.read = mockRead({
+      getMaterial: vi.fn(async () => refinedMaterial),
+      getMaterialView: vi.fn(async (_id, view) =>
+        view === "shownotes"
+          ? {
+              view: "shownotes" as const,
+              mediaType: "text/x-quire-shownotes",
+              markdown: "本期简介",
+              plain: "本期简介",
+              readingMinutes: 1,
+              quality: refinedMaterial.quality,
+              problems: [],
+            }
+          : undefined,
+      ),
+      listAnnotations: vi.fn(async () => []),
+      resolveImage: vi.fn(async (u: string) => u),
+      getMediaState: vi.fn(async () => undefined),
+      saveMediaState: vi.fn(async () => undefined),
+      removeMediaCache,
+      listTranscriptionJobs: vi.fn(async () => []),
+      getUpdateState: vi.fn(async () => ({ phase: "idle" as const, current: "0.2.0" })),
+    });
+
+    const { container } = render(
+      <MaterialReader id={refinedMaterial.id} onOpenLink={() => undefined} onOpenMaterial={() => undefined} />,
+    );
+    await act(async () => {
+      await flush();
+      await flush();
+    });
+
+    // Sectioned `<section> > <p>` paragraphs still receive both margin timestamps and `data-speaker` attributes
+    expect(screen.getByText("00:12")).toBeTruthy();
+    expect(screen.getByText("00:45")).toBeTruthy();
+    const speakerParas = container.querySelectorAll("p[data-speaker]");
+    expect(speakerParas).toHaveLength(2);
+    expect(speakerParas[0]?.getAttribute("data-speaker")).toBe("主持人");
+    expect(speakerParas[1]?.getAttribute("data-speaker")).toBe("嘉宾");
+
+    // Clicking the cached checkmark opens a menu instead of immediately deleting the offline file
+    const cachedBtn = screen.getByRole("button", { name: /Downloaded offline/i });
+    await act(async () => {
+      fireEvent.click(cachedBtn);
+      await flush();
+    });
+    expect(removeMediaCache).not.toHaveBeenCalled();
+    expect(screen.getByText(/Remove offline copy/i)).toBeTruthy();
+  });
 });

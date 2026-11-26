@@ -36,7 +36,7 @@ export function formatMediaClock(seconds: number): string {
 export type MediaCacheBadgeState =
   | { status: "none" }
   | { status: "downloading"; percent?: number | undefined }
-  | { status: "cached" };
+  | { status: "cached"; sizeLabel?: string | undefined };
 
 export interface CompanionPlayerProps {
   playing: boolean;
@@ -241,30 +241,62 @@ export function CompanionPlayer({
         ) : null}
 
         {onToggleCache && cacheState ? (
-          <Button
-            variant="quiet"
-            size="sm"
-            isDisabled={cacheState.status === "downloading"}
-            aria-label={
-              cacheState.status === "cached"
-                ? "Cached offline (click to remove cached media)"
-                : cacheState.status === "downloading"
+          cacheState.status === "cached" ? (
+            <MenuTrigger>
+              <Button
+                variant="quiet"
+                size="sm"
+                aria-label={
+                  cacheState.sizeLabel
+                    ? `Downloaded offline (${cacheState.sizeLabel})`
+                    : "Downloaded offline"
+                }
+                className="text-accent-text"
+              >
+                <Icon of={Check} size="sm" />
+              </Button>
+              <Menu
+                aria-label="Offline download"
+                items={[
+                  {
+                    id: "remove",
+                    label: cacheState.sizeLabel
+                      ? `Remove offline copy (${cacheState.sizeLabel})`
+                      : "Remove offline copy",
+                  },
+                ]}
+                onAction={(key) => {
+                  if (key === "remove") onToggleCache();
+                }}
+              >
+                {(item) => (
+                  <MenuItem id={item.id} textValue={item.label}>
+                    {item.label}
+                  </MenuItem>
+                )}
+              </Menu>
+            </MenuTrigger>
+          ) : (
+            <Button
+              variant="quiet"
+              size="sm"
+              isDisabled={cacheState.status === "downloading"}
+              aria-label={
+                cacheState.status === "downloading"
                   ? "Downloading for offline playback"
-                  : "Keep media offline"
-            }
-            onPress={onToggleCache}
-            {...(cacheState.status === "cached" ? { className: "text-accent-text" } : {})}
-          >
-            {cacheState.status === "cached" ? (
-              <Icon of={Check} size="sm" />
-            ) : cacheState.status === "downloading" ? (
-              <span className="px-1 text-[11px] tabular-nums text-label-2">
-                {cacheState.percent !== undefined ? `${cacheState.percent}%` : "…"}
-              </span>
-            ) : (
-              <Icon of={ArrowDownToLine} size="sm" />
-            )}
-          </Button>
+                  : "Download for offline playback"
+              }
+              onPress={onToggleCache}
+            >
+              {cacheState.status === "downloading" ? (
+                <span className="px-1 text-[11px] tabular-nums text-label-2">
+                  {cacheState.percent !== undefined ? `${cacheState.percent}%` : "…"}
+                </span>
+              ) : (
+                <Icon of={ArrowDownToLine} size="sm" />
+              )}
+            </Button>
+          )
         ) : null}
       </div>
     </div>

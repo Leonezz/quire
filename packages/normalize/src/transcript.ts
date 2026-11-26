@@ -30,16 +30,18 @@ export type NormalizedTranscript = {
 export type NormalizeTranscriptOptions = {
   chapters?: readonly TranscriptChapter[];
   keyframes?: readonly TranscriptKeyframe[];
+  /** When true (Agent-refined transcripts), keeps each input cue as its own paragraph instead of re-merging. */
+  preserveParagraphs?: boolean;
   title?: string;
 };
 
 const NOISE_ONLY_CUE = /^(?:\[(?:music|applause|laughter|silence|inaudible|音乐|掌声|笑声)\]|♪+|🎵+)$/iu;
 const SENTENCE_END = /[.?!。？！]["'”’)]?$/u;
-const PAUSE_SPLIT_SEC = 1.5;
+const PAUSE_SPLIT_SEC = 1.15;
 const FALLBACK_PAUSE_MIN_SEC = 0.4;
-const MIN_PAUSE_WORDS = 40;
-const TARGET_PARAGRAPH_WORDS = 115;
-const MAX_UNPUNCTUATED_WORDS = 145;
+const MIN_PAUSE_WORDS = 36;
+const TARGET_PARAGRAPH_WORDS = 90;
+const MAX_UNPUNCTUATED_WORDS = 135;
 
 const NAMED_ENTITIES: Readonly<Record<string, string>> = {
   amp: "&",
@@ -546,8 +548,15 @@ export function normalizeTranscript(
 
   const blocks: BlockItem[] = [];
 
+  const toParagraphs = (group: readonly TranscriptCue[]): MergedParagraph[] =>
+    options.preserveParagraphs
+      ? group
+          .filter((cue) => cue.text.trim().length > 0)
+          .map((cue) => flushCueBuffer([cue]))
+      : splitCueGroupIntoParagraphs(group);
+
   if (sortedChapters.length === 0) {
-    const paragraphs = splitCueGroupIntoParagraphs(cues);
+    const paragraphs = toParagraphs(cues);
     let kfCursor = 0;
     for (const paragraph of paragraphs) {
       while (kfCursor < validKeyframes.length && validKeyframes[kfCursor]!.timeSec <= paragraph.endSec) {
@@ -581,7 +590,7 @@ export function normalizeTranscript(
     // Any cues before the first chapter (> 3s earlier) stay before the first heading
     const firstChapterStart = sortedChapters[0]!.startSec;
     const preCues = firstChapterStart > 3 ? cues.filter((cue) => cue.startSec < firstChapterStart - 0.5) : [];
-    for (const paragraph of splitCueGroupIntoParagraphs(preCues)) {
+    for (const paragraph of toParagraphs(preCues)) {
       blocks.push({ kind: "paragraph", paragraph });
     }
 
@@ -597,7 +606,7 @@ export function normalizeTranscript(
         title: chapter.title.trim(),
       });
 
-      const paragraphs = splitCueGroupIntoParagraphs(chapterCues);
+      const paragraphs = toParagraphs(chapterCues);
       for (const paragraph of paragraphs) {
         while (kfCursor < validKeyframes.length && validKeyframes[kfCursor]!.timeSec < nextStart && validKeyframes[kfCursor]!.timeSec <= paragraph.endSec) {
           const kf = validKeyframes[kfCursor]!;
@@ -823,24 +832,54 @@ export type RefinedTranscriptValidation =
   | { issues: string[]; ok: false };
 
 const REFINED_HEADING = /^#{2,3}\s+(.+)$/u;
+const REFINED_BLOCK_START = /^(?:#{2,3}\s+|\[\d{1,3}:[0-5]\d(?::[0-5]\d)?\])/u;
 const REFINED_PARAGRAPH =
-  /^\[(\d{1,3}:[0-5]\d(?::[0-5]\d)?)\]\s*(?:\*\*([^*]{1,48})\*\*:\s*)?([\s\S]+)$/u;
+  /^\[(\d{1,3}:[0-5]\d(?::[0-5]\d)?)\]\s*(?:\*\*([^*:：]{1,48}?)[*:：]*\*\*[:：]?\s*|\[([^\]\n:：]{1,48})\][:：]\s*)?([\s\S]+)$/u;
+
+function splitRefinedBlocks(markdown: string): string[] {
+  const cleaned = markdown.replace(/\r\n?/gu, "\n").replace(/^\s*#\s+[^\n]+\n+/u, "");
+  const out: string[] = [];
+  let current: string[] = [];
+  for (const rawLine of cleaned.split("\n")) {
+    const trimmed = rawLine.trim();
+    if (!trimmed) {
+      if (current.length > 0) {
+        out.push(current.join(" ").trim());
+        current = [];
+      }
+      continue;
+    }
+    if (REFINED_BLOCK_START.test(trimmed)) {
+      if (current.length > 0) {
+        out.push(current.join(" ").trim());
+        current = [];
+      }
+      if (REFINED_HEADING.test(trimmed)) {
+        out.push(trimmed);
+      } else {
+        current.push(trimmed);
+      }
+      continue;
+    }
+    current.push(trimmed);
+  }
+  if (current.length > 0) {
+    out.push(current.join(" ").trim());
+  }
+  return out.filter(Boolean);
+}
 
 /**
  * Parses and validates Agent-refined transcript Markdown against the original raw cues:
  * 1. Every paragraph must carry a monotonically non-decreasing `[MM:SS]` timestamp within `[0, maxEndSec + 5]`.
- * 2. Total word/CJK units must stay within `±20%` of the raw cues so the Agent cannot summarize away detail.
+ * 2. Total word/CJK units must stay within `70%–125%` of the raw cues so filler can be trimmed without summarizing away detail.
  */
 export function validateRefinedTranscript(
   markdown: string,
   rawCues: readonly TranscriptCue[],
 ): RefinedTranscriptValidation {
   const issues: string[] = [];
-  const blocks = markdown
-    .replace(/^\s*#\s+[^\n]+\n+/u, "")
-    .split(/\n\s*\n/u)
-    .map((block) => block.trim())
-    .filter(Boolean);
+  const blocks = splitRefinedBlocks(markdown);
 
   const chapters: TranscriptChapter[] = [];
   const parsedParagraphs: { speaker?: string; startSec: number; text: string }[] = [];
@@ -867,8 +906,8 @@ export function validateRefinedTranscript(
       issues.push(`Timestamps must not go backwards ([${paraMatch[1]}] came after ${formatTimestamp(lastSec)}).`);
     }
     lastSec = Math.max(lastSec, startSec);
-    const speaker = paraMatch[2]?.trim() || undefined;
-    const text = paraMatch[3]!.replace(/\s+/gu, " ").trim();
+    const speaker = (paraMatch[2] ?? paraMatch[3])?.replace(/[:：*]+$/gu, "").trim() || undefined;
+    const text = paraMatch[4]!.replace(/\s+/gu, " ").trim();
     if (!text) continue;
     if (pendingHeading) {
       chapters.push({ startSec, title: pendingHeading });
@@ -894,9 +933,9 @@ export function validateRefinedTranscript(
   const refinedUnits = parsedParagraphs.reduce((sum, item) => sum + transcriptWordUnits(item.text), 0);
   if (rawUnits >= 50) {
     const ratio = refinedUnits / rawUnits;
-    if (ratio < 0.8 || ratio > 1.2) {
+    if (ratio < 0.7 || ratio > 1.25) {
       issues.push(
-        `Word count drifted to ${Math.round(ratio * 100)}% of the original (${refinedUnits} vs ${rawUnits} units); keep within 80%–120% without summarizing.`,
+        `Word count drifted to ${Math.round(ratio * 100)}% of the original (${refinedUnits} vs ${rawUnits} units); keep within 70%–125% without summarizing.`,
       );
     }
   }

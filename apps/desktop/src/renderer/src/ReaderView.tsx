@@ -9,6 +9,7 @@ import { ANNOTATION_COLORS, citationFor, useAnnotations } from "./annotations";
 import type { NoteDraft } from "./NotesPanel";
 import { ReaderInspector, type ReaderPanel } from "./ReaderInspector";
 import { hostLabel } from "./ArtifactLineage";
+import { bytesLabel } from "./InfoFacts";
 import { QualityBanner, canRebuild, type RebuildState } from "./RebuildBanner";
 import { agentStore, useAgentRun } from "./agentStore";
 import { transcribeStore, useTranscriptionJob } from "./transcribeStore";
@@ -115,6 +116,23 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
   const [prefs, setPrefs] = useReadingPrefs();
   const [findOpen, setFindOpen] = useState(false);
   const [bodyGeneration, setBodyGeneration] = useState(0);
+  const scrollByViewRef = useRef<Map<string, number>>(new Map());
+  const prevViewRef = useRef<{ id: string; view: string }>({ id: material.id, view });
+  useEffect(() => {
+    const vp = viewportRef.current;
+    if (!vp) return;
+    if (prevViewRef.current.id !== material.id) {
+      scrollByViewRef.current.clear();
+      prevViewRef.current = { id: material.id, view };
+      return;
+    }
+    if (prevViewRef.current.view !== view) {
+      setFindOpen(false);
+      const savedTop = scrollByViewRef.current.get(view) ?? 0;
+      prevViewRef.current = { id: material.id, view };
+      vp.scrollTop = savedTop;
+    }
+  }, [material.id, view]);
   const { annotations, error: annotationsError, add, update, remove } = useAnnotations(material.id);
   // This view's notes are anchored in this body, and — when this is the text view — the PDF's notes carried over
   // through the anchors; the Notes panel still lists every view's.
@@ -330,7 +348,9 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
     mediaStore.setFollowing(true);
     const root = bodyRef.current;
     if (!root || activeParagraphIndex === undefined) return;
-    const paragraphs = root.querySelectorAll<HTMLParagraphElement>(".reader-document > p");
+    const paragraphs = root.querySelectorAll<HTMLParagraphElement>(
+      ".reader-document > p, .reader-document > section > p",
+    );
     paragraphs[activeParagraphIndex]?.scrollIntoView({ block: "center", behavior: "smooth" });
   }, [activeParagraphIndex]);
   // A report measures the viewport when it is submitted, and finds an attached passage again for its box then.
@@ -372,6 +392,7 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
     if (!viewport) return;
     let idle: number | undefined;
     const onScroll = () => {
+      scrollByViewRef.current.set(prevViewRef.current.view, viewport.scrollTop);
       const max = viewport.scrollHeight - viewport.clientHeight;
       const fraction = max > 0 ? Math.min(1, viewport.scrollTop / max) : 1;
       fractionRef.current = fraction;
@@ -404,7 +425,9 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
     const viewport = viewportRef.current;
     const root = bodyRef.current;
     if (!viewport || !root) return;
-    const target = root.querySelectorAll<HTMLParagraphElement>(".reader-document > p")[activeParagraphIndex];
+    const target = root.querySelectorAll<HTMLParagraphElement>(
+      ".reader-document > p, .reader-document > section > p",
+    )[activeParagraphIndex];
     if (!target) return;
     const vpRect = viewport.getBoundingClientRect();
     const pRect = target.getBoundingClientRect();
@@ -479,7 +502,7 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
             : {}),
         }
       : (material.media?.cachedBytes ?? 0) > 0
-        ? { status: "cached" }
+        ? { status: "cached", sizeLabel: bytesLabel(material.media!.cachedBytes!) }
         : { status: "none" }
     : undefined;
   const toggleMediaCache = useCallback(() => {
@@ -572,11 +595,19 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
                       <p role="alert" className="m-0 text-red-text">{youtubeSignIn.error}</p>
                     ) : null}
                   </div>
-                ) : material.media?.transcriptOrigin === "auto_captions" || material.media?.transcriptOrigin === "local_asr" || material.media?.transcriptOrigin === "cloud_asr" ? (
+                ) : (material.media?.transcriptOrigin === "auto_captions" || material.media?.transcriptOrigin === "local_asr" || material.media?.transcriptOrigin === "cloud_asr") && content.view === "transcript" ? (
                   <div role="status" className="mb-6 grid gap-2 rounded-card bg-fill px-3.5 py-2.5 text-[12.5px] text-label-2">
                     <div className="flex flex-wrap items-center justify-between gap-2">
-                      <span>Machine-generated transcript — punctuation and speaker turns can be refined without changing timestamps.</span>
+                      <span>Machine-generated transcript — punctuation, semantic paragraphs and speaker turns can be refined without losing timestamps.</span>
                       <Button size="sm" isDisabled={rebuild === "running"} onPress={() => void startCleanupTranscript()}>Clean up with the agent</Button>
+                    </div>
+                    {cleanupError ? <p role="alert" className="m-0 text-red-text">{cleanupError}</p> : null}
+                  </div>
+                ) : material.media?.transcriptOrigin === "agent_refined" && content.view === "transcript" ? (
+                  <div role="status" className="mb-6 grid gap-2 rounded-card bg-fill px-3.5 py-2 text-[12.5px] text-label-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <span>Agent-refined transcript — click any margin timestamp to jump playback.</span>
+                      <Button size="sm" variant="quiet" isDisabled={rebuild === "running"} onPress={() => void startCleanupTranscript()}>Refine again</Button>
                     </div>
                     {cleanupError ? <p role="alert" className="m-0 text-red-text">{cleanupError}</p> : null}
                   </div>

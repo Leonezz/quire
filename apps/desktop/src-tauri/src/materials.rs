@@ -1092,6 +1092,77 @@ fn is_fallback_copy(record: &StoredRecord) -> bool {
     is_unreadable_page(record) || is_feed_copy(record)
 }
 
+fn parse_caption_clock_sec(caption: &str) -> Option<f64> {
+    let token = caption.trim().split_whitespace().next()?;
+    let parts: Vec<&str> = token.split(':').collect();
+    match parts.as_slice() {
+        [m, s] => Some((m.parse::<u32>().ok()? * 60 + s.parse::<u32>().ok()?) as f64),
+        [h, m, s] => Some((h.parse::<u32>().ok()? * 3600 + m.parse::<u32>().ok()? * 60 + s.parse::<u32>().ok()?) as f64),
+        _ => None,
+    }
+}
+
+fn collect_keyframes_from_node(node: &serde_json::Value, out: &mut Vec<TranscriptKeyframeDto>) {
+    match node {
+        serde_json::Value::Array(arr) => {
+            for item in arr {
+                collect_keyframes_from_node(item, out);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            if map.get("type").and_then(|t| t.as_str()) == Some("figure") {
+                if let Some(img) = map
+                    .get("media")
+                    .and_then(|m| m.as_array())
+                    .and_then(|a| a.first())
+                {
+                    let url = img.get("url").and_then(|u| u.as_str()).unwrap_or("");
+                    if url.starts_with("quire-figure://") {
+                        let caption: String = map
+                            .get("caption")
+                            .and_then(|c| c.as_array())
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(|n| n.get("value").and_then(|v| v.as_str()))
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        if let Some(time_sec) = parse_caption_clock_sec(&caption) {
+                            out.push(TranscriptKeyframeDto {
+                                time_sec,
+                                url: url.to_string(),
+                                caption: if caption.trim().is_empty() {
+                                    None
+                                } else {
+                                    Some(caption)
+                                },
+                                width: img.get("width").and_then(|w| w.as_u64()).map(|n| n as u32),
+                                height: img.get("height").and_then(|h| h.as_u64()).map(|n| n as u32),
+                            });
+                        }
+                    }
+                }
+            }
+            for v in map.values() {
+                collect_keyframes_from_node(v, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn extract_keyframes_from_reader(reader: Option<&ReaderPayload>) -> Vec<TranscriptKeyframeDto> {
+    let Some(rp) = reader else {
+        return Vec::new();
+    };
+    let Ok(val) = serde_json::from_str::<serde_json::Value>(&rp.payload) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    collect_keyframes_from_node(&val, &mut out);
+    out
+}
+
 fn is_single_paragraph_reader(reader: &Option<ReaderPayload>) -> bool {
     let Some(ref rp) = reader else {
         return true;
@@ -3474,6 +3545,13 @@ impl MaterialStore {
         record.reading_minutes = tx.reading_minutes;
         if let Some(ref mut media) = record.media {
             media.transcript_origin = origin.to_string();
+            if let Some(ch) = tx.chapters.filter(|c| !c.is_empty()) {
+                if media.chapters.as_ref().is_none_or(|existing| existing.is_empty())
+                    || origin == "agent_refined"
+                {
+                    media.chapters = Some(ch);
+                }
+            }
         }
         let saved = self.save_stored(record)?;
         self.decorate(&saved)
@@ -3491,12 +3569,17 @@ impl MaterialStore {
                 record.title
             )
         })?;
+        let existing_keyframes = extract_keyframes_from_reader(record.reader.as_ref());
         let tx = self
             .normalizer
             .refine_transcript(RefineTranscriptInput {
                 markdown: refined_markdown.to_string(),
                 raw_cues,
-                keyframes: None,
+                keyframes: if existing_keyframes.is_empty() {
+                    None
+                } else {
+                    Some(existing_keyframes)
+                },
                 title: Some(record.title.clone()),
             })
             .await?;

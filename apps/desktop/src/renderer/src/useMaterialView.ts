@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MaterialRecord, MaterialView, MaterialViewContent, MaterialViewId } from "../../shared/contracts";
 import { read } from "./api";
 import { contentOfRecord, initialViewOf, rememberView, viewOf } from "./materialViews";
@@ -39,27 +39,86 @@ export function useMaterialView(material: MaterialRecord, onMaterialChanged?: ((
   const view = chosen?.id === material.id ? chosen.view : initialViewOf(material);
   const [fetching, setFetching] = useState<MaterialViewId | undefined>(undefined);
   const [fetchError, setFetchError] = useState<ViewFetchError | undefined>(undefined);
-  const [remote, setRemote] = useState<{ key: string; state: ViewContentState } | undefined>(undefined);
+  const cacheRef = useRef<Map<string, ViewContentState>>(new Map());
+  const [, bumpCache] = useState(0);
 
+  const versionStamp = useMemo(
+    () =>
+      `${material.id}:${material.fetchedAt}:${material.views
+        .map((v) => `${v.id}:${v.status}:${v.byteLength ?? 0}:${v.fetchedAt ?? ""}`)
+        .join(",")}`,
+    [material.fetchedAt, material.id, material.views],
+  );
   const primaryContent = useMemo(() => contentOfRecord(material), [material]);
   const isPrimary = view === material.primaryView;
-  const remoteKey = `${material.id}:${view}`;
+  const remoteKey = `${versionStamp}:${view}`;
   const label = viewOf(material.views, view)?.label ?? view;
+  const cachedEntry = cacheRef.current.get(remoteKey);
 
   useEffect(() => {
     if (isPrimary) return;
+    const existing = cacheRef.current.get(remoteKey);
+    if (existing?.status === "ready") return;
     let cancelled = false;
-    setRemote({ key: remoteKey, state: { status: "loading" } });
+    cacheRef.current.set(remoteKey, { status: "loading" });
+    bumpCache((n) => n + 1);
     read.getMaterialView(material.id, view)
-      .then((content) => {
+      .then((loaded) => {
         if (cancelled) return;
-        setRemote({ key: remoteKey, state: content ? { status: "ready", content } : { status: "error", message: `The ${label} view is not stored for this material.` } });
+        cacheRef.current.set(
+          remoteKey,
+          loaded
+            ? { status: "ready", content: loaded }
+            : { status: "error", message: `The ${label} view is not stored for this material.` },
+        );
+        bumpCache((n) => n + 1);
       })
-      .catch((cause: unknown) => { if (!cancelled) setRemote({ key: remoteKey, state: { status: "error", message: messageOf(cause, "Could not load this view.") } }); });
+      .catch((cause: unknown) => {
+        if (cancelled) return;
+        cacheRef.current.set(remoteKey, {
+          status: "error",
+          message: messageOf(cause, "Could not load this view."),
+        });
+        bumpCache((n) => n + 1);
+      });
     return () => { cancelled = true; };
   }, [isPrimary, label, material.id, remoteKey, view]);
 
-  const content: ViewContentState = isPrimary ? { status: "ready", content: primaryContent } : remote?.key === remoteKey ? remote.state : { status: "loading" };
+  // Warm ready companion text views (`shownotes` / `transcript`) in the background so switching tabs is synchronous (0ms).
+  useEffect(() => {
+    let cancelled = false;
+    for (const candidate of material.views) {
+      if (
+        candidate.id === material.primaryView ||
+        candidate.id === view ||
+        candidate.status !== "ready" ||
+        (candidate.id !== "shownotes" && candidate.id !== "transcript")
+      ) {
+        continue;
+      }
+      const key = `${versionStamp}:${candidate.id}`;
+      if (cacheRef.current.has(key)) continue;
+      cacheRef.current.set(key, { status: "loading" });
+      read.getMaterialView(material.id, candidate.id)
+        .then((loaded) => {
+          if (cancelled) return;
+          if (loaded) {
+            cacheRef.current.set(key, { status: "ready", content: loaded });
+            bumpCache((n) => n + 1);
+          } else {
+            cacheRef.current.delete(key);
+          }
+        })
+        .catch(() => {
+          if (!cancelled) cacheRef.current.delete(key);
+        });
+    }
+    return () => { cancelled = true; };
+  }, [material.id, material.primaryView, material.views, versionStamp, view]);
+
+  const content: ViewContentState = isPrimary
+    ? { status: "ready", content: primaryContent }
+    : cachedEntry ?? { status: "loading" };
 
   const switchTo = useCallback((target: MaterialViewId) => {
     rememberView(material.id, target);
