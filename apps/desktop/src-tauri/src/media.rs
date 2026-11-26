@@ -226,9 +226,8 @@ impl MediaCache {
         }
         let resolved_stream = if let Some(vid) = crate::youtube::parse_youtube_video_id(stream_url) {
             match crate::youtube::resolve_ytdlp_stream(&vid, None).await {
-                Some(direct) => direct,
-                None => {
-                    let msg = "Install yt-dlp (e.g. brew install yt-dlp) to save YouTube videos for offline playback.".to_string();
+                Ok(direct) => direct,
+                Err(msg) => {
                     on_progress(MediaCacheProgress {
                         material_id: material_id.to_string(),
                         downloaded_bytes: 0,
@@ -462,12 +461,9 @@ pub async fn media_protocol_response<T>(
             .or_else(|| crate::youtube::parse_youtube_video_id(&media.stream_url));
         match vid {
             Some(v) => match crate::youtube::resolve_ytdlp_stream(&v, None).await {
-                Some(u) => u,
-                None => {
-                    return plain_response(
-                        StatusCode::NOT_FOUND,
-                        "Direct YouTube stream requires local yt-dlp; use quire-player://youtube/<videoId>.",
-                    );
+                Ok(u) => u,
+                Err(msg) => {
+                    return plain_response(StatusCode::NOT_FOUND, &msg);
                 }
             },
             None => media.stream_url.clone(),

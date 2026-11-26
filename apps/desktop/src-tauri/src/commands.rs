@@ -207,12 +207,38 @@ pub async fn material_open_file(
 }
 
 #[tauri::command]
-pub fn material_get(
+pub async fn material_get(
+    app: AppHandle,
     state: State<'_, AppState>,
     id: String,
 ) -> Result<Option<MaterialRecord>, String> {
     let cid = bounded_str(&id, 64, "IPC_INVALID_ID")?;
-    state.store.get(&cid)
+    let current = state.store.get(&cid)?;
+    if let Some(ref rec) = current {
+        let trimmed = rec.title.trim();
+        let is_placeholder_yt = (trimmed.eq_ignore_ascii_case("- youtube")
+            || trimmed.eq_ignore_ascii_case("youtube")
+            || trimmed.starts_with("YouTube video "))
+            && rec.media.as_ref().is_some_and(|m| m.provider == "youtube" && m.transcript_origin == "absent");
+        if is_placeholder_yt {
+            let vid = rec
+                .media
+                .as_ref()
+                .and_then(|m| m.video_id.clone())
+                .or_else(|| crate::youtube::parse_youtube_video_id(&rec.url));
+            if let Some(video_id) = vid {
+                if let Ok(OpenUrlResult::Ok { material, .. }) = state
+                    .store
+                    .open_youtube_video(&video_id, &rec.url, &rec.origin, None, None)
+                    .await
+                {
+                    let _ = app.emit("library:changed", ());
+                    return Ok(Some(*material));
+                }
+            }
+        }
+    }
+    Ok(current)
 }
 
 #[tauri::command]

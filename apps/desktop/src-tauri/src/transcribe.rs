@@ -1229,9 +1229,7 @@ impl TranscriptionService {
                         .clone()
                         .or_else(|| crate::youtube::parse_youtube_video_id(&media.stream_url))
                         .ok_or_else(|| "Missing YouTube video id.".to_string())?;
-                    crate::youtube::resolve_ytdlp_stream(&vid, None)
-                        .await
-                        .ok_or_else(|| "Install yt-dlp (`brew install yt-dlp`) to extract audio from YouTube videos without captions.".to_string())?
+                    crate::youtube::resolve_ytdlp_stream(&vid, None).await?
                 } else {
                     media.stream_url.clone()
                 };

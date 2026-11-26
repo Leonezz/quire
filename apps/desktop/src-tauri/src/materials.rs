@@ -1121,6 +1121,19 @@ fn is_legacy_collapsed_shownotes(record: &StoredRecord) -> bool {
     if !is_absent_tx || primary_view_of(record) != "shownotes" {
         return false;
     }
+    let t = record.title.trim();
+    if t.eq_ignore_ascii_case("- youtube")
+        || t.eq_ignore_ascii_case("youtube")
+        || t.starts_with("YouTube video ")
+    {
+        return true;
+    }
+    if record.media.as_ref().is_some_and(|m| m.provider == "youtube")
+        && record.byline.is_none()
+        && record.plain.as_deref() == Some("No video description was provided.")
+    {
+        return true;
+    }
     let text_len = record
         .markdown
         .as_deref()
@@ -3021,11 +3034,9 @@ impl MaterialStore {
 
         let id = material_id_of(&parsed_watch);
         let fetched_at = now_iso();
-        let watch_page = fetch_page(&self.http, &parsed_watch, PAGE_ACCEPT)
+        let mut yt = crate::youtube::fetch_youtube_watch_metadata(&self.http, video_id)
             .await
             .map_err(|e| (e.code, e.message))?;
-        let html = String::from_utf8_lossy(&watch_page.bytes);
-        let mut yt = crate::youtube::parse_youtube_watch_html(&html, video_id);
 
         // 1. Build video Show notes view from video description (or Atom feed content)
         let mut notes_reader: Option<ReaderPayload> = None;

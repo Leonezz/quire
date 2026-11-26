@@ -533,11 +533,124 @@ pub fn plan_storyboard_crops(
 
 fn clean_youtube_title(raw: &str) -> String {
     let trimmed = raw.trim();
-    trimmed
+    let stripped = trimmed
         .strip_suffix(" - YouTube")
         .unwrap_or(trimmed)
-        .trim()
-        .to_string()
+        .trim();
+    if stripped.eq_ignore_ascii_case("- youtube") || stripped.eq_ignore_ascii_case("youtube") {
+        String::new()
+    } else {
+        stripped.to_string()
+    }
+}
+
+fn decode_basic_xml_entities(raw: &str) -> String {
+    raw.replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&apos;", "'")
+}
+
+#[derive(Default)]
+struct InitialVideoInfo {
+    title: Option<String>,
+    author: Option<String>,
+    channel_id: Option<String>,
+    description: Option<String>,
+    published_at: Option<String>,
+}
+
+fn collect_initial_video_info(node: &serde_json::Value, out: &mut InitialVideoInfo) {
+    match node {
+        serde_json::Value::Array(arr) => {
+            for item in arr {
+                collect_initial_video_info(item, out);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            if let Some(primary) = map.get("videoPrimaryInfoRenderer") {
+                if out.title.is_none() {
+                    out.title = primary.get("title").and_then(text_of_yt_value);
+                }
+                if out.published_at.is_none() {
+                    out.published_at = primary.get("dateText").and_then(text_of_yt_value);
+                }
+            }
+            if let Some(secondary) = map.get("videoSecondaryInfoRenderer") {
+                if out.author.is_none() {
+                    out.author = secondary
+                        .pointer("/owner/videoOwnerRenderer/title")
+                        .and_then(text_of_yt_value);
+                }
+                if out.channel_id.is_none() {
+                    out.channel_id = secondary
+                        .pointer("/owner/videoOwnerRenderer/navigationEndpoint/browseEndpoint/browseId")
+                        .and_then(|v| v.as_str())
+                        .filter(|s| s.starts_with("UC"))
+                        .map(String::from);
+                }
+                if out.description.is_none() {
+                    out.description = secondary
+                        .pointer("/attributedDescription/content")
+                        .and_then(|v| v.as_str())
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .map(String::from)
+                        .or_else(|| secondary.get("description").and_then(text_of_yt_value));
+                }
+            }
+            for val in map.values() {
+                collect_initial_video_info(val, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+pub fn parse_youtube_atom_entry_for_video(
+    xml: &str,
+    video_id: &str,
+) -> Option<(Option<String>, Option<String>, Option<String>, Option<String>)> {
+    let entry_re = Regex::new(r"(?s)<entry\b[^>]*>(.*?)</entry>").unwrap();
+    let vid_re = Regex::new(r"<yt:videoId>\s*([^<\s]+)\s*</yt:videoId>").unwrap();
+    let title_re = Regex::new(r"(?s)<title[^>]*>(.*?)</title>").unwrap();
+    let author_re = Regex::new(r"(?s)<author>\s*<name[^>]*>(.*?)</name>").unwrap();
+    let pub_re = Regex::new(r"<published>\s*([^<\s]+)\s*</published>").unwrap();
+    let desc_re = Regex::new(r"(?s)<media:description[^>]*>(.*?)</media:description>").unwrap();
+
+    for caps in entry_re.captures_iter(xml) {
+        let block = caps.get(1)?.as_str();
+        let Some(found_vid) = vid_re.captures(block).and_then(|c| c.get(1)).map(|m| m.as_str()) else {
+            continue;
+        };
+        if found_vid != video_id {
+            continue;
+        }
+        let title = title_re
+            .captures(block)
+            .and_then(|c| c.get(1))
+            .map(|m| decode_basic_xml_entities(m.as_str().trim()))
+            .filter(|s| !s.is_empty());
+        let author = author_re
+            .captures(block)
+            .and_then(|c| c.get(1))
+            .map(|m| decode_basic_xml_entities(m.as_str().trim()))
+            .filter(|s| !s.is_empty());
+        let published = pub_re
+            .captures(block)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str().trim().to_string())
+            .filter(|s| !s.is_empty());
+        let description = desc_re
+            .captures(block)
+            .and_then(|c| c.get(1))
+            .map(|m| decode_basic_xml_entities(m.as_str().trim()))
+            .filter(|s| !s.is_empty());
+        return Some((title, author, published, description));
+    }
+    None
 }
 
 pub fn parse_youtube_watch_html(html: &str, fallback_video_id: &str) -> YoutubeWatchMetadata {
@@ -550,6 +663,10 @@ pub fn parse_youtube_watch_html(html: &str, fallback_video_id: &str) -> YoutubeW
     let micro = player
         .as_ref()
         .and_then(|p| p.pointer("/microformat/playerMicroformatRenderer"));
+    let mut init_info = InitialVideoInfo::default();
+    if let Some(ref data) = initial_data {
+        collect_initial_video_info(data, &mut init_info);
+    }
 
     let video_id = details
         .and_then(|d| d.get("videoId"))
@@ -562,7 +679,7 @@ pub fn parse_youtube_watch_html(html: &str, fallback_video_id: &str) -> YoutubeW
     let fallback_title = html_title_re
         .captures(html)
         .and_then(|c| c.get(1))
-        .map(|m| clean_youtube_title(&m.as_str().replace("&amp;", "&").replace("&#39;", "'").replace("&quot;", "\"")))
+        .map(|m| clean_youtube_title(&decode_basic_xml_entities(m.as_str())))
         .filter(|s| !s.is_empty());
 
     let title = details
@@ -571,6 +688,7 @@ pub fn parse_youtube_watch_html(html: &str, fallback_video_id: &str) -> YoutubeW
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .map(String::from)
+        .or(init_info.title)
         .or(fallback_title)
         .unwrap_or_else(|| format!("YouTube video {video_id}"));
 
@@ -579,14 +697,16 @@ pub fn parse_youtube_watch_html(html: &str, fallback_video_id: &str) -> YoutubeW
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(String::from);
+        .map(String::from)
+        .or(init_info.author);
 
     let channel_id = details
         .and_then(|d| d.get("channelId"))
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|s| s.starts_with("UC"))
-        .map(String::from);
+        .map(String::from)
+        .or(init_info.channel_id);
 
     let duration_sec = details
         .and_then(|d| d.get("lengthSeconds"))
@@ -598,14 +718,16 @@ pub fn parse_youtube_watch_html(html: &str, fallback_video_id: &str) -> YoutubeW
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(String::from);
+        .map(String::from)
+        .or(init_info.description);
 
     let published_at = micro
         .and_then(|m| m.get("publishDate").or_else(|| m.get("uploadDate")))
         .and_then(|v| v.as_str())
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .map(String::from);
+        .map(String::from)
+        .or(init_info.published_at);
 
     // Captions ranking: human captions first, then auto ASR; prefer en / zh or video's primary track
     let mut captions: Vec<YoutubeCaptionTrack> = player
@@ -705,6 +827,126 @@ pub fn extract_channel_id_from_html(html: &str) -> Option<(String, Option<String
     Some((cid, title))
 }
 
+#[derive(Deserialize)]
+struct YoutubeOembedResponse {
+    title: Option<String>,
+    author_name: Option<String>,
+    author_url: Option<String>,
+}
+
+/// Fetches YouTube watch metadata, automatically enriching from YouTube's public oEmbed API
+/// and public Atom syndication feed (`feeds/videos.xml`) whenever the watch HTML omits
+/// `videoDetails` (for example on unauthenticated datacenter/proxy exit IPs).
+pub async fn fetch_youtube_watch_metadata(
+    client: &reqwest::Client,
+    video_id: &str,
+) -> Result<YoutubeWatchMetadata, FetchError> {
+    let watch_url = canonical_youtube_watch_url(video_id);
+    let parsed_watch = assert_public_http_url(&watch_url)?;
+    let mut meta = match fetch_page(client, &parsed_watch, PAGE_ACCEPT).await {
+        Ok(page) => {
+            let html = String::from_utf8_lossy(&page.bytes);
+            parse_youtube_watch_html(&html, video_id)
+        }
+        Err(err) => {
+            // Still try public oEmbed before failing completely
+            YoutubeWatchMetadata {
+                video_id: video_id.to_string(),
+                title: format!("YouTube video {video_id}"),
+                author: None,
+                channel_id: None,
+                duration_sec: None,
+                description: None,
+                published_at: None,
+                captions: Vec::new(),
+                chapters: Vec::new(),
+                storyboard: None,
+            }
+            .tap_err_check(err)?
+        }
+    };
+
+    let placeholder_title = format!("YouTube video {video_id}");
+    let mut author_url: Option<String> = None;
+
+    if meta.title == placeholder_title || meta.author.is_none() || meta.channel_id.is_none() {
+        let encoded_watch: String = url::form_urlencoded::byte_serialize(watch_url.as_bytes()).collect();
+        if let Ok(oembed_u) = assert_public_http_url(&format!(
+            "https://www.youtube.com/oembed?url={encoded_watch}&format=json"
+        )) {
+            if let Ok(oe_page) = fetch_page(client, &oembed_u, "application/json").await {
+                if let Ok(oe) = serde_json::from_slice::<YoutubeOembedResponse>(&oe_page.bytes) {
+                    if meta.title == placeholder_title {
+                        if let Some(t) = oe.title.map(|s| s.trim().to_string()).filter(|s| !s.is_empty()) {
+                            meta.title = t;
+                        }
+                    }
+                    if meta.author.is_none() {
+                        meta.author = oe.author_name.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                    }
+                    author_url = oe.author_url.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+                }
+            }
+        }
+    }
+
+    if meta.channel_id.is_none() {
+        if let Some(ref au) = author_url {
+            if let Ok(parsed_au) = assert_public_http_url(au) {
+                if let Some(YoutubeTarget::ChannelId { channel_id, .. }) = classify_youtube_url(&parsed_au) {
+                    meta.channel_id = Some(channel_id);
+                } else if let Ok(ch_page) = fetch_page(client, &parsed_au, PAGE_ACCEPT).await {
+                    let ch_html = String::from_utf8_lossy(&ch_page.bytes);
+                    if let Some((cid, _)) = extract_channel_id_from_html(&ch_html) {
+                        meta.channel_id = Some(cid);
+                    }
+                }
+            }
+        }
+    }
+
+    if (meta.description.is_none() || meta.published_at.is_none()) && meta.channel_id.is_some() {
+        let feed_url = youtube_channel_feed_url(meta.channel_id.as_deref().unwrap_or(""));
+        if let Ok(parsed_feed) = assert_public_http_url(&feed_url) {
+            if let Ok(feed_page) = fetch_page(client, &parsed_feed, "application/atom+xml,text/xml,*/*").await {
+                let xml = String::from_utf8_lossy(&feed_page.bytes);
+                if let Some((f_title, f_author, f_pub, f_desc)) = parse_youtube_atom_entry_for_video(&xml, video_id) {
+                    if meta.title == placeholder_title {
+                        if let Some(t) = f_title {
+                            meta.title = t;
+                        }
+                    }
+                    if meta.author.is_none() {
+                        meta.author = f_author;
+                    }
+                    if meta.published_at.is_none() {
+                        meta.published_at = f_pub;
+                    }
+                    if meta.description.is_none() {
+                        if let Some(desc) = f_desc {
+                            if meta.chapters.len() < 2 {
+                                let ch = extract_chapters_from_description(&desc);
+                                if ch.len() >= 2 {
+                                    meta.chapters = ch;
+                                }
+                            }
+                            meta.description = Some(desc);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(meta)
+}
+
+impl YoutubeWatchMetadata {
+    fn tap_err_check(self, _err: FetchError) -> Result<Self, FetchError> {
+        Ok(self)
+    }
+}
+
 pub async fn detect_youtube_target(
     client: &reqwest::Client,
     target: YoutubeTarget,
@@ -784,13 +1026,12 @@ pub async fn detect_youtube_target(
             })
         }
         YoutubeTarget::Video { video_id, watch_url } => {
-            let u = assert_public_http_url(&watch_url)?;
-            let (title, duration_sec, feed, feed_title) = match fetch_page(client, &u, PAGE_ACCEPT).await {
-                Ok(page) => {
-                    let html = String::from_utf8_lossy(&page.bytes);
-                    let meta = parse_youtube_watch_html(&html, &video_id);
+            let placeholder = format!("YouTube video {video_id}");
+            let (title, duration_sec, feed, feed_title) = match fetch_youtube_watch_metadata(client, &video_id).await {
+                Ok(meta) => {
                     let feed = meta.channel_id.as_deref().map(youtube_channel_feed_url);
-                    (Some(meta.title), meta.duration_sec, feed, meta.author)
+                    let clean_title = if meta.title == placeholder { None } else { Some(meta.title) };
+                    (clean_title, meta.duration_sec, feed, meta.author)
                 }
                 Err(_) => (None, None, None, None),
             };
@@ -806,11 +1047,28 @@ pub async fn detect_youtube_target(
     }
 }
 
+fn augmented_gui_path() -> String {
+    let mut parts: Vec<String> = vec![
+        "/opt/homebrew/bin".into(),
+        "/usr/local/bin".into(),
+    ];
+    if let Ok(existing) = std::env::var("PATH") {
+        for p in existing.split(':').filter(|s| !s.is_empty()) {
+            if !parts.iter().any(|x| x == p) {
+                parts.push(p.to_string());
+            }
+        }
+    } else {
+        parts.extend(["/usr/bin".into(), "/bin".into(), "/usr/sbin".into(), "/sbin".into()]);
+    }
+    parts.join(":")
+}
+
 /// Optional Tier-2 local enhancement: uses local `yt-dlp` when present on the machine
-/// to resolve a direct MP4/audio stream URL for offline caching or native `<video>` playback.
-pub async fn resolve_ytdlp_stream(video_id: &str, custom_path: Option<&str>) -> Option<String> {
+/// to resolve a direct audio/MP4 stream URL for ASR transcription or offline caching.
+pub async fn resolve_ytdlp_stream(video_id: &str, custom_path: Option<&str>) -> Result<String, String> {
     if !valid_youtube_video_id(video_id) {
-        return None;
+        return Err("Invalid YouTube video ID.".into());
     }
     let mut candidates: Vec<String> = Vec::new();
     if let Some(p) = custom_path.map(str::trim).filter(|s| !s.is_empty()) {
@@ -824,32 +1082,81 @@ pub async fn resolve_ytdlp_stream(video_id: &str, custom_path: Option<&str>) -> 
     candidates.push("yt-dlp".into());
 
     let watch_url = canonical_youtube_watch_url(video_id);
+    let gui_path = augmented_gui_path();
+    let mut ran_binary = false;
+    let mut last_error = String::new();
+
     for bin in candidates {
         let fut = Command::new(&bin)
+            .env("PATH", &gui_path)
             .args([
                 "--no-playlist",
                 "--no-warnings",
                 "-f",
-                "best[ext=mp4][height<=720]/best[ext=mp4]/bestaudio",
+                "bestaudio[ext=m4a]/bestaudio/best[ext=mp4]/best",
                 "-g",
                 &watch_url,
             ])
             .output();
-        let Ok(Ok(out)) = tokio::time::timeout(Duration::from_secs(10), fut).await else {
-            continue;
-        };
-        if !out.status.success() {
-            continue;
-        }
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        for line in stdout.lines() {
-            let trimmed = line.trim();
-            if let Ok(u) = assert_public_http_url(trimmed) {
-                return Some(u.to_string());
+        match tokio::time::timeout(Duration::from_secs(25), fut).await {
+            Ok(Ok(out)) => {
+                ran_binary = true;
+                if out.status.success() {
+                    let stdout = String::from_utf8_lossy(&out.stdout);
+                    for line in stdout.lines() {
+                        let trimmed = line.trim();
+                        if let Ok(u) = assert_public_http_url(trimmed) {
+                            return Ok(u.to_string());
+                        }
+                    }
+                } else {
+                    let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                    if !stderr.is_empty() {
+                        last_error = stderr;
+                    }
+                }
+            }
+            Ok(Err(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+                continue;
+            }
+            Ok(Err(e)) => {
+                ran_binary = true;
+                last_error = e.to_string();
+            }
+            Err(_) => {
+                ran_binary = true;
+                last_error = "yt-dlp timed out after 25s while contacting YouTube.".into();
             }
         }
     }
-    None
+
+    if !ran_binary {
+        return Err(
+            "Install yt-dlp (`brew install yt-dlp`) to extract audio from YouTube videos without public captions."
+                .into(),
+        );
+    }
+
+    let lower = last_error.to_ascii_lowercase();
+    if lower.contains("sign in to confirm") || lower.contains("not a bot") {
+        return Err(
+            "YouTube blocked anonymous audio extraction on your current network/proxy (\"Sign in to confirm you're not a bot\"). Switch proxy node, or add `--cookies-from-browser safari` (or `chrome`) to `~/.config/yt-dlp/config`."
+                .into(),
+        );
+    }
+    if last_error.is_empty() {
+        return Err("yt-dlp could not resolve a direct audio stream URL for this YouTube video.".into());
+    }
+    let clean_err = last_error
+        .lines()
+        .find(|l| l.contains("ERROR:"))
+        .unwrap_or(&last_error)
+        .trim_start_matches("ERROR:")
+        .trim();
+    Err(format!(
+        "yt-dlp failed to extract YouTube audio: {}",
+        clean_err.chars().take(240).collect::<String>()
+    ))
 }
 
 pub fn parse_player_youtube_id(raw: &str) -> Option<String> {
@@ -1081,5 +1388,34 @@ mod tests {
 
         let bad = player_protocol_response("quire-player://youtube/../../etc/passwd");
         assert_eq!(bad.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[test]
+    fn rejects_dash_youtube_placeholder_and_parses_atom_entry_fallback() {
+        let login_gated_html = r#"<!doctype html><html><head><title> - YouTube</title></head><body>
+        <script>var ytInitialPlayerResponse = {"playabilityStatus":{"status":"LOGIN_REQUIRED","reason":"Sign in to confirm you’re not a bot"}};</script>
+        </body></html>"#;
+        let meta = parse_youtube_watch_html(login_gated_html, "zjkBMFhNj_g");
+        assert_eq!(meta.title, "YouTube video zjkBMFhNj_g");
+        assert_ne!(meta.title, "- YouTube");
+
+        let atom_xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+        <feed xmlns:yt="http://www.youtube.com/xml/schemas/2015" xmlns:media="http://search.yahoo.com/mrss/" xmlns="http://www.w3.org/2005/Atom">
+          <entry>
+            <yt:videoId>zjkBMFhNj_g</yt:videoId>
+            <title>[1hr Talk] Intro to Large Language Models</title>
+            <author><name>Andrej Karpathy</name></author>
+            <published>2023-11-23T02:27:48+00:00</published>
+            <media:group>
+              <media:description>00:00 Intro &amp; Motivation
+05:10 LLM Inference</media:description>
+            </media:group>
+          </entry>
+        </feed>"#;
+        let parsed = parse_youtube_atom_entry_for_video(atom_xml, "zjkBMFhNj_g").expect("matched entry");
+        assert_eq!(parsed.0.as_deref(), Some("[1hr Talk] Intro to Large Language Models"));
+        assert_eq!(parsed.1.as_deref(), Some("Andrej Karpathy"));
+        assert_eq!(parsed.2.as_deref(), Some("2023-11-23T02:27:48+00:00"));
+        assert_eq!(parsed.3.as_deref(), Some("00:00 Intro & Motivation\n05:10 LLM Inference"));
     }
 }
