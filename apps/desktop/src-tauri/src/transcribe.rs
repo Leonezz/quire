@@ -833,10 +833,233 @@ fn is_non_speech_hallucination(txt: &str) -> bool {
     )
 }
 
+/// Infers an episode's primary language hint from script characters in `title`/`byline`
+/// (which reliably catch CJK podcasts even when RSS `<language>` was left at `en-us`)
+/// or from the declared ISO-639 `lang` metadata.
+pub fn infer_material_lang_hint(
+    declared_lang: Option<&str>,
+    title: &str,
+    byline: Option<&str>,
+) -> Option<&'static str> {
+    let mut han_count = 0usize;
+    let mut kana_count = 0usize;
+    let mut hangul_count = 0usize;
+
+    for s in [Some(title), byline].into_iter().flatten() {
+        for ch in s.chars() {
+            let code = ch as u32;
+            if matches!(code, 0x3040..=0x30FF | 0x31F0..=0x31FF) {
+                kana_count += 1;
+            } else if matches!(code, 0xAC00..=0xD7AF | 0x1100..=0x11FF) {
+                hangul_count += 1;
+            } else if matches!(code, 0x4E00..=0x9FFF | 0x3400..=0x4DBF | 0xF900..=0xFAFF) {
+                han_count += 1;
+            }
+        }
+    }
+
+    if kana_count >= 1 {
+        return Some("ja");
+    }
+    if hangul_count >= 2 {
+        return Some("ko");
+    }
+    if han_count >= 2 {
+        if let Some(dl) = declared_lang {
+            if dl.trim().to_ascii_lowercase().starts_with("yue") {
+                return Some("yue");
+            }
+        }
+        return Some("zh");
+    }
+
+    let raw = declared_lang?.trim().to_ascii_lowercase();
+    let primary = raw.split(['-', '_']).next().unwrap_or("");
+    match primary {
+        "zh" | "cmn" => Some("zh"),
+        "yue" => Some("yue"),
+        "ja" => Some("ja"),
+        "ko" => Some("ko"),
+        "en" => Some("en"),
+        "fr" => Some("fr"),
+        "de" => Some("de"),
+        "es" => Some("es"),
+        "pt" => Some("pt"),
+        "ru" => Some("ru"),
+        "it" => Some("it"),
+        _ => None,
+    }
+}
+
+/// Splits a 16 kHz mono PCM16 chunk into `[8s, 22s]` utterance sub-windows (hard max `27s`)
+/// at natural speech pauses (`>= 250ms`) so each sub-window fits inside a single 30s Whisper
+/// encoder window and gets its own per-turn language detection (preventing `<|en|>` from
+/// locking across bilingual host/guest turns and translating Chinese speech into English).
+pub fn split_pcm16_into_subwindows(samples: &[i16]) -> Vec<(f64, f64, Vec<i16>)> {
+    if samples.is_empty() {
+        return Vec::new();
+    }
+    const SUB_MIN_SEC: f64 = 8.0;
+    const SUB_TARGET_MAX_SEC: f64 = 22.0;
+    const SUB_HARD_MAX_SEC: f64 = 27.0;
+    const SUB_SILENCE_FRAMES: usize = 5; // 250ms at 50ms/frame
+
+    let total_frames = (samples.len() + FRAME_SAMPLES - 1) / FRAME_SAMPLES;
+    let target_max_frames = ((SUB_TARGET_MAX_SEC * SAMPLE_RATE_HZ as f64) / FRAME_SAMPLES as f64).round() as usize;
+    if total_frames <= target_max_frames {
+        return vec![(
+            0.0,
+            (samples.len() as f64) / (SAMPLE_RATE_HZ as f64),
+            samples.to_vec(),
+        )];
+    }
+
+    let mut rms = Vec::with_capacity(total_frames);
+    for f in 0..total_frames {
+        let start = f * FRAME_SAMPLES;
+        let end = (start + FRAME_SAMPLES).min(samples.len());
+        let mut sum_sq = 0.0_f64;
+        for &s in &samples[start..end] {
+            let v = s as f64;
+            sum_sq += v * v;
+        }
+        rms.push((sum_sq / ((end - start).max(1) as f64)).sqrt());
+    }
+
+    let mut sorted_rms: Vec<f64> = rms.iter().copied().filter(|&v| v > 20.0).collect();
+    sorted_rms.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let median_rms = if sorted_rms.is_empty() {
+        200.0
+    } else {
+        sorted_rms[sorted_rms.len() / 2]
+    };
+    let silence_thresh = (median_rms * 0.25).max(130.0);
+
+    let min_frames = ((SUB_MIN_SEC * SAMPLE_RATE_HZ as f64) / FRAME_SAMPLES as f64).round() as usize;
+    let hard_max_frames = ((SUB_HARD_MAX_SEC * SAMPLE_RATE_HZ as f64) / FRAME_SAMPLES as f64).round() as usize;
+
+    let mut out = Vec::new();
+    let mut start_frame = 0usize;
+
+    while start_frame < total_frames {
+        let rem = total_frames - start_frame;
+        if rem <= target_max_frames {
+            let s_idx = start_frame * FRAME_SAMPLES;
+            if s_idx < samples.len() {
+                out.push((
+                    (s_idx as f64) / (SAMPLE_RATE_HZ as f64),
+                    (samples.len() as f64) / (SAMPLE_RATE_HZ as f64),
+                    samples[s_idx..].to_vec(),
+                ));
+            }
+            break;
+        }
+
+        let search_from = start_frame + min_frames;
+        let search_to = (start_frame + hard_max_frames).min(total_frames);
+        let mut best_cut: Option<usize> = None;
+        let mut best_score = f64::INFINITY;
+        let mut quiet_run = 0usize;
+
+        for f in search_from..search_to {
+            if rms[f] <= silence_thresh {
+                quiet_run += 1;
+                if quiet_run >= SUB_SILENCE_FRAMES {
+                    let center = f - quiet_run / 2;
+                    let penalty = if center > start_frame + target_max_frames { 1.3 } else { 1.0 };
+                    let score = (rms[center] + 1.0) * penalty;
+                    if score < best_score {
+                        best_score = score;
+                        best_cut = Some(center);
+                    }
+                }
+            } else {
+                quiet_run = 0;
+            }
+        }
+
+        let cut_frame = best_cut.unwrap_or_else(|| {
+            let mut min_f = (start_frame + target_max_frames).min(search_to.saturating_sub(1));
+            let mut min_v = f64::INFINITY;
+            for f in search_from..search_to {
+                if rms[f] < min_v {
+                    min_v = rms[f];
+                    min_f = f;
+                }
+            }
+            min_f
+        });
+
+        let s_idx = start_frame * FRAME_SAMPLES;
+        let e_idx = (cut_frame * FRAME_SAMPLES).min(samples.len());
+        if e_idx > s_idx {
+            out.push((
+                (s_idx as f64) / (SAMPLE_RATE_HZ as f64),
+                (e_idx as f64) / (SAMPLE_RATE_HZ as f64),
+                samples[s_idx..e_idx].to_vec(),
+            ));
+        }
+        start_frame = cut_frame.max(start_frame + 1);
+    }
+
+    out
+}
+
+/// Resolves the Whisper decoder language and optional script prompt for one `< 30s` sub-window:
+/// - Prevents `whisper-large-v3-turbo` from locking `<|en|>` on Chinese speech containing English
+///   brand/tech names (`Apple Music`, `AI`, `Oliver Schusser`) and auto-translating it to English;
+/// - Preserves genuine English turns (`en_prob >= 0.82` with negligible CJK probability `< 0.08`)
+///   in bilingual Chinese/English interviews;
+/// - Supplies `"以下是普通话的句子。"` when decoding `"zh"` so output stays Simplified Chinese.
+pub fn choose_whisper_lang_from_probs<'a>(
+    detected_lang: &'a str,
+    zh_prob: f32,
+    yue_prob: f32,
+    en_prob: f32,
+    hint_prob: f32,
+    lang_hint: Option<&'static str>,
+) -> (&'a str, Option<&'static str>) {
+    const ZH_SIMPLIFIED_PROMPT: &str = "以下是普通话的句子。";
+
+    if let Some(hint) = lang_hint {
+        match hint {
+            "zh" | "yue" => {
+                let cjk_prob = zh_prob + yue_prob;
+                // Keep genuine English guest turns in bilingual interviews (`en >= 0.82` & `cjk < 0.08`)
+                if detected_lang == "en" && en_prob >= 0.82 && cjk_prob < 0.08 {
+                    return ("en", None);
+                }
+                if cjk_prob >= 0.06 || en_prob < 0.78 || detected_lang == "zh" || detected_lang == "yue" {
+                    if yue_prob > zh_prob * 2.0 || (hint == "yue" && yue_prob >= 0.15) {
+                        return ("yue", None);
+                    }
+                    return ("zh", Some(ZH_SIMPLIFIED_PROMPT));
+                }
+            }
+            "ja" | "ko" => {
+                if detected_lang == "en" && en_prob >= 0.82 && hint_prob < 0.08 {
+                    return ("en", None);
+                }
+                if hint_prob >= 0.06 || en_prob < 0.78 || detected_lang == hint {
+                    return (hint, None);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if detected_lang == "zh" || (zh_prob >= 0.35 && zh_prob >= en_prob * 0.8) {
+        return ("zh", Some(ZH_SIMPLIFIED_PROMPT));
+    }
+
+    (detected_lang, None)
+}
+
 async fn transcribe_chunk_local_whisper(
     data_dir: &Path,
     model_name: &str,
     chunk: &AudioChunk,
+    lang_hint: Option<&'static str>,
 ) -> Result<Vec<TranscriptCueDto>, String> {
     let (file_names, _) = whisper_model_candidates(model_name);
     let models_dir = data_dir.join("models");
@@ -858,7 +1081,7 @@ async fn transcribe_chunk_local_whisper(
         if pcm_i16.is_empty() {
             return Ok(Vec::new());
         }
-        let pcm_f32: Vec<f32> = pcm_i16.into_iter().map(|s| (s as f32) / 32768.0).collect();
+        let subwindows = split_pcm16_into_subwindows(&pcm_i16);
         let chunk_start = chunk.start_sec;
         let chunk_end = chunk.end_sec;
 
@@ -868,46 +1091,84 @@ async fn transcribe_chunk_local_whisper(
                 .lock()
                 .map_err(|_| "Whisper state lock poisoned.".to_string())?;
 
-            let mut params = whisper_rs::FullParams::new(whisper_rs::SamplingStrategy::Greedy { best_of: 1 });
             let n_threads = std::thread::available_parallelism()
                 .map(|n| n.get().clamp(2, 8) as i32)
                 .unwrap_or(4);
-            params.set_n_threads(n_threads);
-            // IMPORTANT: `language = Some("auto")` triggers language auto-detection AND continues to decode.
-            // Never set `detect_language(true)` here — in whisper.cpp `detect_language = true` means
-            // "detect language ONLY and return 0 immediately before decoding any segments"!
-            params.set_language(Some("auto"));
-            params.set_detect_language(false);
-            params.set_translate(false);
-            params.set_no_context(true);
-            params.set_print_special(false);
-            params.set_print_progress(false);
-            params.set_print_realtime(false);
-            params.set_print_timestamps(false);
-            params.set_suppress_blank(true);
-            params.set_suppress_nst(false);
-
-            state
-                .full(params, &pcm_f32)
-                .map_err(|e| format!("Built-in Whisper inference failed: {e}"))?;
+            let zh_id = whisper_rs::get_lang_id("zh");
+            let yue_id = whisper_rs::get_lang_id("yue");
+            let en_id = whisper_rs::get_lang_id("en");
+            let hint_id = lang_hint.and_then(whisper_rs::get_lang_id);
 
             let mut cues = Vec::new();
-            for seg in state.as_iter() {
-                let raw = seg.to_str_lossy().unwrap_or_default();
-                let txt = raw.trim().to_string();
-                if is_non_speech_hallucination(&txt) {
+            for (sub_rel_start, sub_rel_end, sub_i16) in subwindows {
+                if sub_i16.len() < (SAMPLE_RATE_HZ as usize) / 5 {
                     continue;
                 }
-                let t0_sec = (seg.start_timestamp().max(0) as f64) / 100.0;
-                let t1_sec = (seg.end_timestamp().max(0) as f64) / 100.0;
-                let st = (chunk_start + t0_sec).min(chunk_end);
-                let en = (chunk_start + t1_sec.max(t0_sec + 0.2)).min(chunk_end + 1.0);
-                cues.push(TranscriptCueDto {
-                    start_sec: (st * 100.0).round() / 100.0,
-                    end_sec: (en * 100.0).round() / 100.0,
-                    text: txt,
-                    speaker: None,
-                });
+                let pcm_f32: Vec<f32> = sub_i16.into_iter().map(|s| (s as f32) / 32768.0).collect();
+
+                let (resolved_lang, initial_prompt): (&str, Option<&'static str>) =
+                    if state.pcm_to_mel(&pcm_f32, n_threads as usize).is_ok() {
+                        if let Ok((det_id, probs)) = state.lang_detect(0, n_threads as usize) {
+                            let det_str = whisper_rs::get_lang_str(det_id).unwrap_or("en");
+                            let prob_at = |opt_id: Option<i32>| -> f32 {
+                                opt_id
+                                    .and_then(|id| probs.get(id as usize).copied())
+                                    .unwrap_or(0.0)
+                            };
+                            choose_whisper_lang_from_probs(
+                                det_str,
+                                prob_at(zh_id),
+                                prob_at(yue_id),
+                                prob_at(en_id),
+                                prob_at(hint_id),
+                                lang_hint,
+                            )
+                        } else {
+                            (lang_hint.unwrap_or("auto"), None)
+                        }
+                    } else {
+                        (lang_hint.unwrap_or("auto"), None)
+                    };
+
+                let mut params = whisper_rs::FullParams::new(whisper_rs::SamplingStrategy::Greedy { best_of: 1 });
+                params.set_n_threads(n_threads);
+                params.set_language(Some(resolved_lang));
+                params.set_detect_language(false);
+                params.set_translate(false);
+                params.set_no_context(true);
+                if let Some(prompt) = initial_prompt {
+                    params.set_initial_prompt(prompt);
+                }
+                params.set_print_special(false);
+                params.set_print_progress(false);
+                params.set_print_realtime(false);
+                params.set_print_timestamps(false);
+                params.set_suppress_blank(true);
+                params.set_suppress_nst(false);
+
+                state
+                    .full(params, &pcm_f32)
+                    .map_err(|e| format!("Built-in Whisper inference failed: {e}"))?;
+
+                let sub_abs_start = chunk_start + sub_rel_start;
+                let sub_abs_end = (chunk_start + sub_rel_end).min(chunk_end);
+                for seg in state.as_iter() {
+                    let raw = seg.to_str_lossy().unwrap_or_default();
+                    let txt = raw.trim().to_string();
+                    if is_non_speech_hallucination(&txt) {
+                        continue;
+                    }
+                    let t0_sec = (seg.start_timestamp().max(0) as f64) / 100.0;
+                    let t1_sec = (seg.end_timestamp().max(0) as f64) / 100.0;
+                    let st = (sub_abs_start + t0_sec).min(sub_abs_end);
+                    let en = (sub_abs_start + t1_sec.max(t0_sec + 0.2)).min(sub_abs_end + 1.0);
+                    cues.push(TranscriptCueDto {
+                        start_sec: (st * 100.0).round() / 100.0,
+                        end_sec: (en * 100.0).round() / 100.0,
+                        text: txt,
+                        speaker: None,
+                    });
+                }
             }
             Ok(cues)
         })
@@ -930,8 +1191,8 @@ async fn transcribe_chunk_local_whisper(
         let json_path = tmp_dir.join(format!("{token}.json"));
         fs::write(&wav_path, &chunk.wav_bytes).map_err(|e| e.to_string())?;
 
-        let output = Command::new(&bin)
-            .arg("-m")
+        let mut cmd = Command::new(&bin);
+        cmd.arg("-m")
             .arg(&model_path)
             .arg("-f")
             .arg(&wav_path)
@@ -939,7 +1200,11 @@ async fn transcribe_chunk_local_whisper(
             .arg("-of")
             .arg(&out_prefix)
             .arg("-l")
-            .arg("auto")
+            .arg(lang_hint.unwrap_or("auto"));
+        if lang_hint == Some("zh") {
+            cmd.args(["--prompt", "以下是普通话的句子。"]);
+        }
+        let output = cmd
             .output()
             .await
             .map_err(|e| format!("Failed to run local whisper: {e}"));
@@ -1360,11 +1625,22 @@ impl TranscriptionService {
                     self.update_job_progress(&material_id, &job_id, last_idx as u32, total_chunks);
                 }
             } else {
+                let lang_hint = infer_material_lang_hint(
+                    record.lang.as_deref(),
+                    &record.title,
+                    record.byline.as_deref(),
+                );
                 for ch in &chunks {
                     if cancelled.load(Ordering::Relaxed) {
                         return Err("Cancelled.".into());
                     }
-                    let cues = transcribe_chunk_local_whisper(&self.data_dir, &cur_settings.local_whisper_model, ch).await?;
+                    let cues = transcribe_chunk_local_whisper(
+                        &self.data_dir,
+                        &cur_settings.local_whisper_model,
+                        ch,
+                        lang_hint,
+                    )
+                    .await?;
                     all_cues.extend(cues);
                     if (ch.index == 0 || (ch.index + 1) % 2 == 0 || ch.index + 1 == chunks.len()) && !all_cues.is_empty() {
                         self.flush_incremental_transcript(&material_id, &record.title, &media.chapters, &all_cues, origin)
@@ -1526,5 +1802,53 @@ mod tests {
         let decoded = decode_file_to_pcm16_16k(&m4a_path, tmp.path()).await.unwrap();
         // ~2s at 16 kHz mono (AAC encoder priming adds a few hundred frames)
         assert!(decoded.len() >= sr && decoded.len() <= sr * 3);
+    }
+
+    #[test]
+    fn preserves_chinese_turns_and_bilingual_english_guests_without_auto_translating() {
+        // CJK episode title overrides a bogus RSS `<language>en-us</language>` template
+        assert_eq!(
+            infer_material_lang_hint(
+                Some("en-us"),
+                "vol.62 | 播客到底怎么赚钱？这次把问题问到了苹果副总裁面前",
+                Some("赛博对话"),
+            ),
+            Some("zh")
+        );
+        assert_eq!(
+            infer_material_lang_hint(Some("en"), "Intro to Large Language Models", Some("Andrej Karpathy")),
+            Some("en")
+        );
+
+        // 1) Chinese host speaking Mandarin mixed with English brand names ("Apple Music", "Oliver Schusser")
+        //    even if Whisper's raw top-1 was `en` (0.58 vs zh 0.28): resolves to `zh` + Simplified prompt!
+        let (lang_host, prompt_host) =
+            choose_whisper_lang_from_probs("en", 0.28, 0.01, 0.58, 0.28, Some("zh"));
+        assert_eq!(lang_host, "zh");
+        assert_eq!(prompt_host, Some("以下是普通话的句子。"));
+
+        // 2) Genuine English guest answer (`en_prob = 0.94`, `zh_prob = 0.01`) in a Chinese-titled interview:
+        //    keeps `en` so the guest's English is transcribed as English!
+        let (lang_guest, prompt_guest) =
+            choose_whisper_lang_from_probs("en", 0.01, 0.0, 0.94, 0.01, Some("zh"));
+        assert_eq!(lang_guest, "en");
+        assert!(prompt_guest.is_none());
+
+        // 3) 45s chunk with a pause at 16.0s–16.5s splits into two `< 30s` subwindows at the pause!
+        let sr = SAMPLE_RATE_HZ as usize;
+        let mut samples = Vec::with_capacity(45 * sr);
+        for i in 0..(16 * sr) {
+            samples.push(if i % 32 < 16 { 3000i16 } else { -3000i16 });
+        }
+        samples.extend(std::iter::repeat(0i16).take(sr / 2));
+        for i in 0..((285 * sr) / 10) {
+            samples.push(if i % 32 < 16 { 3000i16 } else { -3000i16 });
+        }
+        let subs = split_pcm16_into_subwindows(&samples);
+        assert!(subs.len() >= 2);
+        assert!(subs[0].1 >= 15.9 && subs[0].1 <= 16.6);
+        for (st, en, _) in &subs {
+            assert!(en - st <= 27.5);
+        }
     }
 }

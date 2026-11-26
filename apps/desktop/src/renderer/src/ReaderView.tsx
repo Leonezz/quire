@@ -623,16 +623,26 @@ export function ReaderView({ material, content, views, pendingJump, onJumpDone, 
                   <div role="status" className="mb-6 grid gap-2 rounded-card bg-fill px-3.5 py-2.5 text-[12.5px] text-label-2">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <span>Machine-generated transcript — punctuation, semantic paragraphs and speaker turns can be refined without losing timestamps.</span>
-                      <Button size="sm" isDisabled={rebuild === "running"} onPress={() => void startCleanupTranscript()}>Clean up with the agent</Button>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {(material.media?.transcriptOrigin === "local_asr" || material.media?.transcriptOrigin === "cloud_asr") ? (
+                          <Button size="sm" variant="quiet" isDisabled={rebuild === "running"} onPress={() => void transcribeStore.start(material.id)}>Re-transcribe</Button>
+                        ) : null}
+                        <Button size="sm" isDisabled={rebuild === "running"} onPress={() => void startCleanupTranscript()}>Clean up with the agent</Button>
+                      </div>
                     </div>
+                    {transcription.error ? <p role="alert" className="m-0 text-red-text">{transcription.error}</p> : null}
                     {cleanupError ? <p role="alert" className="m-0 text-red-text">{cleanupError}</p> : null}
                   </div>
                 ) : material.media?.transcriptOrigin === "agent_refined" && content.view === "transcript" ? (
                   <div role="status" className="mb-6 grid gap-2 rounded-card bg-fill px-3.5 py-2 text-[12.5px] text-label-2">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <span>Agent-refined transcript — click any margin timestamp to jump playback.</span>
-                      <Button size="sm" variant="quiet" isDisabled={rebuild === "running"} onPress={() => void startCleanupTranscript()}>Refine again</Button>
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <Button size="sm" variant="quiet" isDisabled={rebuild === "running"} onPress={() => void transcribeStore.start(material.id)}>Re-transcribe</Button>
+                        <Button size="sm" variant="quiet" isDisabled={rebuild === "running"} onPress={() => void startCleanupTranscript()}>Refine again</Button>
+                      </div>
                     </div>
+                    {transcription.error ? <p role="alert" className="m-0 text-red-text">{transcription.error}</p> : null}
                     {cleanupError ? <p role="alert" className="m-0 text-red-text">{cleanupError}</p> : null}
                   </div>
                 ) : null}
